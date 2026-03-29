@@ -14,11 +14,12 @@ ACTIVE_SCRAPERS: list[BaseScraper] = [
 ]
 
 
-async def search_drug(query: str) -> SearchResponse:
+async def search_drug(query: str, city: str | None = None) -> SearchResponse:
     """Search all active pharmacies for a drug.
 
     Args:
         query: Drug name to search for.
+        city: Optional city for localized pricing/stock.
 
     Returns:
         Aggregated search results from all pharmacies.
@@ -30,7 +31,7 @@ async def search_drug(query: str) -> SearchResponse:
         logger.info("Searching %s for '%s'", scraper.pharmacy_name, query)
         searched.append(scraper.pharmacy_name)
         try:
-            results = await scraper.search(query)
+            results = await scraper.search(query, city=city)
             all_results.extend(results)
         except Exception:
             logger.error(
@@ -42,6 +43,7 @@ async def search_drug(query: str) -> SearchResponse:
 
     return SearchResponse(
         query=query,
+        city=city,
         results=all_results,
         total=len(all_results),
         searched_pharmacies=searched,

@@ -18,11 +18,15 @@ class BaseScraper(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def search(self, query: str) -> list[DrugResult]:
+    async def search(
+        self, query: str, city: str | None = None, max_results: int = 10
+    ) -> list[DrugResult]:
         """Search for a drug by name and return results.
 
         Args:
             query: Drug name or partial name to search for.
+            city: Optional city for localized pricing/stock.
+            max_results: Maximum results to return.
 
         Returns:
             List of DrugResult with availability and pricing info.

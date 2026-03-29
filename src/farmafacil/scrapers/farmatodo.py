@@ -1,140 +1,179 @@
-"""Farmatodo.com.ve scraper for drug availability and pricing."""
+"""Farmatodo drug search via their Algolia product index."""
 
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 import httpx
-from bs4 import BeautifulSoup
 
-from farmafacil.config import SCRAPER_TIMEOUT, SCRAPER_USER_AGENT
+from farmafacil.config import SCRAPER_TIMEOUT
 from farmafacil.models.schemas import DrugResult
 from farmafacil.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-FARMATODO_SEARCH_URL = "https://www.farmatodo.com.ve/buscar?q={query}"
+ALGOLIA_APP_ID = "VCOJEYD2PO"
+ALGOLIA_API_KEY = "869a91e98550dd668b8b1dc04bca9011"
+ALGOLIA_INDEX = "products-venezuela"
+ALGOLIA_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/{ALGOLIA_INDEX}/query"
+
+# Farmatodo city codes for geographic filtering
+CITY_CODES = {
+    "caracas": "CCS",
+    "maracaibo": "MCBO",
+    "valencia": "VAL",
+    "barquisimeto": "BAR",
+    "maracay": "MAT",
+    "merida": "MER",
+    "puerto ordaz": "PTO",
+    "porlamar": "POR",
+    "san cristobal": "SAC",
+    "cumana": "CUA",
+    "punto fijo": "PTC",
+    "los teques": "LEC",
+    "guarenas": "GUAC",
+    "higuerote": "HIG",
+    "pamatar": "PAM",
+    "upata": "UPA",
+    "puerto la cruz": "PDM",
+    "barinas": "COR",
+}
 
 
 class FarmatodoScraper(BaseScraper):
-    """Scraper for Farmatodo Venezuela website."""
+    """Search Farmatodo's product catalog via their Algolia index."""
 
     @property
     def pharmacy_name(self) -> str:
         return "Farmatodo"
 
-    async def search(self, query: str) -> list[DrugResult]:
-        """Search Farmatodo for a drug.
+    async def search(
+        self, query: str, city: str | None = None, max_results: int = 10
+    ) -> list[DrugResult]:
+        """Search Farmatodo for a drug via Algolia API.
 
         Args:
             query: Drug name to search.
+            city: Optional city name for price/stock filtering.
+            max_results: Maximum number of results to return.
 
         Returns:
             List of matching drug results.
         """
-        url = FARMATODO_SEARCH_URL.format(query=query)
-        headers = {"User-Agent": SCRAPER_USER_AGENT}
+        headers = {
+            "x-algolia-application-id": ALGOLIA_APP_ID,
+            "x-algolia-api-key": ALGOLIA_API_KEY,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "query": query,
+            "hitsPerPage": max_results,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=SCRAPER_TIMEOUT) as client:
-                response = await client.get(url, headers=headers, follow_redirects=True)
+                response = await client.post(
+                    ALGOLIA_URL, headers=headers, json=payload
+                )
                 response.raise_for_status()
         except httpx.TimeoutException:
-            logger.warning("Farmatodo search timed out for query: %s", query)
+            logger.warning("Farmatodo Algolia search timed out for query: %s", query)
             return []
         except httpx.HTTPStatusError as exc:
             logger.warning(
-                "Farmatodo returned HTTP %s for query: %s", exc.response.status_code, query
+                "Farmatodo Algolia returned HTTP %s for query: %s",
+                exc.response.status_code,
+                query,
             )
             return []
         except httpx.RequestError as exc:
-            logger.error("Farmatodo request failed for query %s: %s", query, exc)
+            logger.error("Farmatodo Algolia request failed for query %s: %s", query, exc)
             return []
 
-        return self._parse_results(response.text, query)
+        data = response.json()
+        hits = data.get("hits", [])
+        logger.info(
+            "Farmatodo: found %d results for '%s' (total: %d)",
+            len(hits),
+            query,
+            data.get("nbHits", 0),
+        )
 
-    def _parse_results(self, html: str, query: str) -> list[DrugResult]:
-        """Parse Farmatodo search results HTML into DrugResult objects.
+        city_code = CITY_CODES.get(city.lower()) if city else None
+        return [self._hit_to_result(hit, city_code) for hit in hits]
 
-        Args:
-            html: Raw HTML from the search page.
-            query: Original search query for logging.
-
-        Returns:
-            Parsed drug results.
-        """
-        soup = BeautifulSoup(html, "lxml")
-        results: list[DrugResult] = []
-
-        # Farmatodo uses product cards — selectors may need updating
-        # as the site changes. These are initial best-guess selectors.
-        product_cards = soup.select(".product-item, .product-card, [data-product]")
-
-        if not product_cards:
-            logger.info("No product cards found for query: %s", query)
-            # Try broader search for any product-like structure
-            product_cards = soup.select("[class*='product'], [class*='Product']")
-
-        for card in product_cards:
-            try:
-                name_el = card.select_one(
-                    ".product-name, .product-title, h2, h3, [class*='name'], [class*='title']"
-                )
-                price_el = card.select_one(
-                    ".price, .product-price, [class*='price'], [class*='Price']"
-                )
-
-                if not name_el:
-                    continue
-
-                drug_name = name_el.get_text(strip=True)
-                price = self._parse_price(price_el.get_text(strip=True)) if price_el else None
-
-                # Try to get product URL
-                link_el = card.select_one("a[href]")
-                product_url = None
-                if link_el and link_el.get("href"):
-                    href = link_el["href"]
-                    if href.startswith("/"):
-                        product_url = f"https://www.farmatodo.com.ve{href}"
-                    elif href.startswith("http"):
-                        product_url = href
-
-                results.append(
-                    DrugResult(
-                        drug_name=drug_name,
-                        pharmacy_name=self.pharmacy_name,
-                        price=price,
-                        available=True,
-                        url=product_url,
-                        last_checked=datetime.now(tz=UTC),
-                    )
-                )
-            except Exception:
-                logger.warning("Failed to parse a product card for query: %s", query, exc_info=True)
-                continue
-
-        logger.info("Farmatodo: found %d results for '%s'", len(results), query)
-        return results
-
-    def _parse_price(self, price_text: str) -> Decimal | None:
-        """Extract a numeric price from text like '$5.99' or 'Bs. 150,00'.
+    def _hit_to_result(self, hit: dict, city_code: str | None) -> DrugResult:
+        """Convert an Algolia hit to a DrugResult.
 
         Args:
-            price_text: Raw price string from the page.
+            hit: Raw Algolia hit dictionary.
+            city_code: Optional Farmatodo city code for localized pricing.
 
         Returns:
-            Decimal price or None if unparsable.
+            Parsed DrugResult.
         """
-        if not price_text:
-            return None
+        price_bs = self._get_price(hit, city_code)
+        offer_price_bs = self._get_offer_price(hit, city_code)
+        in_stock = len(hit.get("stores_with_stock", [])) > 0
 
-        cleaned = price_text.replace("$", "").replace("Bs.", "").replace("Bs", "")
-        cleaned = cleaned.replace(",", ".").strip()
-        # Take only digits and dots
-        cleaned = "".join(c for c in cleaned if c.isdigit() or c == ".")
+        return DrugResult(
+            drug_name=hit.get("mediaDescription", hit.get("brand", "Unknown")),
+            pharmacy_name=self.pharmacy_name,
+            price_bs=offer_price_bs or price_bs,
+            available=in_stock,
+            url=self._build_product_url(hit),
+            last_checked=datetime.now(tz=UTC),
+            requires_prescription=hit.get("requirePrescription") == "true",
+            image_url=hit.get("mediaImageUrl"),
+            brand=hit.get("brand"),
+            drug_class=hit.get("rms_class"),
+            stores_in_stock=len(hit.get("stores_with_stock", [])),
+        )
 
-        try:
-            return Decimal(cleaned)
-        except (InvalidOperation, ValueError):
-            return None
+    def _get_price(self, hit: dict, city_code: str | None) -> Decimal | None:
+        """Get the full price, optionally for a specific city.
+
+        Args:
+            hit: Algolia hit dictionary.
+            city_code: Optional city code for localized price.
+
+        Returns:
+            Price in Bolivares or None.
+        """
+        if city_code:
+            for entry in hit.get("fullPriceByCity", []):
+                if entry.get("cityCode") == city_code:
+                    return Decimal(str(entry["fullPrice"]))
+        full_price = hit.get("fullPrice")
+        return Decimal(str(full_price)) if full_price else None
+
+    def _get_offer_price(self, hit: dict, city_code: str | None) -> Decimal | None:
+        """Get the offer/discount price if available.
+
+        Args:
+            hit: Algolia hit dictionary.
+            city_code: Optional city code for localized offer price.
+
+        Returns:
+            Offer price in Bolivares or None.
+        """
+        if city_code:
+            for entry in hit.get("offerPriceByCity", []):
+                if entry.get("cityCode") == city_code:
+                    return Decimal(str(entry["offerPrice"]))
+        offer_price = hit.get("offerPrice")
+        return Decimal(str(offer_price)) if offer_price else None
+
+    def _build_product_url(self, hit: dict) -> str | None:
+        """Build the product page URL from the hit's url slug.
+
+        Args:
+            hit: Algolia hit dictionary.
+
+        Returns:
+            Full product URL or None.
+        """
+        slug = hit.get("url")
+        if slug:
+            return f"https://www.farmatodo.com.ve/{slug}"
+        return None

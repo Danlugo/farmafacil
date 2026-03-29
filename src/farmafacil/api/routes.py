@@ -20,22 +20,23 @@ async def search(request: SearchRequest) -> SearchResponse:
     """Search for a drug across all pharmacies.
 
     Args:
-        request: Search request with the drug name query.
+        request: Search request with the drug name query and optional city.
 
     Returns:
         Aggregated results from all pharmacy scrapers.
     """
-    return await search_drug(request.query)
+    return await search_drug(request.query, city=request.city)
 
 
 @router.get("/api/v1/search", response_model=SearchResponse)
-async def search_get(q: str) -> SearchResponse:
+async def search_get(q: str, city: str | None = None) -> SearchResponse:
     """Search for a drug via GET (convenience for WhatsApp bot / browser).
 
     Args:
         q: Drug name query string.
+        city: Optional city for localized pricing.
 
     Returns:
         Aggregated results from all pharmacy scrapers.
     """
-    return await search_drug(q)
+    return await search_drug(q, city=city)

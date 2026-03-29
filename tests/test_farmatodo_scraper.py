@@ -1,72 +1,134 @@
-"""Tests for the Farmatodo scraper parser."""
+"""Tests for the Farmatodo Algolia-based scraper."""
 
 from decimal import Decimal
+
+import pytest
 
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
 
 
-class TestFarmatodoParser:
-    """Test the HTML parsing logic without making network requests."""
+@pytest.fixture
+def scraper():
+    return FarmatodoScraper()
 
-    def setup_method(self):
-        self.scraper = FarmatodoScraper()
 
-    def test_pharmacy_name(self):
-        """Scraper reports correct pharmacy name."""
-        assert self.scraper.pharmacy_name == "Farmatodo"
+@pytest.fixture
+def sample_algolia_hit():
+    """A realistic Algolia hit from the products-venezuela index."""
+    return {
+        "mediaDescription": "Losartán Potásico 50 mg Genven Caja x 30 Comprimidos",
+        "brand": "Genven",
+        "fullPrice": 920,
+        "offerPrice": 782,
+        "fullPriceByCity": [
+            {"cityCode": "CCS", "fullPrice": 920},
+            {"cityCode": "VAL", "fullPrice": 920},
+        ],
+        "offerPriceByCity": [
+            {"cityCode": "VAL", "offerPrice": 644},
+        ],
+        "stores_with_stock": [100, 101, 102, 113, 125],
+        "stores_with_low_stock": [],
+        "url": "111408922-losartan-potasico-50mg-30-comprimidos",
+        "requirePrescription": "true",
+        "mediaImageUrl": "https://lh3.googleusercontent.com/example",
+        "rms_class": "ANTIHIPERTENSIVOS",
+    }
 
-    def test_parse_results_empty_html(self):
-        """Empty HTML returns no results."""
-        results = self.scraper._parse_results("<html><body></body></html>", "test")
-        assert results == []
 
-    def test_parse_results_with_product_card(self):
-        """Parser extracts drug info from a product card."""
-        html = """
-        <html><body>
-            <div class="product-item">
-                <a href="/producto/losartan-50mg">
-                    <h2 class="product-name">Losartan 50mg Tabletas</h2>
-                </a>
-                <span class="price">$5.99</span>
-            </div>
-        </body></html>
-        """
-        results = self.scraper._parse_results(html, "losartan")
-        assert len(results) == 1
-        assert results[0].drug_name == "Losartan 50mg Tabletas"
-        assert results[0].available is True
-        assert results[0].url == "https://www.farmatodo.com.ve/producto/losartan-50mg"
+class TestFarmatodoScraper:
+    """Test the Algolia hit parsing logic."""
 
-    def test_parse_results_multiple_cards(self):
-        """Parser handles multiple product cards."""
-        html = """
-        <html><body>
-            <div class="product-item">
-                <h3 class="product-name">Losartan 50mg</h3>
-                <span class="price">$5.99</span>
-            </div>
-            <div class="product-item">
-                <h3 class="product-name">Losartan 100mg</h3>
-                <span class="price">$8.50</span>
-            </div>
-        </body></html>
-        """
-        results = self.scraper._parse_results(html, "losartan")
-        assert len(results) == 2
+    def test_pharmacy_name(self, scraper):
+        assert scraper.pharmacy_name == "Farmatodo"
 
-    def test_parse_price_usd(self):
-        """Price parser handles USD format."""
-        assert self.scraper._parse_price("$5.99") == Decimal("5.99")
+    def test_hit_to_result_basic(self, scraper, sample_algolia_hit):
+        """Converts an Algolia hit to DrugResult with correct fields."""
+        result = scraper._hit_to_result(sample_algolia_hit, city_code=None)
+        assert result.drug_name == "Losartán Potásico 50 mg Genven Caja x 30 Comprimidos"
+        assert result.pharmacy_name == "Farmatodo"
+        assert result.price_bs == Decimal("782")  # offer price takes priority
+        assert result.available is True
+        assert result.requires_prescription is True
+        assert result.brand == "Genven"
+        assert result.drug_class == "ANTIHIPERTENSIVOS"
+        assert result.stores_in_stock == 5
+        assert "111408922" in result.url
 
-    def test_parse_price_bs(self):
-        """Price parser handles Bolivares format."""
-        assert self.scraper._parse_price("Bs. 150,00") == Decimal("150.00")
+    def test_hit_to_result_city_price(self, scraper, sample_algolia_hit):
+        """Returns city-specific offer price when city code matches."""
+        result = scraper._hit_to_result(sample_algolia_hit, city_code="VAL")
+        assert result.price_bs == Decimal("644")  # Valencia offer price
 
-    def test_parse_price_empty(self):
-        """Price parser returns None for empty string."""
-        assert self.scraper._parse_price("") is None
+    def test_hit_to_result_city_no_offer(self, scraper, sample_algolia_hit):
+        """Falls back to global offer price when no city-specific offer."""
+        result = scraper._hit_to_result(sample_algolia_hit, city_code="CCS")
+        # CCS has no city-specific offer, but global offerPrice (782) still applies
+        assert result.price_bs == Decimal("782")
 
-    def test_parse_price_garbage(self):
-        """Price parser returns None for unparsable text."""
-        assert self.scraper._parse_price("Consultar") is None
+    def test_hit_to_result_no_stock(self, scraper):
+        """Marks as unavailable when no stores have stock."""
+        hit = {
+            "mediaDescription": "Test Drug",
+            "brand": "TestBrand",
+            "fullPrice": 100,
+            "stores_with_stock": [],
+            "url": "test-drug",
+        }
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.available is False
+        assert result.stores_in_stock == 0
+
+    def test_hit_to_result_no_offer(self, scraper):
+        """Uses full price when no offer price exists."""
+        hit = {
+            "mediaDescription": "Test Drug",
+            "brand": "TestBrand",
+            "fullPrice": 500,
+            "stores_with_stock": [1],
+            "url": "test",
+        }
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.price_bs == Decimal("500")
+
+    def test_get_price_with_city(self, scraper, sample_algolia_hit):
+        """Extracts city-specific price."""
+        price = scraper._get_price(sample_algolia_hit, "CCS")
+        assert price == Decimal("920")
+
+    def test_get_price_no_city(self, scraper, sample_algolia_hit):
+        """Falls back to global price when no city specified."""
+        price = scraper._get_price(sample_algolia_hit, None)
+        assert price == Decimal("920")
+
+    def test_build_product_url(self, scraper, sample_algolia_hit):
+        """Builds correct Farmatodo product URL."""
+        url = scraper._build_product_url(sample_algolia_hit)
+        assert url == "https://www.farmatodo.com.ve/111408922-losartan-potasico-50mg-30-comprimidos"
+
+    def test_build_product_url_missing(self, scraper):
+        """Returns None when hit has no url field."""
+        assert scraper._build_product_url({}) is None
+
+
+@pytest.mark.integration
+class TestFarmatodoLive:
+    """Integration tests that hit the live Algolia API."""
+
+    async def test_search_losartan(self, scraper):
+        """Live search for losartan returns results."""
+        results = await scraper.search("losartan", max_results=3)
+        assert len(results) > 0
+        assert results[0].pharmacy_name == "Farmatodo"
+        assert results[0].price_bs is not None
+        assert results[0].drug_name  # not empty
+
+    async def test_search_with_city(self, scraper):
+        """Live search with city filter works."""
+        results = await scraper.search("acetaminofen", city="caracas", max_results=3)
+        assert len(results) > 0
+
+    async def test_search_no_results(self, scraper):
+        """Nonsense query returns empty results."""
+        results = await scraper.search("xyznonexistentdrug12345")
+        assert len(results) == 0
