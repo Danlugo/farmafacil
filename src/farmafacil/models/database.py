@@ -82,6 +82,31 @@ class DrugListing(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ConversationLog(Base):
+    """Log of every WhatsApp message in and out for troubleshooting."""
+
+    __tablename__ = "conversation_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    phone_number: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True,
+        comment="WhatsApp phone number",
+    )
+    direction: Mapped[str] = mapped_column(
+        String(10), nullable=False,
+        comment="inbound (user→bot) or outbound (bot→user)",
+    )
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    message_type: Mapped[str] = mapped_column(
+        String(20), default="text",
+        comment="text, location, image, etc.",
+    )
+    wa_message_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="WhatsApp message ID for dedup",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class SearchLog(Base):
     """Log of user searches for analytics."""
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request, Response
 
 from farmafacil.bot.handler import handle_incoming_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
+from farmafacil.services.conversation_log import log_inbound
 
 logger = logging.getLogger(__name__)
 
@@ -57,16 +58,47 @@ async def receive_webhook(request: Request) -> dict:
         for change in entry.get("changes", []):
             value = change.get("value", {})
 
-            # Process incoming messages
             for message in value.get("messages", []):
                 sender = message.get("from", "")
                 msg_type = message.get("type", "")
+                wa_id = message.get("id", "")
 
                 if msg_type == "text":
                     text = message.get("text", {}).get("body", "")
                     logger.info("Received message from %s: %s", sender, text[:100])
+
+                    # Log inbound message
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=text,
+                        message_type="text",
+                        wa_message_id=wa_id,
+                    )
+
                     await handle_incoming_message(sender, text)
+
+                elif msg_type == "location":
+                    loc = message.get("location", {})
+                    lat = loc.get("latitude", "")
+                    lng = loc.get("longitude", "")
+                    logger.info("Received location from %s: %s, %s", sender, lat, lng)
+
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=f"location:{lat},{lng}",
+                        message_type="location",
+                        wa_message_id=wa_id,
+                    )
+
+                    # TODO: handle location shares for onboarding
                 else:
-                    logger.info("Received non-text message type '%s' from %s", msg_type, sender)
+                    logger.info("Received %s message from %s", msg_type, sender)
+
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=f"[{msg_type}]",
+                        message_type=msg_type,
+                        wa_message_id=wa_id,
+                    )
 
     return {"status": "ok"}

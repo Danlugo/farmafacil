@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from farmafacil.config import WHATSAPP_API_TOKEN, WHATSAPP_API_URL
+from farmafacil.services.conversation_log import log_outbound
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ async def send_text_message(to: str, text: str) -> dict | None:
             response.raise_for_status()
             data = response.json()
             logger.info("WhatsApp message sent to %s: %s", to, data.get("messages", [{}])[0].get("id"))
+
+            # Log outbound message
+            await log_outbound(to, text)
+
             return data
     except httpx.HTTPStatusError as exc:
         logger.error(
