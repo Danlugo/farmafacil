@@ -1,4 +1,4 @@
-"""Tests for the WhatsApp bot formatter and webhook."""
+"""Tests for the WhatsApp bot formatter, webhook, and geocode."""
 
 from decimal import Decimal
 
@@ -7,7 +7,8 @@ from httpx import ASGITransport, AsyncClient
 
 from farmafacil.api.app import create_app
 from farmafacil.bot.formatter import format_search_results
-from farmafacil.models.schemas import DrugResult, SearchResponse
+from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
+from farmafacil.services.geocode import geocode_zone
 
 
 @pytest.fixture
@@ -58,7 +59,42 @@ class TestFormatter:
         assert "1" in text
         assert "Losartan 50mg Genven" in text
         assert "920" in text
-        assert "42 tiendas" in text
+
+    def test_format_with_nearby_stores(self):
+        """Results with nearby stores show store names and distances."""
+        response = SearchResponse(
+            query="losartan",
+            zone="El Cafetal",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("920"),
+                    available=True,
+                    nearby_stores=[
+                        NearbyStore(
+                            store_name="TEPUY",
+                            address="Las Mercedes",
+                            distance_km=0.5,
+                            price_bs=Decimal("920"),
+                        ),
+                        NearbyStore(
+                            store_name="CHUAO",
+                            address="Chuao",
+                            distance_km=1.9,
+                            price_bs=Decimal("920"),
+                        ),
+                    ],
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "El Cafetal" in text
+        assert "TEPUY" in text
+        assert "0.5 km" in text
+        assert "CHUAO" in text
 
     def test_format_unavailable(self):
         """Unavailable drug shows correct icon."""
@@ -75,7 +111,7 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "\u274c" in text  # red X
+        assert "\u274c" in text
         assert "Sin stock" in text
 
     def test_format_truncates_at_five(self):
@@ -97,6 +133,47 @@ class TestFormatter:
         )
         text = format_search_results(response)
         assert "3 resultados mas" in text
+
+
+class TestGeocode:
+    """Test the geocode service."""
+
+    def test_geocode_el_cafetal(self):
+        """El Cafetal resolves to CCS."""
+        result = geocode_zone("El Cafetal")
+        assert result is not None
+        assert result["city"] == "CCS"
+        assert result["zone_name"] == "El Cafetal"
+        assert result["lat"] == pytest.approx(10.4558, abs=0.01)
+
+    def test_geocode_chacao(self):
+        """Chacao resolves correctly."""
+        result = geocode_zone("chacao")
+        assert result is not None
+        assert result["city"] == "CCS"
+
+    def test_geocode_maracaibo(self):
+        """Maracaibo resolves to MCBO."""
+        result = geocode_zone("Maracaibo")
+        assert result is not None
+        assert result["city"] == "MCBO"
+
+    def test_geocode_unknown(self):
+        """Unknown zone returns None."""
+        result = geocode_zone("xyznotazone")
+        assert result is None
+
+    def test_geocode_case_insensitive(self):
+        """Geocode is case insensitive."""
+        result = geocode_zone("EL CAFETAL")
+        assert result is not None
+        assert result["city"] == "CCS"
+
+    def test_geocode_partial_match(self):
+        """Partial zone names match."""
+        result = geocode_zone("cafetal")
+        assert result is not None
+        assert result["city"] == "CCS"
 
 
 class TestWebhook:

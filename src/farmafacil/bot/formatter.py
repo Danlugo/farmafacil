@@ -18,20 +18,32 @@ def format_search_results(response: SearchResponse) -> str:
             "Intenta con otro nombre o revisa la ortografia."
         )
 
-    lines = [f"Encontramos *{response.total}* resultado(s) para *{response.query}*:\n"]
+    zone_label = f" cerca de *{response.zone}*" if response.zone else ""
+    lines = [
+        f"Encontramos *{response.total}* resultado(s) para "
+        f"*{response.query}*{zone_label}:\n"
+    ]
 
     for i, result in enumerate(response.results[:5], 1):
         stock_icon = "\u2705" if result.available else "\u274c"
-        rx_icon = " \U0001f4cb" if result.requires_prescription else ""
+        rx_label = " \U0001f4cb Requiere receta" if result.requires_prescription else ""
 
-        line = f"{i}. {stock_icon} *{result.drug_name}*{rx_icon}"
+        line = f"*{i}. {stock_icon} {result.drug_name}*{rx_label}"
 
-        if result.price_bs is not None:
+        # Show nearby stores if available
+        if result.nearby_stores:
+            for store in result.nearby_stores[:3]:
+                price_str = f"Bs. {store.price_bs:,.2f}" if store.price_bs else ""
+                line += (
+                    f"\n   \U0001f4cd {store.store_name} — {store.distance_km:.1f} km"
+                    f" — {price_str}"
+                )
+        elif result.price_bs is not None:
             line += f"\n   Bs. {result.price_bs:,.2f}"
+            if result.stores_in_stock > 0:
+                line += f" | {result.stores_in_stock} tiendas con stock"
 
-        if result.stores_in_stock > 0:
-            line += f" | {result.stores_in_stock} tiendas con stock"
-        elif not result.available:
+        if not result.available:
             line += "\n   Sin stock disponible"
 
         lines.append(line)
@@ -39,5 +51,8 @@ def format_search_results(response: SearchResponse) -> str:
     if response.total > 5:
         lines.append(f"\n... y {response.total - 5} resultados mas.")
 
-    lines.append("\nEnvia otro nombre de medicamento para buscar.")
+    lines.append(
+        "\nEnvia otro nombre de medicamento para buscar."
+        "\nEscribe _cambiar zona_ para cambiar tu ubicacion."
+    )
     return "\n".join(lines)

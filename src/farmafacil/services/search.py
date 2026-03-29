@@ -2,9 +2,10 @@
 
 import logging
 
-from farmafacil.models.schemas import DrugResult, SearchResponse
+from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
+from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +15,23 @@ ACTIVE_SCRAPERS: list[BaseScraper] = [
 ]
 
 
-async def search_drug(query: str, city: str | None = None) -> SearchResponse:
-    """Search all active pharmacies for a drug.
+async def search_drug(
+    query: str,
+    city: str | None = None,
+    city_code: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    zone_name: str | None = None,
+) -> SearchResponse:
+    """Search all active pharmacies for a drug, optionally with location.
 
     Args:
         query: Drug name to search for.
-        city: Optional city for localized pricing/stock.
+        city: Optional city name for pricing filter.
+        city_code: Optional Farmatodo city code (overrides city).
+        latitude: Optional GPS latitude for nearby store filtering.
+        longitude: Optional GPS longitude for nearby store filtering.
+        zone_name: Optional zone name for display.
 
     Returns:
         Aggregated search results from all pharmacies.
@@ -41,10 +53,55 @@ async def search_drug(query: str, city: str | None = None) -> SearchResponse:
                 exc_info=True,
             )
 
+    # Enrich with nearby store data if we have location
+    if city_code and latitude and longitude:
+        all_results = await _enrich_with_nearby_stores(
+            all_results, city_code, latitude, longitude
+        )
+
     return SearchResponse(
         query=query,
         city=city,
+        zone=zone_name,
         results=all_results,
         total=len(all_results),
         searched_pharmacies=searched,
     )
+
+
+async def _enrich_with_nearby_stores(
+    results: list[DrugResult],
+    city_code: str,
+    latitude: float,
+    longitude: float,
+) -> list[DrugResult]:
+    """Add nearby store info to each drug result.
+
+    Args:
+        results: Drug results with stores_with_stock_ids.
+        city_code: Farmatodo city code.
+        latitude: User's latitude.
+        longitude: User's longitude.
+
+    Returns:
+        Results enriched with nearby_stores field.
+    """
+    nearby = await get_nearby_stores(city_code, latitude, longitude)
+    if not nearby:
+        return results
+
+    enriched = []
+    for result in results:
+        stores_near = filter_stores_with_stock(nearby, result.stores_with_stock_ids)
+        result.nearby_stores = [
+            NearbyStore(
+                store_name=s.name,
+                address=s.address,
+                distance_km=s.distance_km,
+                price_bs=result.price_bs,
+            )
+            for s in stores_near[:5]  # Top 5 nearest with stock
+        ]
+        enriched.append(result)
+
+    return enriched

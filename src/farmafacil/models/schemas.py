@@ -6,6 +6,15 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 
+class NearbyStore(BaseModel):
+    """A store near the user that has a specific drug in stock."""
+
+    store_name: str
+    address: str
+    distance_km: float
+    price_bs: Decimal | None = None
+
+
 class DrugResult(BaseModel):
     """A single drug search result from a pharmacy."""
 
@@ -26,6 +35,12 @@ class DrugResult(BaseModel):
     brand: str | None = Field(None, description="Drug brand/manufacturer")
     drug_class: str | None = Field(None, description="Pharmacological class")
     stores_in_stock: int = Field(0, description="Number of stores with stock")
+    stores_with_stock_ids: list[int] = Field(
+        default_factory=list, description="Store IDs that have this drug"
+    )
+    nearby_stores: list[NearbyStore] = Field(
+        default_factory=list, description="Nearby stores with this drug in stock"
+    )
 
 
 class SearchRequest(BaseModel):
@@ -44,6 +59,7 @@ class SearchResponse(BaseModel):
 
     query: str
     city: str | None = None
+    zone: str | None = None
     results: list[DrugResult]
     total: int
     searched_pharmacies: list[str]
