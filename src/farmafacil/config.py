@@ -22,3 +22,9 @@ SCRAPER_USER_AGENT = os.getenv(
     "SCRAPER_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 )
+
+# WhatsApp Business API
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "farmafacil_verify_2026")
+WHATSAPP_API_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"

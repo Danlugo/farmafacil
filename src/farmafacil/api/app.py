@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from farmafacil import __version__
 from farmafacil.api.routes import router
+from farmafacil.bot.webhook import webhook_router
 from farmafacil.config import LOG_LEVEL
 from farmafacil.db.session import close_db, init_db
 
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(webhook_router)
     return app
 
 
