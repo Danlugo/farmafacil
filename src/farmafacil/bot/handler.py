@@ -6,7 +6,7 @@ from farmafacil.bot.formatter import format_search_results
 from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.search import search_drug
-from farmafacil.services.users import get_or_create_user, update_user_location, user_has_location
+from farmafacil.services.users import get_or_create_user, update_user_location
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +24,23 @@ WELCOME_MESSAGE = (
     "\U0001f48a *Bienvenido a FarmaFacil!*\n\n"
     "Busco medicamentos en farmacias de Venezuela por ti.\n\n"
     "Para empezar, necesito saber tu ubicacion.\n"
-    "Dime tu zona o barrio (ej: _El Cafetal_, _Chacao_, _Altamira_)"
+    "Dime tu zona o barrio (ej: _La Boyera_, _Chacao_, _Altamira_)"
 )
 
 LOCATION_ASK_MESSAGE = (
-    "Para buscarte medicamentos cerca, dime tu zona o barrio.\n\n"
-    "Ejemplo: _El Cafetal_, _Chacao_, _Maracaibo_"
+    "Dime tu nueva zona o barrio.\n\n"
+    "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
 )
 
 LOCATION_NOT_FOUND_MESSAGE = (
-    "No reconozco esa zona. Intenta con el nombre de tu barrio "
-    "o una zona conocida de tu ciudad.\n\n"
-    "Ejemplos: _El Cafetal_, _Chacao_, _Altamira_, _Maracaibo_, _Valencia_"
+    "No logre ubicar esa zona en Venezuela.\n"
+    "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
+    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Altamira_, _Maracaibo_"
 )
+
+# In-memory flag for users who just requested a location change.
+# Maps phone_number → True when waiting for new zone.
+_awaiting_location: set[str] = set()
 
 
 async def handle_incoming_message(sender: str, message_text: str) -> None:
@@ -70,13 +74,15 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # Check for location change request
     if text_lower in LOCATION_CHANGE_WORDS:
+        _awaiting_location.add(sender)
         await send_text_message(sender, LOCATION_ASK_MESSAGE)
         return
 
-    # If user has no location, try to geocode their message as a zone name
-    if user.latitude is None:
-        location = geocode_zone(text)
+    # If user has no location OR explicitly asked to change, geocode the message
+    if user.latitude is None or sender in _awaiting_location:
+        location = await geocode_zone(text)
         if location:
+            _awaiting_location.discard(sender)
             user = await update_user_location(
                 phone_number=sender,
                 latitude=location["lat"],
@@ -94,25 +100,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             await send_text_message(sender, LOCATION_NOT_FOUND_MESSAGE)
         return
 
-    # User has location — check if they're updating it
-    location = geocode_zone(text)
-    if location and len(text.split()) <= 3:
-        # Short text that matches a zone — probably updating location, not searching
-        user = await update_user_location(
-            phone_number=sender,
-            latitude=location["lat"],
-            longitude=location["lng"],
-            zone_name=location["zone_name"],
-            city_code=location["city"],
-        )
-        await send_text_message(
-            sender,
-            f"\u2705 Ubicacion actualizada: *{user.zone_name}*\n\n"
-            "Envia el nombre de un medicamento para buscar.",
-        )
-        return
-
-    # User has location — treat as drug search
+    # User has location — treat as drug search (no geocode call)
     logger.info(
         "Drug search from %s (%s): '%s'",
         sender,

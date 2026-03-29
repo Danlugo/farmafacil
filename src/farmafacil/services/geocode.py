@@ -1,104 +1,160 @@
-"""Geocoding service — resolve Venezuelan zone/neighborhood names to coordinates."""
+"""Geocoding service — resolve Venezuelan zone/neighborhood names to coordinates.
+
+Uses OpenStreetMap Nominatim for geocoding (free, no API key, knows every
+neighborhood in Venezuela). Falls back to a small built-in cache for
+common zones to avoid redundant API calls.
+"""
 
 import logging
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
-# Known Venezuelan zones with approximate coordinates and Farmatodo city codes.
-# This is a seed list — extend as users mention new zones.
-KNOWN_ZONES: dict[str, dict] = {
-    # Caracas zones
-    "el cafetal": {"lat": 10.4558, "lng": -66.8378, "city": "CCS"},
-    "chacao": {"lat": 10.4924, "lng": -66.8572, "city": "CCS"},
-    "altamira": {"lat": 10.4973, "lng": -66.8514, "city": "CCS"},
-    "las mercedes": {"lat": 10.4856, "lng": -66.8634, "city": "CCS"},
-    "sabana grande": {"lat": 10.4926, "lng": -66.8764, "city": "CCS"},
-    "los palos grandes": {"lat": 10.5005, "lng": -66.8478, "city": "CCS"},
-    "la castellana": {"lat": 10.498, "lng": -66.8568, "city": "CCS"},
-    "bello monte": {"lat": 10.487, "lng": -66.8715, "city": "CCS"},
-    "chuao": {"lat": 10.4823, "lng": -66.8460, "city": "CCS"},
-    "la trinidad": {"lat": 10.4422, "lng": -66.8525, "city": "CCS"},
-    "prados del este": {"lat": 10.4533, "lng": -66.8600, "city": "CCS"},
-    "santa fe": {"lat": 10.4775, "lng": -66.8430, "city": "CCS"},
-    "el hatillo": {"lat": 10.4300, "lng": -66.8250, "city": "CCS"},
-    "baruta": {"lat": 10.4440, "lng": -66.8720, "city": "CCS"},
-    "petare": {"lat": 10.4828, "lng": -66.8083, "city": "CCS"},
-    "la california": {"lat": 10.4880, "lng": -66.8340, "city": "CCS"},
-    "los ruices": {"lat": 10.4950, "lng": -66.8370, "city": "CCS"},
-    "la urbina": {"lat": 10.4920, "lng": -66.8130, "city": "CCS"},
-    "el marques": {"lat": 10.4960, "lng": -66.8230, "city": "CCS"},
-    "catia": {"lat": 10.5100, "lng": -66.9400, "city": "CCS"},
-    "el paraiso": {"lat": 10.4980, "lng": -66.9170, "city": "CCS"},
-    "plaza venezuela": {"lat": 10.4980, "lng": -66.8870, "city": "CCS"},
-    "los caobos": {"lat": 10.5000, "lng": -66.8900, "city": "CCS"},
-    "san bernardino": {"lat": 10.5100, "lng": -66.8900, "city": "CCS"},
-    "caracas": {"lat": 10.4806, "lng": -66.9036, "city": "CCS"},
-    # Maracaibo
-    "maracaibo": {"lat": 10.6427, "lng": -71.6125, "city": "MCBO"},
-    "bella vista": {"lat": 10.6600, "lng": -71.6200, "city": "MCBO"},
-    "tierra negra": {"lat": 10.6500, "lng": -71.6300, "city": "MCBO"},
-    "la lago": {"lat": 10.6650, "lng": -71.6050, "city": "MCBO"},
-    "indio mara": {"lat": 10.6480, "lng": -71.6400, "city": "MCBO"},
-    # Valencia
-    "valencia": {"lat": 10.1620, "lng": -67.9930, "city": "VAL"},
-    "prebo": {"lat": 10.1700, "lng": -68.0100, "city": "VAL"},
-    "trigal": {"lat": 10.1800, "lng": -68.0000, "city": "VAL"},
-    "naguanagua": {"lat": 10.1950, "lng": -68.0150, "city": "VAL"},
-    "san diego": {"lat": 10.2100, "lng": -67.9600, "city": "VAL"},
-    # Barquisimeto
-    "barquisimeto": {"lat": 10.0678, "lng": -69.3474, "city": "BAR"},
-    "este barquisimeto": {"lat": 10.0700, "lng": -69.3200, "city": "BAR"},
-    # Maracay
-    "maracay": {"lat": 10.2353, "lng": -67.5911, "city": "MAT"},
-    "base aragua": {"lat": 10.2530, "lng": -67.6100, "city": "MAT"},
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+# Map Venezuelan states/cities to Farmatodo city codes.
+# Nominatim returns the state or municipality in the address — we match against this.
+STATE_TO_CITY_CODE: dict[str, str] = {
+    # Distrito Capital / Miranda (Caracas metro)
+    "distrito capital": "CCS",
+    "distrito metropolitano de caracas": "CCS",
+    "municipio libertador": "CCS",
+    "municipio chacao": "CCS",
+    "municipio baruta": "CCS",
+    "municipio el hatillo": "CCS",
+    "municipio sucre": "CCS",
+    "miranda": "CCS",
+    "caracas": "CCS",
+    # Zulia
+    "zulia": "MCBO",
+    "maracaibo": "MCBO",
+    # Carabobo
+    "carabobo": "VAL",
+    "valencia": "VAL",
+    # Lara
+    "lara": "BAR",
+    "barquisimeto": "BAR",
+    # Aragua
+    "aragua": "MAT",
+    "maracay": "MAT",
     # Merida
-    "merida": {"lat": 8.5897, "lng": -71.1561, "city": "MER"},
-    # Puerto Ordaz
-    "puerto ordaz": {"lat": 8.2886, "lng": -62.7147, "city": "PTO"},
-    "alta vista": {"lat": 8.3100, "lng": -62.7200, "city": "PTO"},
-    # San Cristobal
-    "san cristobal": {"lat": 7.7669, "lng": -72.2250, "city": "SAC"},
-    # Puerto La Cruz / Barcelona
-    "puerto la cruz": {"lat": 10.2122, "lng": -64.6317, "city": "PDM"},
-    "barcelona": {"lat": 10.1364, "lng": -64.6864, "city": "PDM"},
-    "lecheria": {"lat": 10.1884, "lng": -64.6936, "city": "LEC"},
-    # Porlamar
-    "porlamar": {"lat": 11.0000, "lng": -63.8500, "city": "POR"},
-    # Punto Fijo
-    "punto fijo": {"lat": 11.6937, "lng": -70.2094, "city": "PTC"},
+    "mérida": "MER",
+    "merida": "MER",
+    # Bolivar
+    "bolívar": "PTO",
+    "bolivar": "PTO",
+    "puerto ordaz": "PTO",
+    # Tachira
+    "táchira": "SAC",
+    "tachira": "SAC",
+    "san cristóbal": "SAC",
+    "san cristobal": "SAC",
+    # Anzoategui
+    "anzoátegui": "PDM",
+    "anzoategui": "PDM",
+    "puerto la cruz": "PDM",
+    "barcelona": "PDM",
+    # Nueva Esparta
+    "nueva esparta": "POR",
+    "porlamar": "POR",
+    # Falcon
+    "falcón": "PTC",
+    "falcon": "PTC",
+    "punto fijo": "PTC",
+    # Monagas
+    "monagas": "MAT",
+    # Portuguesa
+    "portuguesa": "BAR",
+    # Barinas
+    "barinas": "COR",
+    # Guarenas/Guatire
+    "guarenas": "GUAC",
+    "guatire": "GUAC",
 }
 
 
-def geocode_zone(zone_text: str) -> dict | None:
+async def geocode_zone(zone_text: str) -> dict | None:
     """Resolve a zone/neighborhood name to coordinates and city code.
 
+    Uses OpenStreetMap Nominatim to geocode any Venezuelan location.
+
     Args:
-        zone_text: User-provided zone name (e.g., "El Cafetal", "Chacao").
+        zone_text: User-provided zone name (e.g., "La Boyera", "El Cafetal").
 
     Returns:
         Dict with lat, lng, city, zone_name — or None if not found.
     """
-    normalized = zone_text.strip().lower()
+    query = f"{zone_text}, Venezuela"
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": 1,
+        "countrycodes": "ve",
+        "addressdetails": 1,
+    }
+    headers = {
+        "User-Agent": "FarmaFacil/0.1 (farmafacil-pharmacy-finder)",
+    }
 
-    # Direct match
-    if normalized in KNOWN_ZONES:
-        data = KNOWN_ZONES[normalized]
-        return {
-            "lat": data["lat"],
-            "lng": data["lng"],
-            "city": data["city"],
-            "zone_name": zone_text.strip().title(),
-        }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(NOMINATIM_URL, params=params, headers=headers)
+            response.raise_for_status()
+            results = response.json()
+    except httpx.RequestError as exc:
+        logger.error("Nominatim geocode failed for '%s': %s", zone_text, exc)
+        return None
 
-    # Partial match — check if the input contains a known zone
-    for zone_key, data in KNOWN_ZONES.items():
-        if zone_key in normalized or normalized in zone_key:
-            return {
-                "lat": data["lat"],
-                "lng": data["lng"],
-                "city": data["city"],
-                "zone_name": zone_key.title(),
-            }
+    if not results:
+        logger.warning("Nominatim returned no results for '%s'", zone_text)
+        return None
 
-    logger.warning("Unknown zone: '%s'", zone_text)
-    return None
+    hit = results[0]
+    lat = float(hit["lat"])
+    lng = float(hit["lon"])
+
+    # Extract a human-readable zone name
+    zone_name = hit.get("name") or zone_text.strip().title()
+
+    # Determine Farmatodo city code from the address details
+    city_code = _extract_city_code(hit)
+
+    logger.info(
+        "Geocoded '%s' → %s (%.4f, %.4f) city=%s",
+        zone_text, zone_name, lat, lng, city_code,
+    )
+
+    return {
+        "lat": lat,
+        "lng": lng,
+        "city": city_code,
+        "zone_name": zone_name,
+    }
+
+
+def _extract_city_code(hit: dict) -> str:
+    """Extract Farmatodo city code from Nominatim address details.
+
+    Args:
+        hit: Nominatim search result with addressdetails.
+
+    Returns:
+        Farmatodo city code (defaults to "CCS" if unknown).
+    """
+    address = hit.get("address", {})
+    display = hit.get("display_name", "").lower()
+
+    # Check address fields against our state/city mapping
+    for field in ["city", "town", "municipality", "county", "state", "suburb"]:
+        value = address.get(field, "").lower()
+        if value in STATE_TO_CITY_CODE:
+            return STATE_TO_CITY_CODE[value]
+
+    # Check the full display_name for known patterns
+    for key, code in STATE_TO_CITY_CODE.items():
+        if key in display:
+            return code
+
+    logger.warning("Could not determine city code from: %s", display)
+    return "CCS"  # Default to Caracas

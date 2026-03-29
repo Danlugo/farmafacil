@@ -135,45 +135,46 @@ class TestFormatter:
         assert "3 resultados mas" in text
 
 
+@pytest.mark.integration
 class TestGeocode:
-    """Test the geocode service."""
+    """Test the geocode service (hits live Nominatim API)."""
 
-    def test_geocode_el_cafetal(self):
+    async def test_geocode_el_cafetal(self):
         """El Cafetal resolves to CCS."""
-        result = geocode_zone("El Cafetal")
+        result = await geocode_zone("El Cafetal")
         assert result is not None
         assert result["city"] == "CCS"
-        assert result["zone_name"] == "El Cafetal"
-        assert result["lat"] == pytest.approx(10.4558, abs=0.01)
+        assert result["lat"] == pytest.approx(10.45, abs=0.05)
 
-    def test_geocode_chacao(self):
+    async def test_geocode_la_boyera(self):
+        """La Boyera resolves to CCS."""
+        result = await geocode_zone("La Boyera")
+        assert result is not None
+        assert result["city"] == "CCS"
+        assert "Boyera" in result["zone_name"]
+
+    async def test_geocode_chacao(self):
         """Chacao resolves correctly."""
-        result = geocode_zone("chacao")
+        result = await geocode_zone("chacao")
         assert result is not None
         assert result["city"] == "CCS"
 
-    def test_geocode_maracaibo(self):
+    async def test_geocode_maracaibo(self):
         """Maracaibo resolves to MCBO."""
-        result = geocode_zone("Maracaibo")
+        result = await geocode_zone("Maracaibo")
         assert result is not None
         assert result["city"] == "MCBO"
 
-    def test_geocode_unknown(self):
-        """Unknown zone returns None."""
-        result = geocode_zone("xyznotazone")
+    async def test_geocode_unknown(self):
+        """Nonsense zone returns None."""
+        result = await geocode_zone("xyznotazone12345")
         assert result is None
 
-    def test_geocode_case_insensitive(self):
-        """Geocode is case insensitive."""
-        result = geocode_zone("EL CAFETAL")
+    async def test_geocode_valencia(self):
+        """Valencia resolves to VAL."""
+        result = await geocode_zone("Valencia")
         assert result is not None
-        assert result["city"] == "CCS"
-
-    def test_geocode_partial_match(self):
-        """Partial zone names match."""
-        result = geocode_zone("cafetal")
-        assert result is not None
-        assert result["city"] == "CCS"
+        assert result["city"] == "VAL"
 
 
 class TestWebhook:
