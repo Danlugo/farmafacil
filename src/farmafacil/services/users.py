@@ -26,7 +26,7 @@ async def get_or_create_user(phone_number: str) -> User:
         user = result.scalar_one_or_none()
 
         if user is None:
-            user = User(phone_number=phone_number, onboarding_step="awaiting_name")
+            user = User(phone_number=phone_number, onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)

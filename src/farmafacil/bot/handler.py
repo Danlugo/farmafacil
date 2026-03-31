@@ -115,6 +115,12 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     step = user.onboarding_step
     text_lower = text.lower()
 
+    # ── Onboarding: welcome (first contact) ───────────────────────────
+    if step == "welcome":
+        await set_onboarding_step(sender, "awaiting_name")
+        await send_text_message(sender, MSG_WELCOME)
+        return
+
     # ── Onboarding: awaiting_name ───────────────────────────────────────
     if step == "awaiting_name":
         name = text.strip().title()
