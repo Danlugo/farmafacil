@@ -142,6 +142,65 @@ class IntentKeyword(Base):
     )
 
 
+class PharmacyLocation(Base):
+    """A physical pharmacy location — generic across all pharmacy chains."""
+
+    __tablename__ = "pharmacy_locations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    external_id: Mapped[str] = mapped_column(
+        String(50), nullable=False, index=True,
+        comment="ID from the source system (e.g., Farmatodo store ID)",
+    )
+    pharmacy_chain: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True,
+        comment="Which chain: Farmatodo, Locatel, XANA, etc.",
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    name_lower: Mapped[str] = mapped_column(String(100), nullable=False, index=True,
+        comment="Lowercase for case-insensitive lookup",
+    )
+    city_code: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProductCache(Base):
+    """Cached Algolia product search results with TTL."""
+
+    __tablename__ = "product_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    city_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    results_json: Mapped[str] = mapped_column(Text, nullable=False,
+        comment="JSON-serialized list of DrugResult dicts",
+    )
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    cached_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class AppSetting(Base):
+    """Admin-editable application settings."""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    value: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SearchLog(Base):
     """Log of user searches for analytics."""
 

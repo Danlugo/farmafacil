@@ -10,6 +10,7 @@ from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
+from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
     get_or_create_user,
     set_onboarding_step,
@@ -249,8 +250,18 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             else:
                 await _send_grid_image(sender, response)
 
-    elif intent.action == "question" and intent.response_text:
-        await send_text_message(sender, intent.response_text)
+    elif intent.action == "question":
+        # Check if the question is about a pharmacy store
+        store = await _try_store_lookup(text)
+        if store:
+            await send_text_message(sender, format_store_info(store))
+        elif intent.response_text:
+            await send_text_message(sender, intent.response_text)
+        else:
+            await send_text_message(
+                sender,
+                "No tengo informacion sobre eso. Enviame el nombre de un medicamento para buscar.",
+            )
 
     else:
         await send_text_message(
@@ -259,6 +270,33 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             "Enviame el nombre de un medicamento para buscar.\n\n"
             "Escribe _ayuda_ para ver las instrucciones.",
         )
+
+
+async def _try_store_lookup(text: str) -> object | None:
+    """Try to find a pharmacy store name mentioned in the text.
+
+    Checks for patterns like "donde queda TEPUY", "TEPUY", "farmacia TEPUY".
+    """
+    # Extract potential store name from common patterns
+    text_lower = text.lower().strip()
+    # Remove common question words
+    for prefix in ("donde queda ", "donde esta ", "donde está ", "direccion de ",
+                    "dirección de ", "ubicacion de ", "ubicación de ", "farmacia "):
+        if text_lower.startswith(prefix):
+            store_name = text_lower[len(prefix):].strip().rstrip("?")
+            store = await lookup_store(store_name)
+            if store:
+                return store
+
+    # Try the whole text as a store name (user might just type "TEPUY")
+    # Only if it's short (1-2 words) to avoid false matches
+    words = text_lower.split()
+    if len(words) <= 2:
+        store = await lookup_store(text_lower.rstrip("?"))
+        if store:
+            return store
+
+    return None
 
 
 def _parse_preference(text: str) -> str | None:

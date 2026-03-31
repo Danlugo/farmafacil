@@ -1,15 +1,15 @@
-"""Drug search service — orchestrates scraping across pharmacies."""
+"""Drug search service — orchestrates scraping with caching and store enrichment."""
 
 import logging
 
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
+from farmafacil.services.product_cache import get_cached_results, save_cached_results
 from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
 
 logger = logging.getLogger(__name__)
 
-# Registry of active scrapers
 ACTIVE_SCRAPERS: list[BaseScraper] = [
     FarmatodoScraper(),
 ]
@@ -23,35 +23,38 @@ async def search_drug(
     longitude: float | None = None,
     zone_name: str | None = None,
 ) -> SearchResponse:
-    """Search all active pharmacies for a drug, optionally with location.
+    """Search all active pharmacies for a drug, with caching.
 
-    Args:
-        query: Drug name to search for.
-        city: Optional city name for pricing filter.
-        city_code: Optional Farmatodo city code (overrides city).
-        latitude: Optional GPS latitude for nearby store filtering.
-        longitude: Optional GPS longitude for nearby store filtering.
-        zone_name: Optional zone name for display.
-
-    Returns:
-        Aggregated search results from all pharmacies.
+    Checks DB cache first. On miss, queries Algolia and caches the results.
     """
     all_results: list[DrugResult] = []
     searched: list[str] = []
 
-    for scraper in ACTIVE_SCRAPERS:
-        logger.info("Searching %s for '%s'", scraper.pharmacy_name, query)
-        searched.append(scraper.pharmacy_name)
-        try:
-            results = await scraper.search(query, city=city)
-            all_results.extend(results)
-        except Exception:
-            logger.error(
-                "Scraper %s failed for query '%s'",
-                scraper.pharmacy_name,
-                query,
-                exc_info=True,
-            )
+    # Check cache first
+    cached = await get_cached_results(query, city_code)
+    if cached is not None:
+        all_results = cached
+        searched = ["Farmatodo (cache)"]
+        logger.info("Serving cached results for '%s': %d items", query, len(cached))
+    else:
+        # Cache miss — hit scrapers
+        for scraper in ACTIVE_SCRAPERS:
+            logger.info("Searching %s for '%s'", scraper.pharmacy_name, query)
+            searched.append(scraper.pharmacy_name)
+            try:
+                results = await scraper.search(query, city=city)
+                all_results.extend(results)
+            except Exception:
+                logger.error(
+                    "Scraper %s failed for query '%s'",
+                    scraper.pharmacy_name,
+                    query,
+                    exc_info=True,
+                )
+
+        # Save to cache
+        if all_results:
+            await save_cached_results(query, city_code, all_results)
 
     # Enrich with nearby store data if we have location
     if city_code and latitude and longitude:
@@ -75,22 +78,11 @@ async def _enrich_with_nearby_stores(
     latitude: float,
     longitude: float,
 ) -> list[DrugResult]:
-    """Add nearby store info to each drug result.
-
-    Args:
-        results: Drug results with stores_with_stock_ids.
-        city_code: Farmatodo city code.
-        latitude: User's latitude.
-        longitude: User's longitude.
-
-    Returns:
-        Results enriched with nearby_stores field.
-    """
+    """Add nearby store info to each drug result."""
     nearby = await get_nearby_stores(city_code, latitude, longitude)
     if not nearby:
         return results
 
-    enriched = []
     for result in results:
         stores_near = filter_stores_with_stock(nearby, result.stores_with_stock_ids)
         result.nearby_stores = [
@@ -100,8 +92,7 @@ async def _enrich_with_nearby_stores(
                 distance_km=s.distance_km,
                 price_bs=result.price_bs,
             )
-            for s in stores_near[:5]  # Top 5 nearest with stock
+            for s in stores_near[:5]
         ]
-        enriched.append(result)
 
-    return enriched
+    return results
