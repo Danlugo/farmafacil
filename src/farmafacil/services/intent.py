@@ -34,11 +34,13 @@ HELP_WORDS = {
 
 @dataclass
 class Intent:
-    """Classified user intent."""
+    """Classified user intent with extracted profile data."""
 
     action: str  # "greeting", "location_change", "help", "drug_search", "question", "unknown"
     drug_query: str | None = None  # Extracted drug name for drug_search intent
     response_text: str | None = None  # Direct response for question intent
+    detected_name: str | None = None  # Name if user introduced themselves
+    detected_location: str | None = None  # Location if mentioned in message
 
 
 HELP_MESSAGE = (
@@ -114,40 +116,53 @@ async def classify_intent_llm(text: str) -> Intent:
 
     system_prompt = """Eres FarmaFacil, un asistente de WhatsApp que ayuda a personas en Venezuela a encontrar medicamentos en farmacias cercanas.
 
-Tu personalidad: amigable, servicial, empático con la situación de salud en Venezuela. Hablas español venezolano natural (no demasiado formal). Eres conciso porque esto es WhatsApp, no un email.
+Tu personalidad: amigable, servicial, empático. Hablas español venezolano natural. Eres conciso (esto es WhatsApp).
 
-TU TRABAJO PRINCIPAL es clasificar el mensaje del usuario y responder adecuadamente.
+INSTRUCCIONES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
 
-REGLA 1 — Si el usuario busca un medicamento (por nombre, síntoma, o condición médica), responde EXACTAMENTE así:
-DRUG_SEARCH: [nombre genérico del medicamento más probable]
+FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
+ACTION: [greeting|drug_search|question|unknown]
+DRUG: [nombre genérico del medicamento si aplica]
+NAME: [nombre de la persona si se presenta]
+LOCATION: [zona/barrio/ciudad si menciona ubicación]
+RESPONSE: [respuesta conversacional si es una pregunta]
 
-Ejemplos:
-- "necesito algo para el dolor de cabeza" → DRUG_SEARCH: acetaminofen
-- "medicina para la presión alta" → DRUG_SEARCH: losartan
-- "algo para la gripe" → DRUG_SEARCH: antigripal
-- "antibiótico para infección urinaria" → DRUG_SEARCH: ciprofloxacina
-- "insulina para diabéticos" → DRUG_SEARCH: insulina
-- "me duele la garganta" → DRUG_SEARCH: ibuprofeno
-- "tengo alergia" → DRUG_SEARCH: loratadina
+EJEMPLOS:
+- "Hola soy María de Chacao, busco losartan" →
+  ACTION: drug_search
+  DRUG: losartan
+  NAME: María
+  LOCATION: Chacao
 
-REGLA 2 — Si el usuario hace una pregunta sobre salud, medicamentos, farmacias, o el servicio, responde brevemente en español de forma amigable. Limita tu respuesta a 2-3 oraciones máximo.
+- "necesito algo para el dolor de cabeza" →
+  ACTION: drug_search
+  DRUG: acetaminofen
 
-Cosas que PUEDES responder:
-- Preguntas generales sobre medicamentos ("para qué sirve el losartán?")
-- Cómo usar FarmaFacil ("cómo busco un medicamento?")
-- Preguntas sobre farmacias en Venezuela
-- Información general de salud (con disclaimer de consultar al médico)
+- "Me llamo José" →
+  ACTION: greeting
+  NAME: José
 
-Cosas que NO PUEDES hacer (y debes decirlo amablemente):
-- Diagnosticar enfermedades — sugiere ir al médico
-- Recomendar dosis específicas — sugiere consultar con su farmacéutico
-- Procesar pagos o pedidos (aún no está disponible)
-- Buscar farmacias que no sean Farmatodo (por ahora)
+- "estoy en La Boyera" →
+  ACTION: greeting
+  LOCATION: La Boyera
 
-Siempre termina tu respuesta recordándole que puede enviar el nombre de un medicamento para buscarlo.
+- "hola buenas tardes" →
+  ACTION: greeting
 
-REGLA 3 — Si no entiendes el mensaje, responde:
-UNKNOWN"""
+- "para qué sirve el losartán?" →
+  ACTION: question
+  RESPONSE: El losartán es un medicamento para tratar la presión arterial alta (hipertensión). Lo recetan frecuentemente en Venezuela. Consulta con tu médico para la dosis adecuada. Si quieres, envíame "losartan" y te busco dónde está disponible.
+
+- "me duele la garganta" →
+  ACTION: drug_search
+  DRUG: ibuprofeno
+
+REGLAS:
+- Si mencionan síntomas, traduce al medicamento genérico más probable
+- Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
+- Si preguntan sobre salud, responde brevemente (2-3 oraciones) y recuérdales que pueden buscar medicamentos
+- NO diagnostiques ni recomiendes dosis — sugiere consultar al médico
+- Si no entiendes: ACTION: unknown"""
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -158,24 +173,9 @@ UNKNOWN"""
             messages=[{"role": "user", "content": text}],
         )
         reply = response.content[0].text.strip()
-        logger.info("LLM intent for '%s': %s", text[:50], reply[:100])
+        logger.info("LLM intent for '%s': %s", text[:50], reply[:200])
 
-        # Parse the LLM response
-        if reply.startswith("DRUG_SEARCH:"):
-            drug_name = reply.replace("DRUG_SEARCH:", "").strip()
-            return Intent(action="drug_search", drug_query=drug_name)
-        elif reply.startswith("UNKNOWN"):
-            return Intent(
-                action="question",
-                response_text=(
-                    "No estoy seguro de lo que necesitas. "
-                    "Envia el nombre de un medicamento y te busco donde esta disponible.\n\n"
-                    "Escribe _ayuda_ para ver las instrucciones."
-                ),
-            )
-        else:
-            # LLM gave a conversational response
-            return Intent(action="question", response_text=reply)
+        return _parse_llm_response(reply)
 
     except Exception:
         logger.error("LLM classification failed", exc_info=True)
@@ -201,3 +201,37 @@ async def classify_intent(text: str) -> Intent:
     # Ambiguous — use LLM
     logger.info("Keyword detection inconclusive for '%s' — calling LLM", text[:50])
     return await classify_intent_llm(text)
+
+
+def _parse_llm_response(reply: str) -> Intent:
+    """Parse the structured LLM response into an Intent.
+
+    Args:
+        reply: Raw LLM response text with ACTION/DRUG/NAME/LOCATION/RESPONSE lines.
+
+    Returns:
+        Parsed Intent with all extracted fields.
+    """
+    fields: dict[str, str] = {}
+    for line in reply.strip().split("\n"):
+        line = line.strip()
+        if ":" in line:
+            key, _, value = line.partition(":")
+            key = key.strip().upper()
+            value = value.strip()
+            if key in ("ACTION", "DRUG", "NAME", "LOCATION", "RESPONSE"):
+                fields[key] = value
+
+    action = fields.get("ACTION", "unknown").lower()
+
+    # Map to our action types
+    if action not in ("greeting", "drug_search", "question", "unknown"):
+        action = "question" if fields.get("RESPONSE") else "unknown"
+
+    return Intent(
+        action=action,
+        drug_query=fields.get("DRUG"),
+        response_text=fields.get("RESPONSE"),
+        detected_name=fields.get("NAME"),
+        detected_location=fields.get("LOCATION"),
+    )
