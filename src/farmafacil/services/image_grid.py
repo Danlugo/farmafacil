@@ -103,6 +103,7 @@ def _draw_card(
     y: int,
 ) -> None:
     """Draw a single product card onto the canvas."""
+    font_pharmacy = _get_font(13, bold=True)
     font_brand = _get_font(16)
     font_name = _get_font(17, bold=True)
     font_price = _get_font(22, bold=True)
@@ -121,6 +122,22 @@ def _draw_card(
         outline=BORDER_COLOR,
         width=1,
     )
+
+    # Pharmacy badge (top-right corner)
+    pharmacy_label = result.pharmacy_name or ""
+    if pharmacy_label:
+        try:
+            plabel_bbox = font_pharmacy.getbbox(pharmacy_label)
+            plabel_w = plabel_bbox[2] - plabel_bbox[0]
+        except AttributeError:
+            plabel_w = int(font_pharmacy.getlength(pharmacy_label))
+        badge_x = x + CARD_WIDTH - plabel_w - 16
+        draw.rounded_rectangle(
+            [badge_x - 4, y + 6, x + CARD_WIDTH - 8, y + 26],
+            radius=4,
+            fill=(63, 81, 181),
+        )
+        draw.text((badge_x, y + 7), pharmacy_label, fill=(255, 255, 255), font=font_pharmacy)
 
     # Discount badge (top-left)
     if result.discount_pct:
@@ -237,9 +254,14 @@ async def generate_product_grid(results: list[DrugResult], max_products: int = 6
     Returns:
         Path to the generated temporary image file, or None on failure.
     """
-    products = [r for r in results[:max_products] if r.available]
+    # Sort by price (lowest first) for consistent ordering with text
+    sorted_results = sorted(
+        results,
+        key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999"),
+    )
+    products = [r for r in sorted_results[:max_products] if r.available]
     if not products:
-        products = results[:max_products]
+        products = sorted_results[:max_products]
 
     if not products:
         return None

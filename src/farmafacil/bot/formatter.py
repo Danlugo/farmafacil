@@ -1,10 +1,25 @@
 """Format drug search results for WhatsApp messages."""
 
-from farmafacil.models.schemas import SearchResponse
+from decimal import Decimal
+
+from farmafacil.models.schemas import DrugResult, SearchResponse
+
+MAX_RESULTS_SHOWN = 8
+
+
+def _sort_by_price(results: list[DrugResult]) -> list[DrugResult]:
+    """Sort results by price ascending. Items without price go last."""
+    return sorted(
+        results,
+        key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999"),
+    )
 
 
 def format_search_results(response: SearchResponse) -> str:
     """Format a SearchResponse into a WhatsApp-friendly text message.
+
+    Results are sorted by price (lowest first) and grouped with their
+    pharmacy name so the user can compare across chains.
 
     Args:
         response: Search results from the drug search service.
@@ -18,41 +33,49 @@ def format_search_results(response: SearchResponse) -> str:
             "Intenta con otro nombre o revisa la ortografia."
         )
 
+    sorted_results = _sort_by_price(response.results)
+    pharmacies = ", ".join(response.searched_pharmacies)
     zone_label = f" cerca de *{response.zone}*" if response.zone else ""
+
     lines = [
-        f"Encontramos *{response.total}* resultado(s) para "
-        f"*{response.query}*{zone_label}:\n"
+        f"*{response.query}*{zone_label} — "
+        f"{response.total} resultado(s)\n"
+        f"Farmacias: _{pharmacies}_\n"
     ]
 
-    for i, result in enumerate(response.results[:5], 1):
+    for i, result in enumerate(sorted_results[:MAX_RESULTS_SHOWN], 1):
         stock_icon = "\u2705" if result.available else "\u274c"
-        rx_label = " \U0001f4cb Requiere receta" if result.requires_prescription else ""
+        rx_label = " \U0001f4cb" if result.requires_prescription else ""
 
-        line = f"*{i}. {stock_icon} {result.drug_name}*{rx_label}"
+        line = f"*{i}.* {stock_icon} {result.drug_name}{rx_label}"
+        line += f"\n   \U0001f3e5 {result.pharmacy_name}"
 
-        # Show nearby stores if available
+        # Price info
+        if result.price_bs is not None:
+            price_str = f"Bs. {result.price_bs:,.2f}"
+            if result.full_price_bs and result.full_price_bs != result.price_bs:
+                price_str += f" ~Bs. {result.full_price_bs:,.2f}~"
+            if result.discount_pct:
+                price_str += f" ({result.discount_pct})"
+            line += f" — {price_str}"
+
+        # Nearby stores
         if result.nearby_stores:
-            for store in result.nearby_stores[:3]:
-                price_str = f"Bs. {store.price_bs:,.2f}" if store.price_bs else ""
-                line += (
-                    f"\n   \U0001f4cd {store.store_name} — {store.distance_km:.1f} km"
-                    f" — {price_str}"
-                )
-        elif result.price_bs is not None:
-            line += f"\n   Bs. {result.price_bs:,.2f}"
-            if result.stores_in_stock > 0:
-                line += f" | {result.stores_in_stock} tiendas con stock"
+            closest = result.nearby_stores[0]
+            line += f"\n   \U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km"
+        elif result.stores_in_stock > 0:
+            line += f" | {result.stores_in_stock} tiendas"
 
         if not result.available:
-            line += "\n   Sin stock disponible"
+            line += "\n   _Sin stock_"
 
         lines.append(line)
 
-    if response.total > 5:
-        lines.append(f"\n... y {response.total - 5} resultados mas.")
+    if response.total > MAX_RESULTS_SHOWN:
+        lines.append(f"\n... y {response.total - MAX_RESULTS_SHOWN} resultados mas.")
 
     lines.append(
-        "\nEnvia otro nombre de medicamento para buscar."
-        "\nEscribe _cambiar zona_ para cambiar tu ubicacion."
+        "\nEnvia otro medicamento para buscar."
+        "\n_cambiar zona_ · _ayuda_"
     )
     return "\n".join(lines)

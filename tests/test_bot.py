@@ -39,7 +39,7 @@ class TestFormatter:
         assert "No encontramos" in text
 
     def test_format_single_result(self):
-        """Single result is formatted correctly."""
+        """Single result is formatted with pharmacy name and price."""
         response = SearchResponse(
             query="losartan",
             results=[
@@ -56,9 +56,9 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "1" in text
         assert "Losartan 50mg Genven" in text
         assert "920" in text
+        assert "Farmatodo" in text
 
     def test_format_with_nearby_stores(self):
         """Results with nearby stores show store names and distances."""
@@ -94,7 +94,6 @@ class TestFormatter:
         assert "El Cafetal" in text
         assert "TEPUY" in text
         assert "0.5 km" in text
-        assert "CHUAO" in text
 
     def test_format_unavailable(self):
         """Unavailable drug shows correct icon."""
@@ -114,8 +113,8 @@ class TestFormatter:
         assert "\u274c" in text
         assert "Sin stock" in text
 
-    def test_format_truncates_at_five(self):
-        """More than 5 results shows truncation message."""
+    def test_format_truncates_at_max(self):
+        """More than MAX_RESULTS_SHOWN results shows truncation message."""
         results = [
             DrugResult(
                 drug_name=f"Drug {i}",
@@ -123,16 +122,68 @@ class TestFormatter:
                 available=True,
                 price_bs=Decimal("100"),
             )
-            for i in range(8)
+            for i in range(12)
         ]
         response = SearchResponse(
             query="test",
             results=results,
-            total=8,
+            total=12,
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "3 resultados mas" in text
+        assert "4 resultados mas" in text
+
+    def test_format_sorted_by_price(self):
+        """Results are sorted by price, lowest first."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Expensive Drug",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("50"),
+                    available=True,
+                ),
+                DrugResult(
+                    drug_name="Cheap Drug",
+                    pharmacy_name="Farmacias SAAS",
+                    price_bs=Decimal("5"),
+                    available=True,
+                ),
+            ],
+            total=2,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
+        )
+        text = format_search_results(response)
+        # Cheap Drug should appear before Expensive Drug
+        cheap_pos = text.index("Cheap Drug")
+        expensive_pos = text.index("Expensive Drug")
+        assert cheap_pos < expensive_pos
+
+    def test_format_multi_pharmacy(self):
+        """Results from multiple pharmacies show pharmacy names."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan A",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("10"),
+                    available=True,
+                ),
+                DrugResult(
+                    drug_name="Losartan B",
+                    pharmacy_name="Farmacias SAAS",
+                    price_bs=Decimal("8"),
+                    available=True,
+                ),
+            ],
+            total=2,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
+        )
+        text = format_search_results(response)
+        assert "Farmatodo" in text
+        assert "Farmacias SAAS" in text
 
 
 @pytest.mark.integration

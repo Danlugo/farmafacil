@@ -253,14 +253,15 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             longitude=user.longitude,
             zone_name=user.zone_name,
         )
-        reply = format_search_results(response)
-        await send_text_message(sender, reply)
-
+        # Send grid/detail image FIRST, then text summary below
         if response.results:
             if user.display_preference == "detail":
                 await _send_detail_images(sender, response.results)
             else:
                 await _send_grid_image(sender, response)
+
+        reply = format_search_results(response)
+        await send_text_message(sender, reply)
 
     elif intent.action == "question":
         # Check if the question is about a pharmacy store
