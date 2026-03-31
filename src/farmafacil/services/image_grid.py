@@ -3,12 +3,11 @@
 import io
 import logging
 import tempfile
-from collections import defaultdict
-from decimal import Decimal
 
 import httpx
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
+from farmafacil.bot.formatter import _group_by_product
 from farmafacil.models.schemas import DrugResult
 
 logger = logging.getLogger(__name__)
@@ -37,71 +36,51 @@ async def _download_image(url: str) -> Image.Image | None:
         return None
 
 
-def _interleave_for_grid(
+def _unique_product_images(
     results: list[DrugResult], max_products: int
 ) -> list[DrugResult]:
-    """Interleave results round-robin across pharmacies for the grid image.
+    """Get unique products in the same order as the text formatter.
 
-    Prioritizes available items, sorted by price within each pharmacy.
+    Uses the formatter's _group_by_product to ensure images match the
+    text message order. Deduplicates by image URL so the same photo
+    never appears twice.
     """
-    by_pharmacy: dict[str, list[DrugResult]] = defaultdict(list)
-    for r in results:
-        by_pharmacy[r.pharmacy_name].append(r)
+    groups = _group_by_product(results)
+    unique: list[DrugResult] = []
+    seen_urls: set[str] = set()
 
-    for name in by_pharmacy:
-        available = [r for r in by_pharmacy[name] if r.available]
-        unavailable = [r for r in by_pharmacy[name] if not r.available]
-        available.sort(
-            key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999")
-        )
-        unavailable.sort(
-            key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999")
-        )
-        by_pharmacy[name] = available + unavailable
-
-    interleaved: list[DrugResult] = []
-    pharmacy_names = sorted(by_pharmacy.keys())
-    indices = {name: 0 for name in pharmacy_names}
-
-    while len(interleaved) < max_products:
-        added = False
-        for name in pharmacy_names:
-            if len(interleaved) >= max_products:
+    for _name, pharmacy_results in groups[:max_products]:
+        # Pick the first result with an image from this product group
+        for r in pharmacy_results:
+            if r.image_url and r.image_url not in seen_urls:
+                seen_urls.add(r.image_url)
+                unique.append(r)
                 break
-            idx = indices[name]
-            if idx < len(by_pharmacy[name]):
-                interleaved.append(by_pharmacy[name][idx])
-                indices[name] = idx + 1
-                added = True
-        if not added:
-            break
 
-    if not interleaved:
-        return []
-    return interleaved
+    return unique
 
 
 async def generate_product_grid(
-    results: list[DrugResult], max_products: int = 4
+    results: list[DrugResult], max_products: int = 8
 ) -> str | None:
     """Generate a stacked product image for WhatsApp — images only, no text.
 
-    Product images are stacked vertically on a narrow 500px canvas.
-    All product details are conveyed in the text message that follows.
+    Uses the same product grouping and order as the text formatter.
+    Deduplicates by image URL so no photo appears twice.
 
     Args:
         results: Drug search results to display.
-        max_products: Maximum products to show (default 4).
+        max_products: Maximum products to show (default 8, matches text).
 
     Returns:
         Path to the generated temporary image file, or None on failure.
     """
-    products = _interleave_for_grid(results, max_products)
+    products = _unique_product_images(results, max_products)
 
     if not products:
         return None
 
-    # Download all product images, skip products without images
+    # Download all product images, skip failures
     cards: list[Image.Image] = []
     for p in products:
         if p.image_url:
