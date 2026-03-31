@@ -52,7 +52,7 @@ docker compose logs -f app
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
 | `tests/` | pytest test suite (80 tests) |
-| `docs/` | Project documents and implementation plan |
+| `docs/` | Project documentation (see below) |
 
 ## Database Tables
 
@@ -82,7 +82,20 @@ docker compose logs -f app
 | `GET /webhook` | WhatsApp verification |
 | `POST /webhook` | WhatsApp incoming messages |
 
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| `docs/architecture.md` | System components, bot flow, DB schema, product catalog design |
+| `docs/api-reference.md` | All API endpoints, request/response formats, admin dashboard |
+| `docs/deployment.md` | Local dev, Docker production, ngrok, env vars, WhatsApp token |
+| `docs/bot-flow.md` | Onboarding steps, intent detection, drug search, store lookup |
+| `docs/adding-pharmacies.md` | BaseScraper interface, step-by-step guide, product catalog integration |
+| `docs/troubleshooting.md` | WhatsApp token, ngrok styling, profile corruption, geocoding, LLM errors |
+
 ## Adding a New Pharmacy Scraper
+
+See `docs/adding-pharmacies.md` for the full guide. Summary:
 
 1. Create `src/farmafacil/scrapers/new_pharmacy.py`
 2. Subclass `BaseScraper`, implement `pharmacy_name` and `search()`

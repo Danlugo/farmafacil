@@ -1,0 +1,195 @@
+# FarmaFacil — WhatsApp Bot Conversation Flow
+
+> Last Updated: 2026-03-30
+
+## Overview
+
+Every incoming message follows this entry path:
+
+```
+POST /webhook
+  → log_inbound()
+  → handle_incoming_message(sender, text)
+      → get_or_create_user(sender)
+      → validate_user_profile(user)
+      → route by onboarding_step or intent
+```
+
+---
+
+## Onboarding Flow
+
+New users go through a 4-step wizard. Each step is stored in `users.onboarding_step`.
+
+### Step 1: Welcome (`step = "welcome"`)
+
+Triggered on the very first message from any phone number.
+
+**Bot sends:**
+> Hola! Soy FarmaFacil
+> Te ayudo a encontrar medicamentos en farmacias de Venezuela.
+> Como te llamas?
+
+**Side effect:** Step advances to `awaiting_name`.
+
+---
+
+### Step 2: Name Collection (`step = "awaiting_name"`)
+
+**Always uses LLM** to distinguish real names from greetings.
+
+| User sends | Bot behavior |
+|-----------|-------------|
+| "hola" / greeting without a name | Re-asks for name |
+| "Maria" | Saves name, advances to awaiting_location |
+| "Soy Jose de Chacao" | Saves name=Jose, geocodes Chacao, skips to awaiting_preference |
+| "losartan" | Rejects as non-name, re-asks |
+
+Name validation (`_is_valid_name`):
+- Must be >= 2 characters
+- Must not be a common non-name word (hola, si, no, ayuda, losartan, etc.)
+- Must not be all digits
+- Must be <= 4 words (rejects sentences)
+
+---
+
+### Step 3: Location Collection (`step = "awaiting_location"`)
+
+**Bot sends:**
+> Mucho gusto Maria! En que zona o barrio estas?
+> Ejemplo: La Boyera, Chacao, Maracaibo
+
+The bot calls `geocode_zone()` via OpenStreetMap Nominatim. On success, the city code is derived and stored.
+
+| User sends | Bot behavior |
+|-----------|-------------|
+| "La Boyera" | Geocodes → saves lat/lng/zone_name/city_code, advances |
+| "Chacao" | Geocodes → saves, advances |
+| "xyz123" | Geocoding fails → re-asks with examples |
+
+On success, step advances to `awaiting_preference`.
+
+---
+
+### Step 4: Display Preference (`step = "awaiting_preference"`)
+
+**Bot sends:**
+> Como prefieres ver los resultados?
+> 1. Imagen grande — un producto a la vez con detalles
+> 2. Galeria — varios productos en una imagen
+> Responde 1 o 2
+
+| User sends | Mapped to |
+|-----------|-----------|
+| "1", "imagen grande", "imagen", "detalle" | `detail` |
+| "2", "galeria", "grid", "grilla", "varios" | `grid` |
+| anything else | Re-asks |
+
+On success, `onboarding_step` is set to `null` (complete).
+
+---
+
+## Profile Validation and Auto-Repair
+
+`validate_user_profile()` is called on **every message** after user load. It catches inconsistent profile states (e.g., a bug reset onboarding_step to null but location was never saved).
+
+| Current state | Missing data | Auto-repair to |
+|--------------|-------------|---------------|
+| step = null | no name | awaiting_name |
+| step = null | no location | awaiting_location |
+| step = null | no display_preference | awaiting_preference |
+| step = awaiting_preference | no name | awaiting_name |
+| step = awaiting_preference | no location | awaiting_location |
+| step = awaiting_location | no name | awaiting_name |
+
+When a repair happens, a WARNING is logged with the old and new states.
+
+---
+
+## Post-Onboarding Flow
+
+Once onboarding is complete (`step = null`), incoming messages follow this pipeline:
+
+### 1. Keyword Cache Check
+
+The DB `intent_keywords` table is checked first (in-memory cache, 5-minute TTL). Exact lowercase match against:
+
+| Keyword action | Bot response |
+|---------------|-------------|
+| `location_change` | Asks for new zone, sets step to `awaiting_location` |
+| `preference_change` | Asks for preference, sets step to `awaiting_preference` |
+| `name_change` | Asks for name, sets step to `awaiting_name` |
+| `farewell` | Sends canned response text |
+
+Default keywords loaded at startup include: "cambiar zona", "cambiar preferencia", "cambiar nombre", "ayuda", "hola", etc.
+
+### 2. Intent Classification
+
+If no keyword match, `classify_intent()` runs:
+
+1. **Keyword heuristic:** Short messages (1-8 words) with no question markers → `drug_search`
+2. **LLM fallback:** Longer or ambiguous messages → Claude Haiku
+
+LLM can also extract profile data mid-conversation:
+- If LLM detects a new name → auto-updates `users.name`
+- If LLM detects a new location → geocodes and auto-updates coordinates
+
+### 3. Intent Routing
+
+| Intent action | Bot behavior |
+|--------------|-------------|
+| `greeting` | Sends welcome-back message with current zone and preference |
+| `help` | Sends full help menu with command list |
+| `drug_search` | Runs drug search, sends results text + image |
+| `question` | Tries store lookup; if not a store, sends LLM-generated answer |
+| `unknown` | Prompts user to send a drug name |
+
+---
+
+## Drug Search Flow
+
+When intent is `drug_search`:
+
+1. Check user has location (if not → prompt, set step to `awaiting_location`)
+2. Call `search_drug(query, city_code, lat, lng, zone_name)`
+3. Format results as text via `format_search_results()`
+4. Send text message
+5. If results exist, send image based on preference:
+   - `detail`: Send individual product images (top 3) with rich captions
+   - `grid`: Generate a product grid image (up to 6 products) via Pillow, send, delete temp file
+
+Product image captions include:
+- Discount badge (if applicable)
+- Brand and drug name
+- Price in Bolivares (with strikethrough original price if discounted)
+- Per-unit price
+- Prescription requirement
+- Number of stores in stock
+- Nearest store name and distance
+
+---
+
+## Store Lookup
+
+When a question comes in, the bot first tries to identify a pharmacy store name:
+
+Patterns detected:
+- "donde queda TEPUY" → extracts "TEPUY"
+- "donde esta farmacia Bello Monte" → extracts "Bello Monte"
+- "TEPUY" (1-2 words, short) → tries as store name directly
+
+Lookup is case-insensitive against `pharmacy_locations.name_lower`. If found, returns address + Google Maps link.
+
+---
+
+## Change Commands
+
+Any registered user can update their profile at any time:
+
+| User types | Effect |
+|-----------|--------|
+| "cambiar zona" | Enters awaiting_location step |
+| "cambiar preferencia" | Enters awaiting_preference step |
+| "cambiar nombre" | Enters awaiting_name step |
+
+These are managed via the `intent_keywords` table and can be extended via `POST /api/v1/intents`.
