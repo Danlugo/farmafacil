@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Default settings with descriptions
 DEFAULTS: dict[str, tuple[str, str]] = {
-    "cache_ttl_minutes": ("30", "How long to cache drug search results (minutes)"),
+    "cache_ttl_minutes": ("10080", "How long to cache drug search results (minutes). Default: 1 week"),
     "max_search_results": ("10", "Maximum results per drug search"),
     "max_grid_products": ("6", "Maximum products in grid image"),
     "max_detail_products": ("3", "Maximum products in detail image mode"),

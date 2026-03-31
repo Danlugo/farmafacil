@@ -2,44 +2,85 @@
 
 Venezuela pharmacy drug finder with WhatsApp integration.
 
-## Quick Start
+## Quick Start (Local Dev)
 
 ```bash
-# Install dependencies
 pip install -e ".[dev]"
-
-# Copy env and edit as needed
 cp .env.example .env
-
-# Run the API (SQLite by default, no Docker needed)
 uvicorn farmafacil.api.app:app --reload
-
-# Run tests
 pytest
 ```
+
+## Production Deployment (10.0.0.114)
+
+```bash
+# SSH to server
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114
+
+# Deploy
+cd ~/workspace/farmafacil && git pull
+docker compose build --no-cache
+docker compose down && docker compose up -d
+
+# Verify
+curl http://localhost:8100/health
+docker compose logs -f app
+```
+
+**Server:** 10.0.0.114 (Linux Mint, 32GB RAM, Docker 29.1)
+**Ports:** App=8100, Postgres=5433, ngrok=4040
+**ngrok URL:** https://amparo-chromophoric-christia.ngrok-free.dev
 
 ## Architecture
 
 - **FastAPI** backend with async endpoints
 - **SQLAlchemy 2.0** async ORM (SQLite dev / PostgreSQL prod)
-- **Scraper pattern**: `BaseScraper` → per-pharmacy implementations (Farmatodo first)
-- **Service layer**: `services/search.py` orchestrates all scrapers
+- **Farmatodo Algolia API** for drug search (no HTML scraping)
+- **WhatsApp Business Cloud API** (Meta) for bot
+- **Claude Haiku** for intent detection fallback
+- **OpenStreetMap Nominatim** for geocoding zones
+- **Pillow** for product grid image generation
 
 ## Key Paths
 
 | Path | Purpose |
 |------|---------|
-| `src/farmafacil/api/` | FastAPI routes and app factory |
-| `src/farmafacil/scrapers/` | Pharmacy website scrapers |
-| `src/farmafacil/services/` | Business logic |
+| `src/farmafacil/api/` | FastAPI routes, app factory |
+| `src/farmafacil/bot/` | WhatsApp webhook, handler, formatter |
+| `src/farmafacil/scrapers/` | Pharmacy scrapers (Farmatodo via Algolia) |
+| `src/farmafacil/services/` | Business logic, intent, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
-| `src/farmafacil/db/` | Database session and engine |
-| `tests/` | pytest test suite |
+| `src/farmafacil/db/` | Database session, seed data |
+| `tests/` | pytest test suite (80 tests) |
+| `docs/` | Project documents and implementation plan |
 
-## Database
+## Database Tables
 
-Default: SQLite (`farmafacil.db` in project root).
-To switch to PostgreSQL: set `DATABASE_URL=postgresql+asyncpg://...` in `.env` and install `pip install asyncpg`.
+| Table | Purpose |
+|-------|---------|
+| `users` | Phone, name, location, display preference, onboarding step |
+| `intent_keywords` | Bot keyword→action mappings (admin-editable) |
+| `pharmacy_locations` | Physical store locations (generic, multi-chain) |
+| `products` | Permanent product catalog (never deleted, only upserted) |
+| `product_prices` | Per-location pricing with refresh timestamps (FK → products) |
+| `search_queries` | Maps search query + city to product IDs for cache lookups |
+| `product_cache` | DEPRECATED — legacy cache (replaced by products/product_prices/search_queries) |
+| `app_settings` | Admin-editable config (cache TTL, etc.) |
+| `conversation_logs` | Every inbound/outbound WhatsApp message |
+| `search_logs` | Search analytics |
+
+## API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Health check |
+| `GET /api/v1/search?q=losartan` | Drug search |
+| `GET /api/v1/users` | View users |
+| `GET /api/v1/conversations` | View message logs |
+| `GET /api/v1/intents` | View/manage intent keywords |
+| `POST /api/v1/intents` | Add intent keyword |
+| `GET /webhook` | WhatsApp verification |
+| `POST /webhook` | WhatsApp incoming messages |
 
 ## Adding a New Pharmacy Scraper
 

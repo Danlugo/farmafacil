@@ -5,7 +5,7 @@ import logging
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
-from farmafacil.services.product_cache import get_cached_results, save_cached_results
+from farmafacil.services.product_cache import get_cached_results, save_search_results
 from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,9 @@ async def search_drug(
                     exc_info=True,
                 )
 
-        # Save to cache
+        # Save to product catalog (upsert — never deletes)
         if all_results:
-            await save_cached_results(query, city_code, all_results)
+            await save_search_results(query, city_code, all_results)
 
     # Enrich with nearby store data if we have location
     if city_code and latitude and longitude:

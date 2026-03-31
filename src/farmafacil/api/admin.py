@@ -16,8 +16,11 @@ from farmafacil.models.database import (
     IntentKeyword,
     Pharmacy,
     PharmacyLocation,
+    Product,
     ProductCache,
+    ProductPrice,
     SearchLog,
+    SearchQuery,
     User,
 )
 
@@ -156,11 +159,153 @@ class PharmacyLocationAdmin(ModelView, model=PharmacyLocation):
     page_size_options = [10, 25, 50, 100]
 
 
-class ProductCacheAdmin(ModelView, model=ProductCache):
-    """Admin view for cached product search results."""
+class ProductAdmin(ModelView, model=Product):
+    """Admin view for the permanent product catalog."""
 
-    name = "Product Cache"
-    name_plural = "Product Cache"
+    name = "Product"
+    name_plural = "Products"
+    icon = "fa-solid fa-pills"
+
+    column_list = [
+        Product.id,
+        Product.pharmacy_chain,
+        Product.drug_name,
+        Product.brand,
+        Product.requires_prescription,
+        Product.unit_count,
+        Product.created_at,
+        Product.updated_at,
+    ]
+    column_searchable_list = [Product.drug_name, Product.brand, Product.external_id]
+    column_sortable_list = [
+        Product.id,
+        Product.pharmacy_chain,
+        Product.drug_name,
+        Product.brand,
+        Product.updated_at,
+    ]
+    column_default_sort = ("updated_at", True)
+
+    column_labels = {
+        "external_id": "External ID",
+        "pharmacy_chain": "Pharmacy Chain",
+        "drug_name": "Drug Name",
+        "brand": "Brand",
+        "description": "Description",
+        "image_url": "Image URL",
+        "drug_class": "Drug Class",
+        "requires_prescription": "Rx Required",
+        "unit_count": "Unit Count",
+        "unit_label": "Unit Label",
+        "product_url": "Product URL",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    can_create = False
+    can_edit = True
+    can_delete = False
+    form_include_pk = False
+    page_size = 25
+    page_size_options = [10, 25, 50, 100]
+
+
+class ProductPriceAdmin(ModelView, model=ProductPrice):
+    """Admin view for per-location product pricing."""
+
+    name = "Product Price"
+    name_plural = "Product Prices"
+    icon = "fa-solid fa-tags"
+
+    column_list = [
+        ProductPrice.id,
+        ProductPrice.product_id,
+        ProductPrice.city_code,
+        ProductPrice.full_price_bs,
+        ProductPrice.offer_price_bs,
+        ProductPrice.discount_pct,
+        ProductPrice.in_stock,
+        ProductPrice.stores_in_stock_count,
+        ProductPrice.refreshed_at,
+    ]
+    column_searchable_list = [ProductPrice.city_code]
+    column_sortable_list = [
+        ProductPrice.id,
+        ProductPrice.product_id,
+        ProductPrice.city_code,
+        ProductPrice.full_price_bs,
+        ProductPrice.in_stock,
+        ProductPrice.refreshed_at,
+    ]
+    column_default_sort = ("refreshed_at", True)
+
+    column_labels = {
+        "product_id": "Product ID",
+        "city_code": "City Code",
+        "full_price_bs": "Full Price (Bs)",
+        "offer_price_bs": "Offer Price (Bs)",
+        "discount_pct": "Discount",
+        "in_stock": "In Stock",
+        "stores_in_stock_count": "Stores In Stock",
+        "stores_with_stock_ids": "Store IDs (JSON)",
+        "refreshed_at": "Last Refreshed",
+    }
+
+    can_create = False
+    can_edit = False
+    can_delete = False
+    form_include_pk = False
+    page_size = 25
+    page_size_options = [10, 25, 50, 100]
+
+
+class SearchQueryAdmin(ModelView, model=SearchQuery):
+    """Admin view for search query cache mappings."""
+
+    name = "Search Query"
+    name_plural = "Search Queries"
+    icon = "fa-solid fa-magnifying-glass"
+
+    column_list = [
+        SearchQuery.id,
+        SearchQuery.query,
+        SearchQuery.city_code,
+        SearchQuery.total_results,
+        SearchQuery.searched_at,
+    ]
+    column_searchable_list = [SearchQuery.query, SearchQuery.city_code]
+    column_sortable_list = [
+        SearchQuery.id,
+        SearchQuery.query,
+        SearchQuery.total_results,
+        SearchQuery.searched_at,
+    ]
+    column_default_sort = ("searched_at", True)
+
+    column_labels = {
+        "query": "Search Query",
+        "city_code": "City Code",
+        "product_ids": "Product IDs (JSON)",
+        "total_results": "Total Results",
+        "searched_at": "Searched At",
+    }
+
+    can_create = False
+    can_edit = False
+    can_delete = True
+    form_include_pk = False
+    page_size = 25
+    page_size_options = [10, 25, 50, 100]
+
+
+class ProductCacheAdmin(ModelView, model=ProductCache):
+    """Admin view for legacy cached product search results.
+
+    DEPRECATED: Replaced by Product + ProductPrice + SearchQuery.
+    """
+
+    name = "Product Cache (Legacy)"
+    name_plural = "Product Cache (Legacy)"
     icon = "fa-solid fa-database"
 
     column_list = [
@@ -187,7 +332,6 @@ class ProductCacheAdmin(ModelView, model=ProductCache):
         "cached_at": "Cached At",
     }
 
-    # Allow delete (for clearing cache) but show the JSON as read-only in detail
     can_create = False
     can_edit = False
     can_delete = True
@@ -398,6 +542,9 @@ ADMIN_VIEWS = [
     PharmacyLocationAdmin,
     PharmacyAdmin,
     DrugListingAdmin,
+    ProductAdmin,
+    ProductPriceAdmin,
+    SearchQueryAdmin,
     ProductCacheAdmin,
     AppSettingAdmin,
 ]
