@@ -3,9 +3,10 @@
 import logging
 
 from farmafacil.bot.formatter import format_search_results
+from farmafacil.bot.whatsapp import send_local_image, send_text_message
 from farmafacil.models.schemas import DrugResult
-from farmafacil.bot.whatsapp import send_image_message, send_text_message
 from farmafacil.services.geocode import geocode_zone
+from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
 from farmafacil.services.users import get_or_create_user, update_user_location
@@ -123,11 +124,17 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         reply = format_search_results(response)
         await send_text_message(sender, reply)
 
-        # Send product cards as image messages (mimics Farmatodo app)
-        for result in response.results[:3]:
-            if result.image_url:
-                caption = _build_product_caption(result)
-                await send_image_message(sender, result.image_url, caption)
+        # Generate and send product grid image
+        if response.results:
+            grid_path = await generate_product_grid(response.results, max_products=6)
+            if grid_path:
+                caption = f"Resultados para *{response.query}*"
+                if response.zone:
+                    caption += f" cerca de *{response.zone}*"
+                await send_local_image(sender, grid_path, caption)
+                # Clean up temp file
+                import os
+                os.unlink(grid_path)
 
     elif intent.action == "question" and intent.response_text:
         await send_text_message(sender, intent.response_text)
