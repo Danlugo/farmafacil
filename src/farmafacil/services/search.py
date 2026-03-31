@@ -18,6 +18,7 @@ from farmafacil.services.product_cache import (
     save_search_results,
 )
 from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
+from farmafacil.services.store_locations import get_nearby_chain_stores
 
 logger = logging.getLogger(__name__)
 
@@ -215,21 +216,42 @@ async def _enrich_with_nearby_stores(
     latitude: float,
     longitude: float,
 ) -> list[DrugResult]:
-    """Add nearby store info to each drug result."""
-    nearby = await get_nearby_stores(city_code, latitude, longitude)
-    if not nearby:
-        return results
+    """Add nearby store info to each drug result.
+
+    For pharmacies with per-store stock data (e.g., Farmatodo via Algolia),
+    filters nearby stores to only those with the product in stock.
+
+    For pharmacies without per-store stock data (e.g., Farmacias SAAS via VTEX),
+    shows the nearest stores of that chain from the pharmacy_locations DB table.
+    """
+    # Farmatodo nearby stores (from their API, with stock filtering)
+    farmatodo_nearby = await get_nearby_stores(city_code, latitude, longitude)
+
+    # Cache for DB-based chain store lookups (avoid duplicate queries)
+    chain_stores_cache: dict[str, list[NearbyStore]] = {}
 
     for result in results:
-        stores_near = filter_stores_with_stock(nearby, result.stores_with_stock_ids)
-        result.nearby_stores = [
-            NearbyStore(
-                store_name=s.name,
-                address=s.address,
-                distance_km=s.distance_km,
-                price_bs=result.price_bs,
+        if result.stores_with_stock_ids:
+            # Has per-store stock data — filter to stores with stock
+            stores_near = filter_stores_with_stock(
+                farmatodo_nearby, result.stores_with_stock_ids
             )
-            for s in stores_near[:5]
-        ]
+            result.nearby_stores = [
+                NearbyStore(
+                    store_name=s.name,
+                    address=s.address,
+                    distance_km=s.distance_km,
+                    price_bs=result.price_bs,
+                )
+                for s in stores_near[:5]
+            ]
+        else:
+            # No per-store stock data — show nearest stores of this chain
+            chain = result.pharmacy_name
+            if chain not in chain_stores_cache:
+                chain_stores_cache[chain] = await get_nearby_chain_stores(
+                    chain, latitude, longitude
+                )
+            result.nearby_stores = chain_stores_cache[chain]
 
     return results

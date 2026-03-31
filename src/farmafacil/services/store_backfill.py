@@ -11,6 +11,7 @@ from farmafacil.models.database import PharmacyLocation
 logger = logging.getLogger(__name__)
 
 FARMATODO_STORES_API = "https://api-transactional.farmatodo.com/route/r/VE/v1/stores/nearby"
+SAAS_PICKUP_API = "https://www.farmaciasaas.com/api/checkout/pub/pickup-points"
 
 # Farmatodo city codes with center coordinates for store discovery
 FARMATODO_CITIES: dict[str, tuple[float, float]] = {
@@ -22,8 +23,31 @@ FARMATODO_CITIES: dict[str, tuple[float, float]] = {
     "PAM": (11.00, -63.85), "HIG": (10.07, -66.10), "UPA": (8.00, -62.40),
 }
 
+# SAAS center coordinates for pickup point discovery (Caracas-centric, covers Venezuela)
+SAAS_GEO_CENTERS: list[tuple[float, float]] = [
+    (10.48, -66.86),   # Caracas
+    (10.64, -71.61),   # Maracaibo
+    (10.16, -67.99),   # Valencia
+    (10.07, -69.35),   # Barquisimeto
+]
+
 
 async def backfill_stores() -> int:
+    """Fetch all pharmacy store locations and upsert into pharmacy_locations.
+
+    Fetches from both Farmatodo (Algolia stores API) and Farmacias SAAS
+    (VTEX pickup points API).
+
+    Returns:
+        Number of new stores inserted.
+    """
+    total_inserted = 0
+    total_inserted += await _backfill_farmatodo_stores()
+    total_inserted += await _backfill_saas_stores()
+    return total_inserted
+
+
+async def _backfill_farmatodo_stores() -> int:
     """Fetch all Farmatodo store locations and upsert into pharmacy_locations.
 
     Returns:
@@ -79,8 +103,119 @@ async def backfill_stores() -> int:
 
         await session.commit()
 
-    logger.info("Inserted %d new pharmacy locations", inserted)
+    logger.info("Inserted %d new Farmatodo locations", inserted)
     return inserted
+
+
+async def _backfill_saas_stores() -> int:
+    """Fetch Farmacias SAAS pickup points via VTEX public API.
+
+    SAAS has ~9 pickup/store locations accessible via their VTEX checkout
+    pickup-points endpoint. We query from multiple geo centers to discover
+    all stores across Venezuela.
+
+    Returns:
+        Number of new stores inserted.
+    """
+    all_stores: dict[str, dict] = {}  # keyed by pickup point ID
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for lat, lng in SAAS_GEO_CENTERS:
+            try:
+                resp = await client.get(
+                    SAAS_PICKUP_API,
+                    params={"geoCoordinates": f"{lng};{lat}"},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for item in data.get("items", []):
+                    pp = item.get("pickupPoint", {})
+                    pp_id = pp.get("id")
+                    if pp_id:
+                        all_stores[pp_id] = pp
+            except Exception:
+                logger.warning(
+                    "Failed to fetch SAAS pickup points for geo %s,%s", lat, lng
+                )
+
+    logger.info("Fetched %d Farmacias SAAS stores from API", len(all_stores))
+
+    inserted = 0
+    async with async_session() as session:
+        for pp_id, pp_data in all_stores.items():
+            ext_id = str(pp_id)
+            result = await session.execute(
+                select(PharmacyLocation).where(
+                    PharmacyLocation.external_id == ext_id,
+                    PharmacyLocation.pharmacy_chain == "Farmacias SAAS",
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            addr = pp_data.get("address", {})
+            geo = addr.get("geoCoordinates", [])
+            store_lng, store_lat = (geo[0], geo[1]) if len(geo) == 2 else (None, None)
+
+            # Extract clean store name (remove "Farmacia SAAS - " prefix)
+            raw_name = pp_data.get("friendlyName", "")
+            name = raw_name.replace("Farmacia SAAS - ", "").strip() or raw_name
+
+            # Map city to Farmatodo city codes for compatibility
+            city = addr.get("city", "")
+            city_code = _map_saas_city(city)
+
+            street = addr.get("street", "")
+            complement = addr.get("complement", "")
+            full_address = f"{street}, {complement}".strip(", ") if street else None
+
+            if existing is None:
+                session.add(PharmacyLocation(
+                    external_id=ext_id,
+                    pharmacy_chain="Farmacias SAAS",
+                    name=name,
+                    name_lower=name.lower(),
+                    city_code=city_code,
+                    address=full_address,
+                    latitude=store_lat,
+                    longitude=store_lng,
+                ))
+                inserted += 1
+            else:
+                existing.address = full_address or existing.address
+                existing.latitude = store_lat or existing.latitude
+                existing.longitude = store_lng or existing.longitude
+
+        await session.commit()
+
+    logger.info("Inserted %d new Farmacias SAAS locations", inserted)
+    return inserted
+
+
+def _map_saas_city(city_name: str) -> str:
+    """Map SAAS city names to Farmatodo-compatible city codes.
+
+    Args:
+        city_name: City name from SAAS API (e.g., "Chacao", "Libertador").
+
+    Returns:
+        City code (e.g., "CCS"). Defaults to "CCS" for unknown Caracas municipalities.
+    """
+    city_lower = city_name.lower().strip()
+    # Caracas municipalities
+    caracas_municipalities = {
+        "chacao", "libertador", "baruta", "el hatillo", "sucre",
+        "los salias", "carrizal", "urdaneta",
+    }
+    if city_lower in caracas_municipalities:
+        return "CCS"
+    # Add more mappings as SAAS expands to other cities
+    city_map = {
+        "maracaibo": "MCBO",
+        "valencia": "VAL",
+        "barquisimeto": "BAR",
+    }
+    return city_map.get(city_lower, "CCS")
 
 
 async def lookup_store(name: str, chain: str | None = None) -> PharmacyLocation | None:
