@@ -2,10 +2,35 @@
 
 import logging
 
+from sqlalchemy import select
+
 from farmafacil.db.session import async_session
 from farmafacil.models.database import ConversationLog
 
 logger = logging.getLogger(__name__)
+
+
+async def is_duplicate_message(wa_message_id: str) -> bool:
+    """Check if a WhatsApp message ID has already been processed.
+
+    WhatsApp retries webhook deliveries if the response is slow, which can
+    cause duplicate message processing. This check prevents that.
+
+    Args:
+        wa_message_id: The WhatsApp message ID to check.
+
+    Returns:
+        True if the message has already been logged (duplicate).
+    """
+    if not wa_message_id:
+        return False
+    async with async_session() as session:
+        result = await session.execute(
+            select(ConversationLog.id).where(
+                ConversationLog.wa_message_id == wa_message_id
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
 
 async def log_inbound(

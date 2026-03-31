@@ -1,6 +1,6 @@
 # FarmaFacil — System Architecture
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-03-31
 
 ## Component Overview
 
@@ -51,13 +51,14 @@ User (WhatsApp)
 ```
 1. User sends message on WhatsApp
 2. Meta delivers POST to /webhook
-3. webhook.py extracts sender + text, logs to conversation_logs
-4. handler.py: get_or_create_user() + validate_user_profile()
-5. If onboarding not complete → rigid step-by-step wizard
-6. If onboarding complete:
+3. webhook.py deduplicates by wa_message_id (skips retried webhooks)
+4. Extracts sender + text, logs to conversation_logs
+5. handler.py: get_or_create_user() + validate_user_profile()
+6. If onboarding not complete → rigid step-by-step wizard
+7. If onboarding complete:
    a. Check DB keyword cache (instant, free)
    b. If ambiguous → classify_intent_llm() via Claude Haiku
-7. Route by intent.action:
+8. Route by intent.action:
    - greeting   → send welcome-back message
    - help        → send HELP_MESSAGE
    - drug_search → search_drug() → format results → send text + image

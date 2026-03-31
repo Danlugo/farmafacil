@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from farmafacil.api.app import create_app
+from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
 from farmafacil.bot.formatter import (
     MAX_PRODUCTS,
     MAX_STORES_PER_PHARMACY,
@@ -733,3 +734,29 @@ class TestWebhook:
         response = await client.post("/webhook", json=payload)
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class TestMessageDedup:
+    """Test WhatsApp message deduplication."""
+
+    @pytest.mark.asyncio
+    async def test_new_message_not_duplicate(self):
+        """A message ID not in the DB is not a duplicate."""
+        assert await is_duplicate_message("wamid_never_seen_123") is False
+
+    @pytest.mark.asyncio
+    async def test_empty_id_not_duplicate(self):
+        """Empty message ID is never treated as duplicate."""
+        assert await is_duplicate_message("") is False
+
+    @pytest.mark.asyncio
+    async def test_logged_message_is_duplicate(self):
+        """A message ID already logged is detected as duplicate."""
+        wa_id = "wamid_test_dedup_456"
+        await log_inbound(
+            phone_number="5491100000000",
+            message_text="test dedup",
+            message_type="text",
+            wa_message_id=wa_id,
+        )
+        assert await is_duplicate_message(wa_id) is True

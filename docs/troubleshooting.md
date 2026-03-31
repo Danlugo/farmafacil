@@ -1,6 +1,6 @@
 # FarmaFacil — Troubleshooting Guide
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-03-31
 
 ## Quick Diagnosis
 
@@ -232,3 +232,23 @@ WhatsApp messages from users don't trigger any bot response and nothing appears 
 
 5. **Messages subscription active?**
    - Meta webhook must be subscribed to the `messages` field
+
+---
+
+## Unsolicited Bot Messages (Duplicate Webhook Processing)
+
+### Symptom
+The bot sends a greeting and/or search results to a user who did not send a message. Appears as unprompted messages (e.g., "Hola Daniel!" + product images at odd hours).
+
+### Root Cause
+WhatsApp retries webhook POST deliveries when the initial response is slow (e.g., during a drug search that hits external APIs). Without deduplication, the retried webhook processes the same message again, triggering a second round of responses.
+
+### Solution (Applied 2026-03-31)
+The webhook now checks `conversation_logs.wa_message_id` before processing any message. If the ID already exists, the message is skipped with a log entry:
+```
+INFO: Skipping duplicate message wamid_xxx from 58412...
+```
+
+### If it recurs
+1. Check logs for `Skipping duplicate message` — confirms dedup is working
+2. If messages still appear without dedup logs, investigate other webhook event types (status updates, reactions) that might be triggering the handler

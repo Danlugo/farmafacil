@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, Request, Response
 from farmafacil.bot.handler import handle_incoming_message
 from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
-from farmafacil.services.conversation_log import log_inbound
+from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,11 @@ async def receive_webhook(request: Request) -> dict:
                 sender = message.get("from", "")
                 msg_type = message.get("type", "")
                 wa_id = message.get("id", "")
+
+                # Deduplicate: WhatsApp retries webhooks on slow responses
+                if wa_id and await is_duplicate_message(wa_id):
+                    logger.info("Skipping duplicate message %s from %s", wa_id, sender)
+                    continue
 
                 if msg_type == "text":
                     text = message.get("text", {}).get("body", "")
