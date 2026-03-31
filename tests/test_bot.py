@@ -6,7 +6,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from farmafacil.api.app import create_app
-from farmafacil.bot.formatter import format_search_results
+from farmafacil.bot.formatter import (
+    MAX_PRODUCTS,
+    MAX_STORES_PER_PHARMACY,
+    _group_by_product,
+    format_search_results,
+)
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.services.geocode import geocode_zone
 
@@ -188,6 +193,451 @@ class TestFormatter:
         text = format_search_results(response)
         assert "Farmatodo" in text
         assert "Farmacias SAAS" in text
+
+    def test_format_deduplicates_same_pharmacy_same_product(self):
+        """Same product from same pharmacy appears only once, not twice."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("900"),
+                    available=True,
+                ),
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("900"),
+                    available=True,
+                ),
+            ],
+            total=2,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        # Only one numbered product entry
+        assert text.count("*1. Losartan 50mg*") == 1
+        assert "*2." not in text
+        # Pharmacy appears exactly once under the product
+        assert text.count("Farmatodo") >= 1
+
+    def test_format_store_price_shown_per_store(self):
+        """NearbyStore.price_bs is shown per store line."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("900"),
+                    available=True,
+                    nearby_stores=[
+                        NearbyStore(
+                            store_name="TEPUY",
+                            address="Las Mercedes",
+                            distance_km=0.5,
+                            price_bs=Decimal("910.50"),
+                        ),
+                    ],
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "TEPUY" in text
+        assert "910.50" in text
+
+    def test_format_store_without_price_omits_price(self):
+        """NearbyStore without price_bs does not emit a price line."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("900"),
+                    available=True,
+                    nearby_stores=[
+                        NearbyStore(
+                            store_name="CHUAO",
+                            address="Chuao",
+                            distance_km=1.2,
+                            price_bs=None,
+                        ),
+                    ],
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "CHUAO" in text
+        assert "1.2 km" in text
+        # The store line should end after the distance — no "Bs." on the store line
+        # (The product-level Bs. 900 is still present, but no second "Bs." for the store)
+        store_line_start = text.index("CHUAO")
+        newline_after = text.find("\n", store_line_start)
+        store_line = text[store_line_start:newline_after] if newline_after != -1 else text[store_line_start:]
+        assert "Bs." not in store_line
+
+    def test_format_max_stores_per_pharmacy_capped(self):
+        """Only MAX_STORES_PER_PHARMACY store lines appear per pharmacy."""
+        stores = [
+            NearbyStore(
+                store_name=f"STORE_{i}",
+                address=f"Address {i}",
+                distance_km=float(i),
+                price_bs=Decimal("100"),
+            )
+            for i in range(MAX_STORES_PER_PHARMACY + 2)
+        ]
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("100"),
+                    available=True,
+                    nearby_stores=stores,
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        # Stores 0..MAX_STORES_PER_PHARMACY-1 appear; the rest must not
+        for i in range(MAX_STORES_PER_PHARMACY):
+            assert f"STORE_{i}" in text
+        for i in range(MAX_STORES_PER_PHARMACY, MAX_STORES_PER_PHARMACY + 2):
+            assert f"STORE_{i}" not in text
+
+    def test_format_product_without_price(self):
+        """Product with no price_bs formats without a price entry."""
+        response = SearchResponse(
+            query="test",
+            results=[
+                DrugResult(
+                    drug_name="NoPriceDrug",
+                    pharmacy_name="Farmatodo",
+                    price_bs=None,
+                    available=True,
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "NoPriceDrug" in text
+        assert "Farmatodo" in text
+        # No price should appear at all for this product
+        assert "Bs." not in text
+
+    def test_format_discount_shows_original_price_and_percentage(self):
+        """Discount products show sale price, strikethrough original, and percentage."""
+        response = SearchResponse(
+            query="test",
+            results=[
+                DrugResult(
+                    drug_name="DiscountDrug",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("800"),
+                    full_price_bs=Decimal("1000"),
+                    discount_pct="20%",
+                    available=True,
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "800" in text
+        assert "1,000" in text or "1000" in text
+        assert "20%" in text
+        # WhatsApp strikethrough tilde characters
+        assert "~" in text
+
+    def test_format_truncation_message_shows_correct_remaining_count(self):
+        """Truncation message reports exact number of remaining products."""
+        n_results = MAX_PRODUCTS + 3
+        results = [
+            DrugResult(
+                drug_name=f"Drug {i}",
+                pharmacy_name="Farmatodo",
+                available=True,
+                price_bs=Decimal("100"),
+            )
+            for i in range(n_results)
+        ]
+        response = SearchResponse(
+            query="test",
+            results=results,
+            total=n_results,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "3 productos mas" in text
+
+    def test_format_exactly_max_products_no_truncation(self):
+        """Exactly MAX_PRODUCTS unique products — no truncation message."""
+        results = [
+            DrugResult(
+                drug_name=f"Drug {i}",
+                pharmacy_name="Farmatodo",
+                available=True,
+                price_bs=Decimal("100"),
+            )
+            for i in range(MAX_PRODUCTS)
+        ]
+        response = SearchResponse(
+            query="test",
+            results=results,
+            total=MAX_PRODUCTS,
+            searched_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        assert "productos mas" not in text
+
+    def test_format_interleaves_pharmacies(self):
+        """Products from different pharmacy chains alternate in output order."""
+        results = [
+            DrugResult(
+                drug_name="Alpha Drug",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("100"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Beta Drug",
+                pharmacy_name="Farmacias SAAS",
+                price_bs=Decimal("50"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Gamma Drug",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("200"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Delta Drug",
+                pharmacy_name="Farmacias SAAS",
+                price_bs=Decimal("75"),
+                available=True,
+            ),
+        ]
+        response = SearchResponse(
+            query="test",
+            results=results,
+            total=4,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
+        )
+        text = format_search_results(response)
+        # All four products are present
+        assert "Alpha Drug" in text
+        assert "Beta Drug" in text
+        assert "Gamma Drug" in text
+        assert "Delta Drug" in text
+        # Two pharmacies alternate — positions must interleave (Farmatodo product
+        # at pos 1 or 2, SAAS product at the other position, etc.)
+        pos_alpha = text.index("Alpha Drug")
+        pos_beta = text.index("Beta Drug")
+        pos_gamma = text.index("Gamma Drug")
+        pos_delta = text.index("Delta Drug")
+        # The two Farmatodo products must not be adjacent (SAAS products interleave)
+        farmatodo_positions = sorted([pos_alpha, pos_gamma])
+        saas_positions = sorted([pos_beta, pos_delta])
+        # Interleaved means a SAAS product falls between the two Farmatodo products
+        assert saas_positions[0] > farmatodo_positions[0] or saas_positions[0] < farmatodo_positions[1]
+
+
+class TestGroupByProduct:
+    """Unit tests for the _group_by_product helper."""
+
+    def test_same_product_different_pharmacies_grouped(self):
+        """Same drug name from two pharmacies produces one group with two entries."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("900"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmacias SAAS",
+                price_bs=Decimal("800"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        assert len(groups) == 1
+        name, pharmacy_results = groups[0]
+        assert name == "Losartan 50mg"
+        assert len(pharmacy_results) == 2
+        pharmacy_names = {r.pharmacy_name for r in pharmacy_results}
+        assert pharmacy_names == {"Farmatodo", "Farmacias SAAS"}
+
+    def test_same_product_same_pharmacy_deduplicated(self):
+        """Duplicate (product, pharmacy) pair is deduplicated to one entry."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("900"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("910"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        assert len(groups) == 1
+        _name, pharmacy_results = groups[0]
+        assert len(pharmacy_results) == 1
+
+    def test_different_products_produce_separate_groups(self):
+        """Two distinct drug names produce two separate groups."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("900"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Enalapril 10mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("500"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        assert len(groups) == 2
+        names = {name for name, _ in groups}
+        assert names == {"Losartan 50mg", "Enalapril 10mg"}
+
+    def test_available_sorted_before_unavailable(self):
+        """Within a group, available pharmacies sort before unavailable ones."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("900"),
+                available=False,
+            ),
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="Farmacias SAAS",
+                price_bs=Decimal("800"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        _name, pharmacy_results = groups[0]
+        assert pharmacy_results[0].available is True
+        assert pharmacy_results[0].pharmacy_name == "Farmacias SAAS"
+
+    def test_cheaper_available_sorted_first_within_available(self):
+        """Among available pharmacies, the cheaper one comes first."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="PharmacyExpensive",
+                price_bs=Decimal("1000"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="PharmacyCheap",
+                price_bs=Decimal("200"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        _name, pharmacy_results = groups[0]
+        assert pharmacy_results[0].pharmacy_name == "PharmacyCheap"
+
+    def test_none_price_treated_as_highest_for_sorting(self):
+        """A product with no price sorts after priced products in the same group."""
+        results = [
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="PharmacyNone",
+                price_bs=None,
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Losartan 50mg",
+                pharmacy_name="PharmacyPriced",
+                price_bs=Decimal("500"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        _name, pharmacy_results = groups[0]
+        assert pharmacy_results[0].pharmacy_name == "PharmacyPriced"
+
+    def test_interleave_round_robins_across_chains(self):
+        """Products alternate between pharmacy chains in round-robin order."""
+        results = [
+            DrugResult(
+                drug_name="Drug A",
+                pharmacy_name="ChainAlpha",
+                price_bs=Decimal("100"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Drug B",
+                pharmacy_name="ChainBeta",
+                price_bs=Decimal("200"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Drug C",
+                pharmacy_name="ChainAlpha",
+                price_bs=Decimal("150"),
+                available=True,
+            ),
+            DrugResult(
+                drug_name="Drug D",
+                pharmacy_name="ChainBeta",
+                price_bs=Decimal("250"),
+                available=True,
+            ),
+        ]
+        groups = _group_by_product(results)
+        names_in_order = [name for name, _ in groups]
+        # ChainAlpha and ChainBeta should alternate (round-robin)
+        # ChainAlpha: Drug A, Drug C; ChainBeta: Drug B, Drug D
+        # Sorted chains: ChainAlpha, ChainBeta → order: A, B, C, D
+        assert names_in_order == ["Drug A", "Drug B", "Drug C", "Drug D"]
+
+    def test_empty_results_returns_empty_list(self):
+        """Empty input produces an empty list."""
+        groups = _group_by_product([])
+        assert groups == []
+
+    def test_single_result_returns_one_group(self):
+        """Single result returns one group with one pharmacy entry."""
+        results = [
+            DrugResult(
+                drug_name="Paracetamol 500mg",
+                pharmacy_name="Farmatodo",
+                price_bs=Decimal("300"),
+                available=True,
+            )
+        ]
+        groups = _group_by_product(results)
+        assert len(groups) == 1
+        name, pharmacy_results = groups[0]
+        assert name == "Paracetamol 500mg"
+        assert len(pharmacy_results) == 1
 
 
 @pytest.mark.integration

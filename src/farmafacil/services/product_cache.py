@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import Product, ProductPrice, SearchQuery
@@ -91,6 +91,72 @@ async def get_cached_results(query: str, city_code: str | None) -> list[DrugResu
             query, city_code, len(drug_results),
         )
         return drug_results
+
+
+async def find_cached_products(
+    query: str, city_code: str | None
+) -> list[DrugResult] | None:
+    """Search the product catalog by keyword for products with fresh prices.
+
+    Queries the products table directly using the first keyword from the query,
+    returning all matching products that have been refreshed within the cache TTL.
+    This avoids unnecessary API calls when products were already cached by a
+    previous broader search.
+
+    Args:
+        query: Drug search query (e.g., "RESVERATROL NAD+VID CAP 125MG X60 HERB").
+        city_code: Optional city code for localized pricing.
+
+    Returns:
+        List of DrugResult if matching products found with fresh prices, None otherwise.
+    """
+    ttl_minutes = await get_setting_int("cache_ttl_minutes")
+    cutoff = datetime.now(tz=UTC) - timedelta(minutes=ttl_minutes)
+
+    # Extract base term (first significant word) for broad DB search
+    tokens = query.lower().strip().split()
+    if not tokens:
+        return None
+    base_term = tokens[0]
+
+    effective_city = city_code or "ALL"
+
+    async with async_session() as session:
+        # Find products whose drug_name contains the base keyword
+        result = await session.execute(
+            select(Product).where(
+                func.lower(Product.drug_name).contains(base_term)
+            )
+        )
+        products = result.scalars().all()
+
+        if not products:
+            return None
+
+        drug_results = []
+        for product in products:
+            # Find price for the requested city, check freshness
+            price_row = None
+            for p in product.prices:
+                if p.city_code == effective_city:
+                    refreshed_at = p.refreshed_at
+                    if refreshed_at.tzinfo is None:
+                        refreshed_at = refreshed_at.replace(tzinfo=UTC)
+                    if refreshed_at >= cutoff:
+                        price_row = p
+                    break
+
+            if price_row:
+                drug_results.append(_product_to_drug_result(product, price_row))
+
+        if drug_results:
+            logger.info(
+                "Found %d products in catalog for '%s' (city=%s)",
+                len(drug_results), query, city_code,
+            )
+            return drug_results
+
+    return None
 
 
 async def save_search_results(

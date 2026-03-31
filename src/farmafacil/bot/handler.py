@@ -14,6 +14,7 @@ from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
     get_or_create_user,
     set_onboarding_step,
+    update_last_search,
     update_user_location,
     update_user_name,
     update_user_preference,
@@ -201,6 +202,9 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         if action == "farewell" and response:
             await send_text_message(sender, response)
             return
+        if action == "view_similar":
+            await _handle_view_similar(sender, user)
+            return
 
     # Classify intent (keywords first, LLM fallback)
     intent = await classify_intent(text)
@@ -246,6 +250,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
         query = intent.drug_query or text
         logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
+        await update_last_search(sender, query)
         response = await search_drug(
             query=query,
             city_code=user.city_code,
@@ -386,3 +391,51 @@ def _build_product_caption(result: DrugResult) -> str:
         closest = result.nearby_stores[0]
         lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")
     return "\n".join(lines)
+
+
+async def _handle_view_similar(sender: str, user) -> None:
+    """Handle 'ver similares' command — re-run last search without exact filtering.
+
+    Loads the user's last search query and re-runs it with show_all=True
+    to show all product variants instead of just the exact match.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with last_search_query.
+    """
+    if not user.last_search_query:
+        await send_text_message(
+            sender,
+            "No tienes una busqueda reciente. Enviame el nombre de un medicamento.",
+        )
+        return
+
+    display_name = user.name or "amigo"
+    query = user.last_search_query
+
+    if not user.latitude:
+        await send_text_message(
+            sender, MSG_NEED_LOCATION.format(name=display_name)
+        )
+        return
+
+    logger.info(
+        "View similar from %s/%s: '%s'", sender, display_name, query
+    )
+    response = await search_drug(
+        query=query,
+        city_code=user.city_code,
+        latitude=user.latitude,
+        longitude=user.longitude,
+        zone_name=user.zone_name,
+        show_all=True,
+    )
+
+    if response.results:
+        if user.display_preference == "detail":
+            await _send_detail_images(sender, response.results)
+        else:
+            await _send_grid_image(sender, response)
+
+    reply = format_search_results(response)
+    await send_text_message(sender, reply)

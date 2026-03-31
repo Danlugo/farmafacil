@@ -61,6 +61,13 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("nuevo nombre", None),
         ("mi nombre es", None),
     ],
+    "view_similar": [
+        ("ver similares", None),
+        ("similares", None),
+        ("ver otros", None),
+        ("mostrar similares", None),
+        ("ver mas", None),
+    ],
     "farewell": [
         ("gracias", "De nada! Cuando necesites buscar medicamentos, aqui estare. \U0001f48a"),
         ("chao", "Chao! Cuidate mucho. \U0001f48a"),

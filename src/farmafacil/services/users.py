@@ -185,6 +185,22 @@ async def validate_user_profile(user: User) -> User:
     return user
 
 
+async def update_last_search(phone_number: str, query: str) -> None:
+    """Store the user's last search query for 'ver similares' feature.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        query: The drug search query.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.phone_number == phone_number)
+        )
+        user = result.scalar_one()
+        user.last_search_query = query
+        await session.commit()
+
+
 async def set_onboarding_step(phone_number: str, step: str | None) -> User:
     """Set the user's current onboarding step.
 

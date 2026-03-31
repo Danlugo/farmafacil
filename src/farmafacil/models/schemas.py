@@ -68,6 +68,7 @@ class SearchResponse(BaseModel):
     results: list[DrugResult]
     total: int
     searched_pharmacies: list[str]
+    similar_count: int = 0
 
 
 class HealthResponse(BaseModel):

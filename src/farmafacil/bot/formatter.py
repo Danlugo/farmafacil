@@ -148,6 +148,12 @@ def format_search_results(response: SearchResponse) -> str:
     if remaining > 0:
         lines.append(f"\n... y {remaining} productos mas.")
 
+    if response.similar_count > 0:
+        lines.append(
+            f"\n\U0001f50d Tambien encontramos *{response.similar_count}* productos similares."
+            "\nEnvia _ver similares_ para verlos."
+        )
+
     lines.append(
         "\nEnvia otro medicamento para buscar."
         "\n_cambiar zona_ \u00b7 _ayuda_"

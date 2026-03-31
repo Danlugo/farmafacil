@@ -53,6 +53,10 @@ class User(Base):
         String(30), nullable=True, default="awaiting_name",
         comment="Current onboarding step (NULL = complete)",
     )
+    last_search_query: Mapped[str | None] = mapped_column(
+        String(300), nullable=True,
+        comment="Last drug search query for 'ver similares' feature",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
