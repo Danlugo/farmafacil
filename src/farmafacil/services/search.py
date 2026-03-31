@@ -60,57 +60,21 @@ def is_specific_query(query: str) -> bool:
     return any(re.search(p, q) for p in _SPECIFIC_PATTERNS)
 
 
-def _extract_identifiers(text: str) -> tuple[str, set[str]]:
-    """Extract base drug name and numeric identifiers from a product name.
-
-    Numeric identifiers are dosages (125mg, 500ml), unit counts (x60, x30),
-    and similar numeric patterns that distinguish product variants.
-
-    Args:
-        text: Product name or search query.
-
-    Returns:
-        Tuple of (base_name, set_of_numeric_identifiers).
-    """
-    text_lower = text.lower().strip()
-    # Extract number+unit patterns: "125mg", "500ml", "30g", "1000ui", "x60"
-    numerics = set(
-        re.findall(r"\d+\s*(?:mg|ml|g|mcg|ui)\b|x\s*\d+", text_lower)
-    )
-    # Normalize: remove spaces within patterns ("x 60" → "x60", "125 mg" → "125mg")
-    numerics = {re.sub(r"\s+", "", n) for n in numerics}
-    # Base name = first word (the drug/product name)
-    words = text_lower.split()
-    base = words[0] if words else ""
-    return base, numerics
-
-
 def is_product_match(query: str, drug_name: str) -> bool:
     """Check if a drug_name matches a specific product query.
 
-    Matching is based on the base drug name and numeric identifiers (dosage,
-    unit count). This handles cases where different pharmacy chains name the
-    same product slightly differently (e.g., "CAP" vs "Capsulas").
+    Uses strict case-insensitive string equality. When a user types an exact
+    product name like "RESVERATROL NAD+VID CAP 125MG X60 HERB", only products
+    with that exact name match. Different pharmacy chains that list the same
+    product under a different name are treated as similar products.
 
     Args:
         query: The user's search query.
         drug_name: The product name from the pharmacy.
 
     Returns:
-        True if the product matches the query's key identifiers.
+        True if the drug_name matches the query exactly (case-insensitive).
     """
-    q_base, q_nums = _extract_identifiers(query)
-    d_base, d_nums = _extract_identifiers(drug_name)
-
-    # Base drug name must match
-    if q_base != d_base:
-        return False
-
-    # If query has numeric identifiers, ALL must be present in drug_name
-    if q_nums:
-        return q_nums.issubset(d_nums)
-
-    # No numeric identifiers in query — fall back to exact string match
     return query.lower().strip() == drug_name.lower().strip()
 
 
@@ -119,9 +83,9 @@ def filter_exact_results(
 ) -> tuple[list[DrugResult], list[DrugResult]]:
     """Split results into exact matches and similar products.
 
-    Uses token-based matching: the base drug name and all numeric identifiers
-    (dosage, unit count) from the query must be present in the drug_name.
-    This handles different naming conventions across pharmacy chains.
+    Uses strict case-insensitive string matching. Only products whose
+    drug_name exactly matches the query are considered exact matches.
+    Everything else is a similar product shown via "ver similares".
 
     Args:
         results: All drug search results.

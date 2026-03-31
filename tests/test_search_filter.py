@@ -6,7 +6,6 @@ import pytest
 
 from farmafacil.models.schemas import DrugResult, SearchResponse
 from farmafacil.services.search import (
-    _extract_identifiers,
     filter_exact_results,
     is_product_match,
     is_specific_query,
@@ -75,58 +74,8 @@ class TestIsSpecificQuery:
         assert is_specific_query("Crema 30g") is True
 
 
-class TestExtractIdentifiers:
-    """Test extraction of base name and numeric identifiers."""
-
-    def test_simple_dosage(self):
-        """Extract base name and single dosage."""
-        base, nums = _extract_identifiers("Losartan 50mg")
-        assert base == "losartan"
-        assert nums == {"50mg"}
-
-    def test_dosage_and_count(self):
-        """Extract dosage and unit count."""
-        base, nums = _extract_identifiers("RESVERATROL NAD+VID CAP 125MG X60 HERB")
-        assert base == "resveratrol"
-        assert "125mg" in nums
-        assert "x60" in nums
-
-    def test_compound_dosage(self):
-        """Extract multiple dosages from compound product."""
-        base, nums = _extract_identifiers(
-            "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant x 60 Capsulas"
-        )
-        assert base == "resveratrol"
-        assert "250mg" in nums
-        assert "75mg" in nums
-        assert "125mg" in nums
-        assert "x60" in nums
-
-    def test_spaced_count_normalized(self):
-        """'x 60' is normalized to 'x60'."""
-        base, nums = _extract_identifiers("Producto x 30")
-        assert "x30" in nums
-
-    def test_ml_dosage(self):
-        """Extract milliliter dosage."""
-        base, nums = _extract_identifiers("Ibuprofeno 100ml")
-        assert "100ml" in nums
-
-    def test_no_numerics(self):
-        """Product without numeric identifiers returns empty set."""
-        base, nums = _extract_identifiers("losartan")
-        assert base == "losartan"
-        assert nums == set()
-
-    def test_empty_string(self):
-        """Empty string returns empty base and empty set."""
-        base, nums = _extract_identifiers("")
-        assert base == ""
-        assert nums == set()
-
-
 class TestIsProductMatch:
-    """Test smart product matching across pharmacy chains."""
+    """Test strict product matching (case-insensitive exact string)."""
 
     def test_exact_same_name(self):
         """Identical names match."""
@@ -139,57 +88,43 @@ class TestIsProductMatch:
         """Case-insensitive match works."""
         assert is_product_match(
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
-            "Resveratrol Nad+vid Cap 125mg x60 Herb",
+            "resveratrol nad+vid cap 125mg x60 herb",
         ) is True
 
-    def test_different_naming_same_product(self):
-        """Same product with different naming across chains matches.
-
-        SAAS: "RESVERATROL NAD+VID CAP 125MG X60 HERB"
-        Farmatodo: "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant x 60 Capsulas"
-        Both have base 'resveratrol' and identifiers '125mg', 'x60'.
-        """
+    def test_different_product_no_match(self):
+        """Different product name does not match."""
         assert is_product_match(
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
             "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
-        ) is True
+        ) is False
 
     def test_different_dosage_no_match(self):
-        """Different dosage does NOT match."""
+        """Different dosage does not match."""
         assert is_product_match(
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
             "RESVERATROL NAD+VID CAP 250MG X60 HERB",
         ) is False
 
-    def test_different_count_no_match(self):
-        """Different unit count does NOT match."""
-        assert is_product_match(
-            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
-            "RESVERATROL NAD+VID CAP 125MG X30 HERB",
-        ) is False
-
     def test_different_base_name_no_match(self):
-        """Different base drug name does NOT match."""
+        """Different base drug name does not match."""
         assert is_product_match(
             "Losartan 50mg",
             "Enalapril 50mg",
         ) is False
 
-    def test_losartan_variants(self):
-        """50mg Losartan matches only 50mg, not 100mg."""
+    def test_whitespace_trimmed(self):
+        """Leading/trailing whitespace is trimmed."""
         assert is_product_match(
+            "  Losartan 50mg  ",
             "Losartan 50mg",
-            "Losartan Potasico 50mg Biumak Caja x 30",
         ) is True
-        assert is_product_match(
-            "Losartan 50mg",
-            "Losartan 100mg GenVen Caja x 30",
-        ) is False
 
-    def test_no_numerics_fallback_to_exact(self):
-        """Without numeric identifiers, falls back to exact string match."""
-        assert is_product_match("losartan", "losartan") is True
-        assert is_product_match("losartan", "Losartan 50mg") is False
+    def test_compound_product_not_matched_by_single_ingredient(self):
+        """A compound product (250mg/125mg) is not matched by a 125mg query."""
+        assert is_product_match(
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
+            "Resveratrol + Selenio Q10 250mg/125mg Lipoico Inmuneplus x 60 Capsulas",
+        ) is False
 
 
 class TestFilterExactResults:
@@ -204,7 +139,7 @@ class TestFilterExactResults:
         )
 
     def test_exact_match_found(self):
-        """Matching product is separated from similar products."""
+        """Exact name match is separated from similar products."""
         results = [
             self._make_result("RESVERATROL NAD+VID CAP 125MG X60 HERB"),
             self._make_result("RESVERATROL NAD+VID CAP 250MG X60 HERB"),
@@ -217,15 +152,14 @@ class TestFilterExactResults:
         assert exact[0].drug_name == "RESVERATROL NAD+VID CAP 125MG X60 HERB"
         assert len(similar) == 2
 
-    def test_cross_chain_match(self):
-        """Same product from different chains with different names both match."""
+    def test_same_name_different_chains_both_match(self):
+        """Same exact product name from different chains both match."""
         results = [
             self._make_result(
                 "RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"
             ),
             self._make_result(
-                "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
-                "Farmatodo",
+                "RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmatodo"
             ),
             self._make_result(
                 "Resveratrol + NAD 400mg/200mg Natural Premium Frasco x 60 Capsulas",
@@ -235,13 +169,31 @@ class TestFilterExactResults:
         exact, similar = filter_exact_results(
             results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
         )
-        # Both SAAS and Farmatodo's 125mg x60 match; the 400mg/200mg does not
         assert len(exact) == 2
         pharmacies = {r.pharmacy_name for r in exact}
         assert pharmacies == {"Farmacias SAAS", "Farmatodo"}
         assert len(similar) == 1
 
-    def test_no_match_shows_all(self):
+    def test_different_naming_across_chains_goes_to_similar(self):
+        """Products with different names (even if same product) are similar."""
+        results = [
+            self._make_result(
+                "RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"
+            ),
+            self._make_result(
+                "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
+                "Farmatodo",
+            ),
+        ]
+        exact, similar = filter_exact_results(
+            results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
+        )
+        assert len(exact) == 1
+        assert exact[0].pharmacy_name == "Farmacias SAAS"
+        assert len(similar) == 1
+        assert similar[0].pharmacy_name == "Farmatodo"
+
+    def test_no_match_shows_all_as_similar(self):
         """When no product matches, all results are similar."""
         results = [
             self._make_result("Losartan 50mg GenVen"),
@@ -250,17 +202,6 @@ class TestFilterExactResults:
         exact, similar = filter_exact_results(results, "Losartan 25mg")
         assert len(exact) == 0
         assert len(similar) == 2
-
-    def test_multiple_pharmacies_exact_match(self):
-        """Same exact product from different pharmacies both match."""
-        results = [
-            self._make_result("Losartan 50mg", "Farmatodo"),
-            self._make_result("Losartan 50mg", "Farmacias SAAS"),
-            self._make_result("Losartan 100mg", "Farmatodo"),
-        ]
-        exact, similar = filter_exact_results(results, "Losartan 50mg")
-        assert len(exact) == 2
-        assert len(similar) == 1
 
     def test_empty_results(self):
         """Empty results return empty tuples."""
