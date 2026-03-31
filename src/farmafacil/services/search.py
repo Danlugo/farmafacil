@@ -5,6 +5,7 @@ import logging
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
+from farmafacil.scrapers.saas import SAASScraper
 from farmafacil.services.product_cache import get_cached_results, save_search_results
 from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
 
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_SCRAPERS: list[BaseScraper] = [
     FarmatodoScraper(),
+    SAASScraper(),
 ]
 
 
@@ -34,7 +36,7 @@ async def search_drug(
     cached = await get_cached_results(query, city_code)
     if cached is not None:
         all_results = cached
-        searched = ["Farmatodo (cache)"]
+        searched = [f"{s.pharmacy_name} (cache)" for s in ACTIVE_SCRAPERS]
         logger.info("Serving cached results for '%s': %d items", query, len(cached))
     else:
         # Cache miss — hit scrapers

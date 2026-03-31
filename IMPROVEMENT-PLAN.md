@@ -10,13 +10,13 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 1: Farmacias SAAS Scraper (VTEX GraphQL)
 
-- **Status:** PENDING
+- **Status:** DONE
 - **Added:** 2026-03-30
+- **Completed:** 2026-03-30
 - **Problem:** FarmaFacil only searches Farmatodo. Farmacias SAAS is a major Venezuelan pharmacy chain with an online catalog at farmaciasaas.com powered by VTEX, exposing a GraphQL API for product search.
-- **Suggested solution:** Create `src/farmafacil/scrapers/saas.py` subclassing `BaseScraper`. Use the VTEX Intelligent Search GraphQL endpoint (`/api/io/_v/api/intelligent-search/product_search/`) to query products. Extract product name, price, image URL, availability, and store locations. Consider creating a shared `VTEXScraper` base class since Locatel also uses VTEX.
-- **Affected files:** `src/farmafacil/scrapers/saas.py` (new), `src/farmafacil/scrapers/vtex_base.py` (new, optional shared base), `src/farmafacil/services/search.py` (register scraper), `tests/test_saas_scraper.py` (new)
-- **Effort:** Medium (3–4 hours)
-- **Notes:** VTEX GraphQL API is publicly accessible for product search. Need to reverse-engineer the exact query parameters and response schema from farmaciasaas.com.
+- **Solution implemented:** Created `VTEXScraper` base class (`src/farmafacil/scrapers/vtex.py`) and `SAASScraper` subclass (`src/farmafacil/scrapers/saas.py`). Uses the VTEX Intelligent Search REST endpoint. Registered in `ACTIVE_SCRAPERS`. The VTEX base class is reusable for Locatel (Item 2).
+- **Files changed:** `src/farmafacil/scrapers/vtex.py` (new), `src/farmafacil/scrapers/saas.py` (new), `src/farmafacil/services/search.py` (modified), `tests/test_saas_scraper.py` (new, 13 unit + 2 integration tests), `pyproject.toml` (integration marker)
+- **Notes:** VTEX API is public, no auth needed. Endpoint: `GET /api/io/_v/api/intelligent-search/product_search/?query=<drug>`. Returns product name, price, list price, discount, image, availability, brand, categories.
 
 ### Item 2: Locatel Scraper (VTEX GraphQL)
 

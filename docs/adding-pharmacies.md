@@ -116,16 +116,37 @@ class NewPharmacyScraper(BaseScraper):
         )
 ```
 
+### Step 1b: VTEX shortcut (for VTEX-powered pharmacies)
+
+If the pharmacy runs on VTEX (e.g., Farmacias SAAS, Locatel), subclass `VTEXScraper` instead. All HTTP and parsing logic is handled by the base class — you only need to set `base_url` and `pharmacy_name`:
+
+```python
+"""NewVTEXPharmacy drug search via VTEX Intelligent Search API."""
+
+from farmafacil.scrapers.vtex import VTEXScraper
+
+class NewVTEXPharmacyScraper(VTEXScraper):
+    base_url = "https://www.newvtexpharmacy.com"
+
+    @property
+    def pharmacy_name(self) -> str:
+        return "NewVTEXPharmacy"
+```
+
+See `src/farmafacil/scrapers/saas.py` for a real example.
+
 ### Step 2: Register in ACTIVE_SCRAPERS
 
 File: `src/farmafacil/services/search.py`
 
 ```python
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
+from farmafacil.scrapers.saas import SAASScraper
 from farmafacil.scrapers.new_pharmacy import NewPharmacyScraper
 
 ACTIVE_SCRAPERS: list[BaseScraper] = [
     FarmatodoScraper(),
+    SAASScraper(),
     NewPharmacyScraper(),
 ]
 ```

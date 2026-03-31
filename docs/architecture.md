@@ -32,7 +32,7 @@ User (WhatsApp)
 |  Service Service Service  |
 |     |       |              |
 |     v       v              |
-|  [Claude  [Algolia API]   |
+|  [Claude  [Algolia API]  [VTEX API] |
 |   Haiku]                  |
 |     |       |              |
 |     v       v              |
@@ -70,6 +70,7 @@ User (WhatsApp)
 | Service | Purpose | Auth |
 |---------|---------|------|
 | Farmatodo Algolia | Product search index | Static API key (public) |
+| Farmacias SAAS VTEX | Product search (Intelligent Search API) | No auth required |
 | WhatsApp Business Cloud API | Send/receive messages | WHATSAPP_API_TOKEN (System User) |
 | OpenStreetMap Nominatim | Geocode Venezuelan zones | No key — User-Agent header |
 | Anthropic Claude Haiku | Intent detection fallback | ANTHROPIC_API_KEY |

@@ -36,6 +36,7 @@ docker compose logs -f app
 - **FastAPI** backend with async endpoints
 - **SQLAlchemy 2.0** async ORM (SQLite dev / PostgreSQL prod)
 - **Farmatodo Algolia API** for drug search (no HTML scraping)
+- **Farmacias SAAS VTEX API** for drug search (shared VTEXScraper base)
 - **WhatsApp Business Cloud API** (Meta) for bot
 - **Claude Haiku** for intent detection fallback
 - **OpenStreetMap Nominatim** for geocoding zones
@@ -47,11 +48,11 @@ docker compose logs -f app
 |------|---------|
 | `src/farmafacil/api/` | FastAPI routes, app factory |
 | `src/farmafacil/bot/` | WhatsApp webhook, handler, formatter |
-| `src/farmafacil/scrapers/` | Pharmacy scrapers (Farmatodo via Algolia) |
+| `src/farmafacil/scrapers/` | Pharmacy scrapers (Farmatodo via Algolia, SAAS via VTEX) |
 | `src/farmafacil/services/` | Business logic, intent, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (80 tests) |
+| `tests/` | pytest test suite (83+ tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -98,6 +99,8 @@ docker compose logs -f app
 See `docs/adding-pharmacies.md` for the full guide. Summary:
 
 1. Create `src/farmafacil/scrapers/new_pharmacy.py`
-2. Subclass `BaseScraper`, implement `pharmacy_name` and `search()`
+2. Subclass `BaseScraper` (or `VTEXScraper` for VTEX-powered pharmacies), implement `pharmacy_name` and `search()`
 3. Register in `src/farmafacil/services/search.py` → `ACTIVE_SCRAPERS`
 4. Add tests in `tests/test_new_pharmacy_scraper.py`
+
+**For VTEX pharmacies** (e.g., Locatel): subclass `VTEXScraper`, set `base_url`, and override `pharmacy_name`. See `src/farmafacil/scrapers/saas.py` as a minimal example.
