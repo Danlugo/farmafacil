@@ -112,8 +112,19 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         return
 
     if step == "awaiting_name":
-        # Could be just a name, or could contain more info — use LLM
-        intent = await classify_intent(text)
+        # Always use LLM here to distinguish greetings from actual names
+        from farmafacil.services.intent import classify_intent_llm
+        intent = await classify_intent_llm(text)
+
+        # If it's just a greeting (hi, hola), re-ask for name
+        if intent.action == "greeting" and not intent.detected_name:
+            await send_text_message(
+                sender,
+                "\U0001f60a Hola! Dime tu nombre para poder atenderte mejor.\n\n"
+                "Ejemplo: _Maria_, _Jose_, _Carlos_"
+            )
+            return
+
         name = intent.detected_name or text.strip().title()
         user = await update_user_name(sender, name)
 
