@@ -118,6 +118,30 @@ class ConversationLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class IntentKeyword(Base):
+    """Keyword-to-intent mapping, editable via admin."""
+
+    __tablename__ = "intent_keywords"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(
+        String(50), nullable=False, index=True,
+        comment="Intent action: greeting, help, location_change, preference_change, name_change, farewell",
+    )
+    keyword: Mapped[str] = mapped_column(
+        String(200), nullable=False, unique=True, index=True,
+        comment="Lowercase keyword or phrase to match",
+    )
+    response: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Optional canned response for this keyword",
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SearchLog(Base):
     """Log of user searches for analytics."""
 

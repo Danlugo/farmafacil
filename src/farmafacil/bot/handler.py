@@ -80,14 +80,7 @@ MSG_NEED_LOCATION = (
 
 # ── Change command keywords ─────────────────────────────────────────────
 
-PREFERENCE_CHANGE_WORDS = {
-    "cambiar preferencia", "cambiar vista", "cambiar modo", "otra vista", "otro modo",
-}
-LOCATION_CHANGE_WORDS = {
-    "cambiar ubicacion", "cambiar ubicación", "cambiar zona",
-    "nueva ubicacion", "nueva ubicación", "otra zona",
-}
-NAME_CHANGE_WORDS = {"cambiar nombre", "nuevo nombre"}
+from farmafacil.services.intent import _get_keyword_cache
 
 
 async def handle_incoming_message(sender: str, message_text: str) -> None:
@@ -176,19 +169,25 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # ── Onboarding complete — smart conversational flow ─────────────────
 
-    # Check change commands first (before LLM call)
-    if text_lower in LOCATION_CHANGE_WORDS:
-        await set_onboarding_step(sender, "awaiting_location")
-        await send_text_message(sender, MSG_ASK_NEW_LOCATION)
-        return
-    if text_lower in PREFERENCE_CHANGE_WORDS:
-        await set_onboarding_step(sender, "awaiting_preference")
-        await send_text_message(sender, MSG_ASK_NEW_PREFERENCE)
-        return
-    if text_lower in NAME_CHANGE_WORDS:
-        await set_onboarding_step(sender, "awaiting_name")
-        await send_text_message(sender, MSG_ASK_NEW_NAME)
-        return
+    # Check change commands via DB keywords (before LLM call)
+    cache = await _get_keyword_cache()
+    if text_lower in cache:
+        action, response = cache[text_lower]
+        if action == "location_change":
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(sender, MSG_ASK_NEW_LOCATION)
+            return
+        if action == "preference_change":
+            await set_onboarding_step(sender, "awaiting_preference")
+            await send_text_message(sender, MSG_ASK_NEW_PREFERENCE)
+            return
+        if action == "name_change":
+            await set_onboarding_step(sender, "awaiting_name")
+            await send_text_message(sender, MSG_ASK_NEW_NAME)
+            return
+        if action == "farewell" and response:
+            await send_text_message(sender, response)
+            return
 
     # Classify intent (keywords first, LLM fallback)
     intent = await classify_intent(text)

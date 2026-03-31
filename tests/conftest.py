@@ -2,20 +2,26 @@
 
 import pytest
 
+from farmafacil.db.seed import seed_intents
+from farmafacil.db.session import init_db
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _init_test_db(event_loop_policy):
+    """Initialize test database and seed data once per session."""
+    import asyncio
+
+    async def setup():
+        await init_db()
+        await seed_intents()
+
+    asyncio.get_event_loop_policy()
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(setup())
+    loop.close()
+
 
 @pytest.fixture
 def sample_drug_name() -> str:
     """Common drug name for testing searches."""
     return "losartan"
-
-
-@pytest.fixture
-def sample_farmatodo_html() -> str:
-    """Minimal Farmatodo search result HTML for testing the parser."""
-    return """
-    <div class="product-item">
-        <h2 class="product-name">Losartan 50mg</h2>
-        <span class="price">$5.99</span>
-        <span class="availability">Disponible</span>
-    </div>
-    """

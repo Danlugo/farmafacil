@@ -5,7 +5,9 @@ from sqlalchemy import select
 
 from farmafacil import __version__
 from farmafacil.db.session import async_session
-from farmafacil.models.database import ConversationLog, User
+from pydantic import BaseModel
+
+from farmafacil.models.database import ConversationLog, IntentKeyword, User
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
 from farmafacil.services.search import search_drug
 
@@ -86,11 +88,80 @@ async def get_users(limit: int = Query(50, le=200)) -> list[dict]:
             {
                 "id": u.id,
                 "phone": u.phone_number,
+                "name": u.name,
                 "zone": u.zone_name,
                 "city_code": u.city_code,
                 "lat": u.latitude,
                 "lng": u.longitude,
+                "display_preference": u.display_preference,
+                "onboarding_step": u.onboarding_step,
                 "created": u.created_at.isoformat() if u.created_at else None,
             }
             for u in users
         ]
+
+
+# ── Intent Keywords Management ──────────────────────────────────────────
+
+
+class IntentCreate(BaseModel):
+    action: str
+    keyword: str
+    response: str | None = None
+
+
+@router.get("/api/v1/intents")
+async def get_intents(action: str | None = None) -> list[dict]:
+    """List all intent keywords, optionally filtered by action."""
+    async with async_session() as session:
+        query = select(IntentKeyword).order_by(IntentKeyword.action, IntentKeyword.keyword)
+        if action:
+            query = query.where(IntentKeyword.action == action)
+        result = await session.execute(query)
+        intents = result.scalars().all()
+        return [
+            {
+                "id": i.id,
+                "action": i.action,
+                "keyword": i.keyword,
+                "response": i.response,
+                "is_active": i.is_active,
+            }
+            for i in intents
+        ]
+
+
+@router.post("/api/v1/intents")
+async def create_intent(data: IntentCreate) -> dict:
+    """Add a new intent keyword."""
+    async with async_session() as session:
+        intent = IntentKeyword(
+            action=data.action,
+            keyword=data.keyword.lower().strip(),
+            response=data.response,
+            is_active=True,
+        )
+        session.add(intent)
+        await session.commit()
+        await session.refresh(intent)
+        # Invalidate cache
+        from farmafacil.services.intent import _load_keyword_cache
+        await _load_keyword_cache()
+        return {"id": intent.id, "action": intent.action, "keyword": intent.keyword}
+
+
+@router.delete("/api/v1/intents/{intent_id}")
+async def delete_intent(intent_id: int) -> dict:
+    """Deactivate an intent keyword."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(IntentKeyword).where(IntentKeyword.id == intent_id)
+        )
+        intent = result.scalar_one_or_none()
+        if not intent:
+            return {"error": "not found"}
+        intent.is_active = False
+        await session.commit()
+        from farmafacil.services.intent import _load_keyword_cache
+        await _load_keyword_cache()
+        return {"id": intent.id, "deactivated": True}

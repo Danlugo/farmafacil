@@ -1,46 +1,64 @@
-"""Intent detection — keyword-first, LLM fallback for complex messages.
+"""Intent detection — DB keywords first, LLM fallback for complex messages.
 
 Flow:
-1. Check for exact keyword matches (greetings, commands, zone changes) — instant
+1. Check DB keyword table for exact match (cached, instant)
 2. If message looks like a drug name (short, no question marks) — treat as drug search
-3. If ambiguous or conversational — call Claude Haiku to classify intent and extract drug name
+3. If ambiguous or conversational — call Claude Haiku to classify + extract profile data
 """
 
 import logging
-import re
+import time
 from dataclasses import dataclass
 
 import anthropic
+from sqlalchemy import select
 
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+from farmafacil.db.session import async_session
+from farmafacil.models.database import IntentKeyword
 
 logger = logging.getLogger(__name__)
 
-GREETING_WORDS = {
-    "hola", "hi", "hello", "hey", "buenos dias", "buenas tardes",
-    "buenas noches", "buenas", "saludos", "que tal",
-}
+# ── In-memory cache for DB keywords (refreshed every 5 minutes) ────────
 
-LOCATION_CHANGE_WORDS = {
-    "cambiar ubicacion", "cambiar ubicación", "cambiar zona",
-    "nueva ubicacion", "nueva ubicación", "otra zona", "moverme",
-}
+_keyword_cache: dict[str, tuple[str, str | None]] = {}  # keyword → (action, response)
+_cache_loaded_at: float = 0
+CACHE_TTL_SECONDS = 300  # 5 minutes
 
-HELP_WORDS = {
-    "ayuda", "help", "como funciona", "que puedes hacer",
-    "que haces", "instrucciones", "menu",
-}
 
+async def _load_keyword_cache() -> None:
+    """Load all active keywords from DB into memory cache."""
+    global _keyword_cache, _cache_loaded_at
+    async with async_session() as session:
+        result = await session.execute(
+            select(IntentKeyword).where(IntentKeyword.is_active.is_(True))
+        )
+        keywords = result.scalars().all()
+        _keyword_cache = {
+            kw.keyword.lower(): (kw.action, kw.response) for kw in keywords
+        }
+        _cache_loaded_at = time.time()
+        logger.debug("Loaded %d intent keywords into cache", len(_keyword_cache))
+
+
+async def _get_keyword_cache() -> dict[str, tuple[str, str | None]]:
+    """Get the keyword cache, refreshing if stale."""
+    if time.time() - _cache_loaded_at > CACHE_TTL_SECONDS:
+        await _load_keyword_cache()
+    return _keyword_cache
+
+
+# ── Data model ──────────────────────────────────────────────────────────
 
 @dataclass
 class Intent:
     """Classified user intent with extracted profile data."""
 
-    action: str  # "greeting", "location_change", "help", "drug_search", "question", "unknown"
-    drug_query: str | None = None  # Extracted drug name for drug_search intent
-    response_text: str | None = None  # Direct response for question intent
-    detected_name: str | None = None  # Name if user introduced themselves
-    detected_location: str | None = None  # Location if mentioned in message
+    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, question, unknown
+    drug_query: str | None = None
+    response_text: str | None = None
+    detected_name: str | None = None
+    detected_location: str | None = None
 
 
 HELP_MESSAGE = (
@@ -60,8 +78,8 @@ HELP_MESSAGE = (
 )
 
 
-def classify_intent_keywords(text: str) -> Intent | None:
-    """Try to classify intent using keyword matching only.
+async def classify_intent_keywords(text: str) -> Intent | None:
+    """Try to classify intent using DB keyword matching.
 
     Args:
         text: User message text (already stripped).
@@ -70,30 +88,24 @@ def classify_intent_keywords(text: str) -> Intent | None:
         Intent if classified, None if ambiguous (needs LLM).
     """
     text_lower = text.lower().strip()
+    cache = await _get_keyword_cache()
 
-    # Greetings
-    if text_lower in GREETING_WORDS:
-        return Intent(action="greeting")
+    # Exact match in DB keywords
+    if text_lower in cache:
+        action, response = cache[text_lower]
+        return Intent(action=action, response_text=response)
 
-    # Location change
-    if text_lower in LOCATION_CHANGE_WORDS:
-        return Intent(action="location_change")
-
-    # Help
-    if text_lower in HELP_WORDS:
-        return Intent(action="help", response_text=HELP_MESSAGE)
-
-    # Short message (1-4 words), no question marks, no common question starters
-    # → almost certainly a drug name
+    # Short message (1-4 words), no question marks — likely a drug name
     words = text_lower.split()
-    is_question = "?" in text or text_lower.startswith(("como ", "donde ", "que ", "cual ",
-        "cuando ", "por que ", "cuanto ", "tienen ", "hay ", "puedo ", "puedes "))
+    is_question = "?" in text or text_lower.startswith((
+        "como ", "donde ", "que ", "cual ", "cuando ", "por que ",
+        "cuanto ", "tienen ", "hay ", "puedo ", "puedes ",
+    ))
 
     if len(words) <= 4 and not is_question:
         return Intent(action="drug_search", drug_query=text.strip())
 
     # Longer text without question markers — still likely a drug search
-    # (e.g., "losartan potasico 50mg tabletas")
     if not is_question and len(words) <= 8:
         return Intent(action="drug_search", drug_query=text.strip())
 
@@ -102,13 +114,13 @@ def classify_intent_keywords(text: str) -> Intent | None:
 
 
 async def classify_intent_llm(text: str) -> Intent:
-    """Use Claude Haiku to classify intent and extract drug names.
+    """Use Claude Haiku to classify intent and extract profile data.
 
     Args:
         text: User message text.
 
     Returns:
-        Classified intent with optional drug name or response.
+        Classified intent with optional drug name, name, location, or response.
     """
     if not ANTHROPIC_API_KEY:
         logger.warning("No ANTHROPIC_API_KEY set — falling back to drug search")
@@ -157,6 +169,10 @@ EJEMPLOS:
   ACTION: drug_search
   DRUG: ibuprofeno
 
+- "donde queda la farmacia Tepuy?" →
+  ACTION: question
+  RESPONSE: La farmacia Farmatodo TEPUY está ubicada en la Av. Río de Janeiro con Calle Monterrey, Urb. Las Mercedes, Caracas. Puedes buscar cualquier medicamento y te digo si está disponible allí.
+
 REGLAS:
 - Si mencionan síntomas, traduce al medicamento genérico más probable
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
@@ -179,12 +195,11 @@ REGLAS:
 
     except Exception:
         logger.error("LLM classification failed", exc_info=True)
-        # Fallback: treat as drug search
         return Intent(action="drug_search", drug_query=text.strip())
 
 
 async def classify_intent(text: str) -> Intent:
-    """Classify user intent — keywords first, LLM fallback.
+    """Classify user intent — DB keywords first, LLM fallback.
 
     Args:
         text: User message text.
@@ -192,8 +207,8 @@ async def classify_intent(text: str) -> Intent:
     Returns:
         Classified Intent.
     """
-    # Try keyword detection first (instant, free)
-    intent = classify_intent_keywords(text)
+    # Try DB keyword detection first (cached, instant, free)
+    intent = await classify_intent_keywords(text)
     if intent is not None:
         logger.debug("Keyword intent: %s for '%s'", intent.action, text[:50])
         return intent
@@ -204,14 +219,7 @@ async def classify_intent(text: str) -> Intent:
 
 
 def _parse_llm_response(reply: str) -> Intent:
-    """Parse the structured LLM response into an Intent.
-
-    Args:
-        reply: Raw LLM response text with ACTION/DRUG/NAME/LOCATION/RESPONSE lines.
-
-    Returns:
-        Parsed Intent with all extracted fields.
-    """
+    """Parse the structured LLM response into an Intent."""
     fields: dict[str, str] = {}
     for line in reply.strip().split("\n"):
         line = line.strip()
@@ -223,8 +231,6 @@ def _parse_llm_response(reply: str) -> Intent:
                 fields[key] = value
 
     action = fields.get("ACTION", "unknown").lower()
-
-    # Map to our action types
     if action not in ("greeting", "drug_search", "question", "unknown"):
         action = "question" if fields.get("RESPONSE") else "unknown"
 
