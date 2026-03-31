@@ -32,3 +32,8 @@ WHATSAPP_API_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}
 # LLM (Claude Haiku for intent detection and conversational fallback)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
+
+# Admin dashboard
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "LetsGoChiguires")
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "farmafacil-admin-secret-key-change-me")

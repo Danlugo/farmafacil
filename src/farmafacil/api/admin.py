@@ -1,10 +1,14 @@
 """SQLAdmin dashboard for FarmaFacil.
 
 Provides a full admin UI at /admin for managing all database tables.
+Authentication required via username/password.
 """
 
 from sqladmin import Admin, ModelView
+from sqladmin.authentication import AuthenticationBackend
+from starlette.requests import Request
 
+from farmafacil.config import ADMIN_PASSWORD, ADMIN_SECRET_KEY, ADMIN_USERNAME
 from farmafacil.models.database import (
     AppSetting,
     ConversationLog,
@@ -399,6 +403,51 @@ ADMIN_VIEWS = [
 ]
 
 
+class AdminAuth(AuthenticationBackend):
+    """Simple username/password authentication for the admin dashboard."""
+
+    async def login(self, request: Request) -> bool:
+        """Validate login credentials from the login form.
+
+        Args:
+            request: The incoming HTTP request with form data.
+
+        Returns:
+            True if credentials are valid, False otherwise.
+        """
+        form = await request.form()
+        username = form.get("username", "")
+        password = form.get("password", "")
+
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            request.session.update({"authenticated": True})
+            return True
+        return False
+
+    async def logout(self, request: Request) -> bool:
+        """Clear the session on logout.
+
+        Args:
+            request: The incoming HTTP request.
+
+        Returns:
+            Always True.
+        """
+        request.session.clear()
+        return True
+
+    async def authenticate(self, request: Request) -> bool:
+        """Check if the current session is authenticated.
+
+        Args:
+            request: The incoming HTTP request.
+
+        Returns:
+            True if authenticated, False otherwise.
+        """
+        return request.session.get("authenticated", False)
+
+
 def setup_admin(app, engine) -> Admin:
     """Create and configure the SQLAdmin instance on the given FastAPI app.
 
@@ -414,11 +463,13 @@ def setup_admin(app, engine) -> Admin:
     Admin
         The configured SQLAdmin instance.
     """
+    authentication_backend = AdminAuth(secret_key=ADMIN_SECRET_KEY)
     admin = Admin(
         app,
         engine,
         title="FarmaFacil Admin",
         base_url="/admin",
+        authentication_backend=authentication_backend,
     )
     for view in ADMIN_VIEWS:
         admin.add_view(view)
