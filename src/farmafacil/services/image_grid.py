@@ -3,6 +3,7 @@
 import io
 import logging
 import tempfile
+from collections import defaultdict
 from decimal import Decimal
 
 import httpx
@@ -237,13 +238,57 @@ def _draw_card(
         )
 
 
+def _interleave_for_grid(
+    results: list[DrugResult], max_products: int
+) -> list[DrugResult]:
+    """Interleave results round-robin across pharmacies for the grid image.
+
+    Prioritizes available items, sorted by price within each pharmacy.
+    """
+    by_pharmacy: dict[str, list[DrugResult]] = defaultdict(list)
+    for r in results:
+        by_pharmacy[r.pharmacy_name].append(r)
+
+    for name in by_pharmacy:
+        available = [r for r in by_pharmacy[name] if r.available]
+        unavailable = [r for r in by_pharmacy[name] if not r.available]
+        available.sort(
+            key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999")
+        )
+        unavailable.sort(
+            key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999")
+        )
+        by_pharmacy[name] = available + unavailable
+
+    interleaved: list[DrugResult] = []
+    pharmacy_names = sorted(by_pharmacy.keys())
+    indices = {name: 0 for name in pharmacy_names}
+
+    while len(interleaved) < max_products:
+        added = False
+        for name in pharmacy_names:
+            if len(interleaved) >= max_products:
+                break
+            idx = indices[name]
+            if idx < len(by_pharmacy[name]):
+                interleaved.append(by_pharmacy[name][idx])
+                indices[name] = idx + 1
+                added = True
+        if not added:
+            break
+
+    if not interleaved:
+        return []
+    return interleaved
+
+
 async def generate_product_grid(
     results: list[DrugResult], max_products: int = 6
 ) -> str | None:
     """Generate a product grid image from search results.
 
-    Results are sorted by price (lowest first) to match the text summary.
-    Each card shows the product image, price, pharmacy badge, and distance.
+    Results are interleaved across pharmacies (round-robin) so every chain
+    is represented, with the best-priced items from each shown first.
 
     Args:
         results: Drug search results to display.
@@ -252,13 +297,7 @@ async def generate_product_grid(
     Returns:
         Path to the generated temporary image file, or None on failure.
     """
-    sorted_results = sorted(
-        results,
-        key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999"),
-    )
-    products = [r for r in sorted_results[:max_products] if r.available]
-    if not products:
-        products = sorted_results[:max_products]
+    products = _interleave_for_grid(results, max_products)
 
     if not products:
         return None

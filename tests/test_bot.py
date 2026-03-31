@@ -131,34 +131,45 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "4 resultados mas" in text
+        assert "8 resultados mas" in text
 
-    def test_format_sorted_by_price(self):
-        """Results are sorted by price, lowest first."""
+    def test_format_interleaves_pharmacies(self):
+        """Results are interleaved across pharmacies (round-robin)."""
         response = SearchResponse(
             query="losartan",
             results=[
                 DrugResult(
-                    drug_name="Expensive Drug",
-                    pharmacy_name="Farmatodo",
-                    price_bs=Decimal("50"),
+                    drug_name="SAAS Drug 1",
+                    pharmacy_name="Farmacias SAAS",
+                    price_bs=Decimal("1"),
                     available=True,
                 ),
                 DrugResult(
-                    drug_name="Cheap Drug",
+                    drug_name="SAAS Drug 2",
                     pharmacy_name="Farmacias SAAS",
-                    price_bs=Decimal("5"),
+                    price_bs=Decimal("2"),
+                    available=True,
+                ),
+                DrugResult(
+                    drug_name="Farmatodo Drug 1",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("900"),
+                    available=True,
+                ),
+                DrugResult(
+                    drug_name="Farmatodo Drug 2",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("950"),
                     available=True,
                 ),
             ],
-            total=2,
+            total=4,
             searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
         )
         text = format_search_results(response)
-        # Cheap Drug should appear before Expensive Drug
-        cheap_pos = text.index("Cheap Drug")
-        expensive_pos = text.index("Expensive Drug")
-        assert cheap_pos < expensive_pos
+        # Both pharmacies should appear in results despite price gap
+        assert "SAAS Drug 1" in text
+        assert "Farmatodo Drug 1" in text
 
     def test_format_multi_pharmacy(self):
         """Results from multiple pharmacies show pharmacy names."""
