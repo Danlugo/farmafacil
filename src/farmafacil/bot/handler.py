@@ -29,7 +29,13 @@ LOCATION_NOT_FOUND_MESSAGE = (
     "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Altamira_, _Maracaibo_"
 )
 
-# In-memory flag for users who just requested a location change.
+LOCATION_REQUIRED_MESSAGE = (
+    "Primero necesito saber tu ubicacion para buscarte "
+    "medicamentos en farmacias cercanas.\n\n"
+    "Dime tu zona o barrio (ej: _La Boyera_, _Chacao_, _Altamira_)"
+)
+
+# In-memory set: users who have been asked for location and we're waiting for their reply.
 _awaiting_location: set[str] = set()
 
 
@@ -47,27 +53,8 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     # Get or create user
     user = await get_or_create_user(sender)
 
-    # If user has no location OR explicitly asked to change, geocode the message
-    if user.latitude is None or sender in _awaiting_location:
-        # But first check if it's a greeting (even without location)
-        intent = await classify_intent(text)
-        if intent.action == "greeting":
-            if user.latitude is not None:
-                await send_text_message(
-                    sender,
-                    f"\U0001f48a *Hola de nuevo!* Buscando en *{user.zone_name}*.\n\n"
-                    "Envia el nombre de un medicamento para buscar.\n"
-                    "Escribe _cambiar zona_ para cambiar tu ubicacion.",
-                )
-            else:
-                await send_text_message(sender, WELCOME_MESSAGE)
-            return
-
-        if intent.action == "help":
-            await send_text_message(sender, HELP_MESSAGE)
-            return
-
-        # Try to geocode the message as a zone name
+    # ── State: Awaiting location (user was explicitly asked for zone) ──
+    if sender in _awaiting_location:
         location = await geocode_zone(text)
         if location:
             _awaiting_location.discard(sender)
@@ -88,7 +75,23 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             await send_text_message(sender, LOCATION_NOT_FOUND_MESSAGE)
         return
 
-    # User has location — classify intent
+    # ── State: New user with no location ──
+    if user.latitude is None:
+        # Classify intent to handle greetings/help, but for everything else
+        # ask for location first — do NOT try to geocode random messages.
+        intent = await classify_intent(text)
+        if intent.action == "greeting":
+            _awaiting_location.add(sender)
+            await send_text_message(sender, WELCOME_MESSAGE)
+        elif intent.action == "help":
+            await send_text_message(sender, HELP_MESSAGE)
+        else:
+            # They sent a drug name or question, but we have no location yet.
+            _awaiting_location.add(sender)
+            await send_text_message(sender, LOCATION_REQUIRED_MESSAGE)
+        return
+
+    # ── State: Existing user with location — classify intent ──
     intent = await classify_intent(text)
 
     if intent.action == "greeting":
