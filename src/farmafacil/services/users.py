@@ -1,9 +1,8 @@
-"""User service — manage user registration and location."""
+"""User service — manage user registration, location, and preferences."""
 
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_or_create_user(phone_number: str) -> User:
-    """Get an existing user or create a new one.
+    """Get an existing user or create a new one (starts onboarding).
 
     Args:
         phone_number: WhatsApp phone number with country code.
@@ -27,12 +26,44 @@ async def get_or_create_user(phone_number: str) -> User:
         user = result.scalar_one_or_none()
 
         if user is None:
-            user = User(phone_number=phone_number)
+            user = User(phone_number=phone_number, onboarding_step="awaiting_name")
             session.add(user)
             await session.commit()
             await session.refresh(user)
             logger.info("New user created: %s", phone_number)
 
+        return user
+
+
+async def _get_user(phone_number: str) -> User:
+    """Get a user by phone number (must exist)."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.phone_number == phone_number)
+        )
+        return result.scalar_one()
+
+
+async def update_user_name(phone_number: str, name: str) -> User:
+    """Save the user's display name and advance onboarding.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        name: User's name.
+
+    Returns:
+        Updated User record.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.phone_number == phone_number)
+        )
+        user = result.scalar_one()
+        user.name = name
+        user.onboarding_step = "awaiting_location"
+        await session.commit()
+        await session.refresh(user)
+        logger.info("User %s name set to '%s'", phone_number, name)
         return user
 
 
@@ -43,7 +74,7 @@ async def update_user_location(
     zone_name: str,
     city_code: str,
 ) -> User:
-    """Update a user's location.
+    """Update a user's location and advance onboarding.
 
     Args:
         phone_number: WhatsApp phone number.
@@ -53,36 +84,63 @@ async def update_user_location(
         city_code: Farmatodo city code.
 
     Returns:
-        The updated User record.
+        Updated User record.
     """
     async with async_session() as session:
         result = await session.execute(
             select(User).where(User.phone_number == phone_number)
         )
-        user = result.scalar_one_or_none()
-
-        if user is None:
-            user = User(phone_number=phone_number)
-            session.add(user)
-
+        user = result.scalar_one()
         user.latitude = latitude
         user.longitude = longitude
         user.zone_name = zone_name
         user.city_code = city_code
+        user.onboarding_step = "awaiting_preference"
         await session.commit()
         await session.refresh(user)
-        logger.info("User %s location updated to %s (%s)", phone_number, zone_name, city_code)
+        logger.info("User %s location: %s (%s)", phone_number, zone_name, city_code)
         return user
 
 
-async def user_has_location(phone_number: str) -> bool:
-    """Check if a user has a saved location.
+async def update_user_preference(phone_number: str, preference: str) -> User:
+    """Save display preference and complete onboarding.
 
     Args:
         phone_number: WhatsApp phone number.
+        preference: "grid" or "detail".
 
     Returns:
-        True if the user has latitude/longitude set.
+        Updated User record.
     """
-    user = await get_or_create_user(phone_number)
-    return user.latitude is not None and user.longitude is not None
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.phone_number == phone_number)
+        )
+        user = result.scalar_one()
+        user.display_preference = preference
+        user.onboarding_step = None  # Onboarding complete
+        await session.commit()
+        await session.refresh(user)
+        logger.info("User %s preference: %s", phone_number, preference)
+        return user
+
+
+async def set_onboarding_step(phone_number: str, step: str | None) -> User:
+    """Set the user's current onboarding step.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        step: Onboarding step or None (complete).
+
+    Returns:
+        Updated User record.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.phone_number == phone_number)
+        )
+        user = result.scalar_one()
+        user.onboarding_step = step
+        await session.commit()
+        await session.refresh(user)
+        return user

@@ -1,65 +1,131 @@
-"""Handle incoming WhatsApp messages and dispatch responses."""
+"""Handle incoming WhatsApp messages — state machine with onboarding flow."""
 
 import logging
+import os
 
 from farmafacil.bot.formatter import format_search_results
-from farmafacil.bot.whatsapp import send_local_image, send_text_message
+from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_text_message
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
-from farmafacil.services.users import get_or_create_user, update_user_location
+from farmafacil.services.users import (
+    get_or_create_user,
+    set_onboarding_step,
+    update_user_location,
+    update_user_name,
+    update_user_preference,
+)
 
 logger = logging.getLogger(__name__)
 
-WELCOME_MESSAGE = (
-    "\U0001f48a *Bienvenido a FarmaFacil!*\n\n"
-    "Busco medicamentos en farmacias de Venezuela por ti.\n\n"
-    "Para empezar, necesito saber tu ubicacion.\n"
-    "Dime tu zona o barrio (ej: _La Boyera_, _Chacao_, _Altamira_)"
+# ── Messages (all in Spanish for Venezuelan users) ──────────────────────
+
+MSG_WELCOME = (
+    "\U0001f48a *Hola! Soy FarmaFacil*\n\n"
+    "Te ayudo a encontrar medicamentos en farmacias de Venezuela.\n\n"
+    "Para empezar, *como te llamas?*"
 )
 
-LOCATION_ASK_MESSAGE = (
+MSG_ASK_LOCATION = (
+    "Mucho gusto *{name}*! \U0001f91d\n\n"
+    "Ahora dime, *en que zona o barrio estas?*\n"
+    "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+)
+
+MSG_LOCATION_SAVED = (
+    "\u2705 Guardado: *{zone}*\n\n"
+    "Como prefieres ver los resultados?\n\n"
+    "*1.* \U0001f4f8 *Imagen grande* — un producto a la vez con todos los detalles\n"
+    "*2.* \U0001f5bc *Galeria* — varios productos en una sola imagen\n\n"
+    "Responde *1* o *2*"
+)
+
+MSG_PREFERENCE_SAVED = (
+    "\u2705 Listo *{name}*! Ya estas configurado.\n\n"
+    "Enviame el nombre de un medicamento y te busco donde esta disponible.\n"
+    "Ejemplo: _losartan_ o _acetaminofen_"
+)
+
+MSG_LOCATION_NOT_FOUND = (
+    "No logre ubicar esa zona en Venezuela.\n"
+    "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
+    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
+)
+
+MSG_INVALID_PREFERENCE = (
+    "Por favor responde *1* para imagen grande o *2* para galeria."
+)
+
+MSG_RETURNING_USER = (
+    "\U0001f48a *Hola de nuevo {name}!*\n"
+    "Buscando en *{zone}* (modo _{pref}_).\n\n"
+    "Enviame el nombre de un medicamento para buscar.\n\n"
+    "\U0001f527 _Comandos:_\n"
+    "\u2022 _cambiar zona_ — nueva ubicacion\n"
+    "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
+    "\u2022 _cambiar nombre_ — actualizar tu nombre\n"
+    "\u2022 _ayuda_ — instrucciones"
+)
+
+MSG_ASK_NEW_LOCATION = (
     "Dime tu nueva zona o barrio.\n\n"
     "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
 )
 
-LOCATION_NOT_FOUND_MESSAGE = (
-    "No logre ubicar esa zona en Venezuela.\n"
-    "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
-    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Altamira_, _Maracaibo_"
+MSG_ASK_NEW_PREFERENCE = (
+    "Como prefieres ver los resultados?\n\n"
+    "*1.* \U0001f4f8 *Imagen grande* — un producto a la vez\n"
+    "*2.* \U0001f5bc *Galeria* — varios productos en una imagen\n\n"
+    "Responde *1* o *2*"
 )
 
-LOCATION_REQUIRED_MESSAGE = (
-    "Primero necesito saber tu ubicacion para buscarte "
-    "medicamentos en farmacias cercanas.\n\n"
-    "Dime tu zona o barrio (ej: _La Boyera_, _Chacao_, _Altamira_)"
-)
+MSG_ASK_NEW_NAME = "Como te llamas?"
 
-# In-memory set: users who have been asked for location and we're waiting for their reply.
-_awaiting_location: set[str] = set()
+# ── Keyword sets ────────────────────────────────────────────────────────
+
+PREFERENCE_CHANGE_WORDS = {
+    "cambiar preferencia", "cambiar vista", "cambiar modo",
+    "otra vista", "otro modo",
+}
+
+LOCATION_CHANGE_WORDS = {
+    "cambiar ubicacion", "cambiar ubicación", "cambiar zona",
+    "nueva ubicacion", "nueva ubicación", "otra zona",
+}
+
+NAME_CHANGE_WORDS = {
+    "cambiar nombre", "nuevo nombre",
+}
 
 
 async def handle_incoming_message(sender: str, message_text: str) -> None:
-    """Process an incoming WhatsApp message and send a response.
+    """Process an incoming WhatsApp message using DB-persisted state.
 
     Args:
-        sender: Phone number of the sender (with country code).
+        sender: Phone number of the sender.
         message_text: The text content of the message.
     """
     text = message_text.strip()
     if not text:
         return
 
-    # Get or create user
     user = await get_or_create_user(sender)
+    step = user.onboarding_step
+    text_lower = text.lower()
 
-    # ── State: Awaiting location (user was explicitly asked for zone) ──
-    if sender in _awaiting_location:
+    # ── Onboarding: awaiting_name ───────────────────────────────────────
+    if step == "awaiting_name":
+        name = text.strip().title()
+        user = await update_user_name(sender, name)
+        await send_text_message(sender, MSG_ASK_LOCATION.format(name=name))
+        return
+
+    # ── Onboarding: awaiting_location ───────────────────────────────────
+    if step == "awaiting_location":
         location = await geocode_zone(text)
         if location:
-            _awaiting_location.discard(sender)
             user = await update_user_location(
                 phone_number=sender,
                 latitude=location["lat"],
@@ -68,52 +134,61 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
                 city_code=location["city"],
             )
             await send_text_message(
-                sender,
-                f"\u2705 Ubicacion guardada: *{user.zone_name}*\n\n"
-                "Ahora envia el nombre de un medicamento para buscar.\n"
-                "Ejemplo: _losartan_ o _acetaminofen_",
+                sender, MSG_LOCATION_SAVED.format(zone=user.zone_name)
             )
         else:
-            await send_text_message(sender, LOCATION_NOT_FOUND_MESSAGE)
+            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
         return
 
-    # ── State: New user with no location ──
-    if user.latitude is None:
-        # Classify intent to handle greetings/help, but for everything else
-        # ask for location first — do NOT try to geocode random messages.
-        intent = await classify_intent(text)
-        if intent.action == "greeting":
-            _awaiting_location.add(sender)
-            await send_text_message(sender, WELCOME_MESSAGE)
-        elif intent.action == "help":
-            await send_text_message(sender, HELP_MESSAGE)
+    # ── Onboarding: awaiting_preference ─────────────────────────────────
+    if step == "awaiting_preference":
+        pref = _parse_preference(text_lower)
+        if pref:
+            user = await update_user_preference(sender, pref)
+            await send_text_message(
+                sender, MSG_PREFERENCE_SAVED.format(name=user.name or "amigo")
+            )
         else:
-            # They sent a drug name or question, but we have no location yet.
-            _awaiting_location.add(sender)
-            await send_text_message(sender, LOCATION_REQUIRED_MESSAGE)
+            await send_text_message(sender, MSG_INVALID_PREFERENCE)
         return
 
-    # ── State: Existing user with location — classify intent ──
+    # ── Onboarding complete — normal flow ───────────────────────────────
+
+    # Check for settings change commands first (before intent classification)
+    if text_lower in LOCATION_CHANGE_WORDS:
+        await set_onboarding_step(sender, "awaiting_location")
+        await send_text_message(sender, MSG_ASK_NEW_LOCATION)
+        return
+
+    if text_lower in PREFERENCE_CHANGE_WORDS:
+        await set_onboarding_step(sender, "awaiting_preference")
+        await send_text_message(sender, MSG_ASK_NEW_PREFERENCE)
+        return
+
+    if text_lower in NAME_CHANGE_WORDS:
+        await set_onboarding_step(sender, "awaiting_name")
+        await send_text_message(sender, MSG_ASK_NEW_NAME)
+        return
+
+    # Classify intent
     intent = await classify_intent(text)
+    display_name = user.name or "amigo"
+    pref_label = "galeria" if user.display_preference == "grid" else "imagen grande"
 
     if intent.action == "greeting":
         await send_text_message(
             sender,
-            f"\U0001f48a *Hola de nuevo!* Buscando en *{user.zone_name}*.\n\n"
-            "Envia el nombre de un medicamento para buscar.\n"
-            "Escribe _cambiar zona_ para cambiar tu ubicacion.",
+            MSG_RETURNING_USER.format(
+                name=display_name, zone=user.zone_name, pref=pref_label
+            ),
         )
-
-    elif intent.action == "location_change":
-        _awaiting_location.add(sender)
-        await send_text_message(sender, LOCATION_ASK_MESSAGE)
 
     elif intent.action == "help":
         await send_text_message(sender, HELP_MESSAGE)
 
     elif intent.action == "drug_search":
         query = intent.drug_query or text
-        logger.info("Drug search from %s (%s): '%s'", sender, user.zone_name, query)
+        logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
         response = await search_drug(
             query=query,
             city_code=user.city_code,
@@ -124,17 +199,12 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         reply = format_search_results(response)
         await send_text_message(sender, reply)
 
-        # Generate and send product grid image
+        # Send images based on user preference
         if response.results:
-            grid_path = await generate_product_grid(response.results, max_products=6)
-            if grid_path:
-                caption = f"Resultados para *{response.query}*"
-                if response.zone:
-                    caption += f" cerca de *{response.zone}*"
-                await send_local_image(sender, grid_path, caption)
-                # Clean up temp file
-                import os
-                os.unlink(grid_path)
+            if user.display_preference == "detail":
+                await _send_detail_images(sender, response.results)
+            else:
+                await _send_grid_image(sender, response)
 
     elif intent.action == "question" and intent.response_text:
         await send_text_message(sender, intent.response_text)
@@ -142,62 +212,74 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     else:
         await send_text_message(
             sender,
-            "No estoy seguro de lo que necesitas.\n"
-            "Envia el nombre de un medicamento y te busco donde esta disponible.\n\n"
+            f"*{display_name}*, no estoy seguro de lo que necesitas.\n"
+            "Enviame el nombre de un medicamento para buscar.\n\n"
             "Escribe _ayuda_ para ver las instrucciones.",
         )
 
 
-def _build_product_caption(result: DrugResult) -> str:
-    """Build a Farmatodo-style product card caption for WhatsApp.
-
-    Mimics the Farmatodo app card layout:
-    - Discount badge
-    - Brand
-    - Product name
-    - Offer price + original price strikethrough
-    - Per-unit price
-    - Nearby store + distance
+def _parse_preference(text: str) -> str | None:
+    """Parse user's display preference response.
 
     Args:
-        result: Drug search result with pricing and store data.
+        text: Lowercased user input.
 
     Returns:
-        Formatted WhatsApp caption string.
+        "detail", "grid", or None if invalid.
     """
+    if text in ("1", "imagen grande", "imagen", "grande", "detalle", "detail"):
+        return "detail"
+    if text in ("2", "galeria", "galería", "grid", "grilla", "varios"):
+        return "grid"
+    return None
+
+
+async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
+    """Send individual product images with rich captions (top 3)."""
+    for result in results[:3]:
+        if result.image_url:
+            caption = _build_product_caption(result)
+            await send_image_message(sender, result.image_url, caption)
+
+
+async def _send_grid_image(sender: str, response) -> None:
+    """Generate and send a product grid image."""
+    grid_path = await generate_product_grid(response.results, max_products=6)
+    if grid_path:
+        caption = f"Resultados para *{response.query}*"
+        if response.zone:
+            caption += f" cerca de *{response.zone}*"
+        await send_local_image(sender, grid_path, caption)
+        os.unlink(grid_path)
+
+
+def _build_product_caption(result: DrugResult) -> str:
+    """Build a Farmatodo-style product card caption for WhatsApp."""
     lines = []
 
-    # Discount badge
     if result.discount_pct:
         lines.append(f"\U0001f7e2 *{result.discount_pct} DCTO*")
 
-    # Brand
     if result.brand:
         lines.append(f"_{result.brand}_")
 
-    # Product name
     lines.append(f"*{result.drug_name}*")
 
-    # Price line: offer price + original strikethrough
     if result.price_bs is not None:
         price_line = f"*Bs. {result.price_bs:,.2f}*"
         if result.full_price_bs and result.full_price_bs != result.price_bs:
             price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
         lines.append(price_line)
 
-    # Per-unit price
     if result.unit_label:
         lines.append(f"{result.unit_label}")
 
-    # Prescription required
     if result.requires_prescription:
         lines.append("\U0001f4cb Requiere receta")
 
-    # Stock info
     if result.stores_in_stock > 0:
         lines.append(f"\u2705 Disponible en {result.stores_in_stock} tiendas")
 
-    # Nearest store
     if result.nearby_stores:
         closest = result.nearby_stores[0]
         lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")

@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Query, Request, Response
 
 from farmafacil.bot.handler import handle_incoming_message
+from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
 from farmafacil.services.conversation_log import log_inbound
 
@@ -91,6 +92,23 @@ async def receive_webhook(request: Request) -> dict:
                     )
 
                     # TODO: handle location shares for onboarding
+
+                elif msg_type == "image":
+                    logger.info("Received image from %s", sender)
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text="[imagen]",
+                        message_type="image",
+                        wa_message_id=wa_id,
+                    )
+                    await send_text_message(
+                        sender,
+                        "\U0001f4f7 Recibimos tu imagen!\n\n"
+                        "La funcion de reconocimiento de recetas y productos "
+                        "por foto estara disponible pronto.\n\n"
+                        "Por ahora, enviame el *nombre del medicamento* por texto.",
+                    )
+
                 else:
                     logger.info("Received %s message from %s", msg_type, sender)
 

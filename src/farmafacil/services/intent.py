@@ -44,15 +44,17 @@ class Intent:
 HELP_MESSAGE = (
     "\U0001f48a *FarmaFacil — Ayuda*\n\n"
     "Puedo ayudarte a encontrar medicamentos en farmacias de Venezuela.\n\n"
-    "*Comandos:*\n"
-    "\u2022 Envia el nombre de un medicamento para buscarlo\n"
-    "\u2022 _cambiar zona_ — cambiar tu ubicacion\n"
-    "\u2022 _ayuda_ — ver este mensaje\n\n"
-    "*Ejemplos de busqueda:*\n"
+    "*Buscar medicamento:*\n"
+    "\u2022 Envia el nombre (ej: _losartan_)\n"
+    "\u2022 O describe lo que necesitas (ej: _algo para el dolor de cabeza_)\n\n"
+    "*Configuracion:*\n"
+    "\u2022 _cambiar zona_ — nueva ubicacion\n"
+    "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
+    "\u2022 _cambiar nombre_ — actualizar tu nombre\n\n"
+    "*Ejemplos:*\n"
     "\u2022 _losartan_\n"
-    "\u2022 _acetaminofen_\n"
-    "\u2022 _ibuprofeno 400mg_\n"
-    "\u2022 _necesito algo para el dolor de cabeza_"
+    "\u2022 _acetaminofen 500mg_\n"
+    "\u2022 _necesito algo para la gripe_"
 )
 
 

@@ -31,6 +31,9 @@ class User(Base):
         String(20), nullable=False, unique=True, index=True,
         comment="WhatsApp phone number with country code",
     )
+    name: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="User display name",
+    )
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     zone_name: Mapped[str | None] = mapped_column(
@@ -38,6 +41,14 @@ class User(Base):
     )
     city_code: Mapped[str | None] = mapped_column(
         String(10), nullable=True, comment="Farmatodo city code (e.g., CCS, MCBO)",
+    )
+    display_preference: Mapped[str] = mapped_column(
+        String(20), default="grid",
+        comment="How to show results: grid or detail",
+    )
+    onboarding_step: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, default="awaiting_name",
+        comment="Current onboarding step (NULL = complete)",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
