@@ -28,6 +28,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Effort:** Medium (2–3 hours, less if VTEXScraper base exists from Item 1)
 - **Notes:** Locatel uses the same VTEX platform as SAAS. Implement Item 1 first to establish the VTEX pattern, then Locatel becomes a thin adapter.
 
+### Item 4: Farmahorro Scraper
+
+- **Status:** PENDING
+- **Added:** 2026-03-30
+- **Problem:** Farmahorro (farmahorro.com.ve) is a major Venezuelan pharmacy chain with an active online product catalog and delivery service. They were reportedly absorbed by DRONENA/XANA but still operate independently with their own website. Adding Farmahorro expands coverage to the popular/mass-market segment.
+- **Suggested solution:** Create `src/farmafacil/scrapers/farmahorro.py` subclassing `BaseScraper`. Investigate farmahorro.com.ve to identify the underlying tech stack and product search API. Extract product name, price, image URL, availability. They also partner with delivery platforms (PedidosYa, Coconecta) which may expose additional APIs.
+- **Affected files:** `src/farmafacil/scrapers/farmahorro.py` (new), `src/farmafacil/services/search.py` (register scraper), `tests/test_farmahorro_scraper.py` (new)
+- **Effort:** Medium (3–4 hours — need to reverse-engineer their catalog API first)
+- **Notes:** Farmahorro has an active website with product catalog and delivery (Mon–Fri, 8AM–4PM). Tech stack unknown — needs investigation. Social media: @farmahorrove on Instagram/X.
+
 ---
 
 ## P2 — Medium
@@ -38,15 +48,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P3 — Low
 
-### Item 3: Farmacias XANA Scraper
+### Item 3: Farmacias XANA / DRONENA Scraper
 
 - **Status:** DEFERRED
 - **Added:** 2026-03-30
-- **Problem:** Farmacias XANA is a Venezuelan pharmacy chain, but they have no online catalog or public API. Without a digital presence, there is no data source to scrape.
-- **Suggested solution:** Monitor for any future online presence. If they launch a website or app, revisit. Alternatively, explore if any third-party aggregator includes XANA inventory.
+- **Updated:** 2026-03-30
+- **Problem:** Farmacias XANA is the retail brand of Droguería NENA (DRONENA), a major Venezuelan pharmaceutical distributor aggressively growing in the popular sector after absorbing Farmahorro. XANA has no public consumer-facing online catalog — only an Instagram presence (@xanafarmacia). DRONENA operates a B2B portal at odoo.dronena.com (Odoo ERP) which requires credentials.
+- **Suggested solution:** Monitor for a consumer-facing catalog. Potential approaches: (1) If DRONENA opens their Odoo catalog publicly, use the Odoo REST API. (2) If XANA launches a website, scrape it. (3) Explore if Farmahorro's catalog (Item 4) includes XANA-branded locations since DRONENA absorbed them.
 - **Affected files:** TBD
 - **Effort:** Unknown
-- **Notes:** Physical-only chain as of March 2026. No website, no app store presence. Deferred until a data source becomes available.
+- **Notes:** DRONENA = Droguería NENA (parent/distributor). XANA = retail pharmacy brand. Absorbed Farmahorro but Farmahorro still operates independently. DRONENA uses Odoo ERP for B2B. No consumer API available as of March 2026. Active on social: @dronenave, @xanafarmacia.
 
 ---
 
