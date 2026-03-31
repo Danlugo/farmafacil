@@ -354,7 +354,7 @@ async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
 
 async def _send_grid_image(sender: str, response) -> None:
     """Generate and send a product grid image."""
-    grid_path = await generate_product_grid(response.results, max_products=6)
+    grid_path = await generate_product_grid(response.results, max_products=4)
     if grid_path:
         caption = f"Resultados para *{response.query}*"
         if response.zone:

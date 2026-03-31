@@ -13,14 +13,14 @@ from farmafacil.models.schemas import DrugResult
 
 logger = logging.getLogger(__name__)
 
-# Grid layout constants
-CARD_WIDTH = 440
-CARD_HEIGHT = 520
-CARD_PADDING = 16
-IMAGE_SIZE = 280
-GRID_COLS = 3
-GRID_GAP = 14
-GRID_MARGIN = 20
+# Grid layout constants — optimized for WhatsApp (2-col, phone-friendly)
+CARD_WIDTH = 540
+CARD_HEIGHT = 620
+CARD_PADDING = 20
+IMAGE_SIZE = 320
+GRID_COLS = 2
+GRID_GAP = 16
+GRID_MARGIN = 24
 
 # Colors — neutral multi-pharmacy theme
 BG_COLOR = (245, 245, 245)
@@ -122,12 +122,12 @@ def _draw_card(
     - Distance to nearest store (if available)
     - Stock indicator
     """
-    font_pharmacy = _get_font(13, bold=True)
-    font_name = _get_font(16, bold=True)
-    font_price = _get_font(22, bold=True)
-    font_old_price = _get_font(15)
-    font_discount = _get_font(14, bold=True)
-    font_detail = _get_font(14)
+    font_pharmacy = _get_font(16, bold=True)
+    font_name = _get_font(20, bold=True)
+    font_price = _get_font(28, bold=True)
+    font_old_price = _get_font(18)
+    font_discount = _get_font(16, bold=True)
+    font_detail = _get_font(17)
 
     text_area = CARD_WIDTH - 2 * CARD_PADDING
 
@@ -177,24 +177,24 @@ def _draw_card(
             outline=BORDER_COLOR,
         )
         draw.text(
-            (img_x + 50, img_y + 85), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
+            (img_x + 100, img_y + 140), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
         )
 
     # ── Text area below image ──
-    ty = img_y + IMAGE_SIZE + 10
+    ty = img_y + IMAGE_SIZE + 14
 
     # Product name (up to 2 lines)
     name = result.drug_name or ""
     line1 = _truncate_text(name, font_name, text_area)
     draw.text((x + CARD_PADDING, ty), line1, fill=TEXT_COLOR, font=font_name)
-    ty += 22
+    ty += 28
 
     if len(line1) < len(name) and not line1.endswith("..."):
         line2 = _truncate_text(name[len(line1):].strip(), font_name, text_area)
         draw.text((x + CARD_PADDING, ty), line2, fill=TEXT_COLOR, font=font_name)
-        ty += 22
+        ty += 28
 
-    ty += 4
+    ty += 6
 
     # ── Price ──
     if result.price_bs is not None:
@@ -205,17 +205,17 @@ def _draw_card(
         if result.full_price_bs and result.full_price_bs != result.price_bs:
             px_end = _text_width(price_text, font_price)
             old_text = f"Bs. {result.full_price_bs:,.2f}"
-            old_x = x + CARD_PADDING + px_end + 8
-            draw.text((old_x, ty + 4), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
+            old_x = x + CARD_PADDING + px_end + 10
+            draw.text((old_x, ty + 6), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
             old_w = _text_width(old_text, font_old_price)
-            strike_y = ty + 14
+            strike_y = ty + 17
             draw.line(
                 [(old_x, strike_y), (old_x + old_w, strike_y)],
                 fill=OLD_PRICE_COLOR,
                 width=1,
             )
 
-        ty += 30
+        ty += 38
 
     # ── Distance to nearest store ──
     if result.nearby_stores:
@@ -223,7 +223,7 @@ def _draw_card(
         dist_text = f"\U0001f4cd {closest.distance_km:.1f} km — {closest.store_name}"
         dist_text = _truncate_text(dist_text, font_detail, text_area)
         draw.text((x + CARD_PADDING, ty), dist_text, fill=DISTANCE_COLOR, font=font_detail)
-        ty += 20
+        ty += 24
 
     # ── Stock status ──
     if result.available:
@@ -283,7 +283,7 @@ def _interleave_for_grid(
 
 
 async def generate_product_grid(
-    results: list[DrugResult], max_products: int = 6
+    results: list[DrugResult], max_products: int = 4
 ) -> str | None:
     """Generate a product grid image from search results.
 
@@ -292,7 +292,7 @@ async def generate_product_grid(
 
     Args:
         results: Drug search results to display.
-        max_products: Maximum products to show (default 6, max 9).
+        max_products: Maximum products to show (default 4, max 6).
 
     Returns:
         Path to the generated temporary image file, or None on failure.
