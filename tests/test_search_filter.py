@@ -1,12 +1,15 @@
 """Tests for specific product query detection and exact-match filtering."""
 
 from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from farmafacil.models.schemas import DrugResult, SearchResponse
+from farmafacil.services.product_cache import _parse_keywords
 from farmafacil.services.search import (
     filter_exact_results,
+    filter_exact_results_with_cross_chain,
     is_product_match,
     is_specific_query,
 )
@@ -262,3 +265,154 @@ class TestFormatterSimilarCount:
             searched_pharmacies=["Farmatodo"],
         )
         assert response.similar_count == 0
+
+
+class TestParseKeywords:
+    """Test keyword tokenization from drug names."""
+
+    def test_basic_split(self):
+        """Split by whitespace, lowercase all tokens."""
+        result = _parse_keywords("RESVERATROL NAD+VID CAP 125MG X60 HERB")
+        assert result == ["resveratrol", "nad+vid", "cap", "125mg", "x60", "herb"]
+
+    def test_plus_preserved_within_token(self):
+        """Plus sign is preserved when adjacent to characters (no space around it)."""
+        result = _parse_keywords("NAD+VID CAP")
+        assert "nad+vid" in result
+
+    def test_plus_with_spaces_splits_into_separate_tokens(self):
+        """Plus sign with spaces around it creates separate tokens."""
+        result = _parse_keywords("NAD + VID")
+        assert result == ["nad", "+", "vid"]
+
+    def test_lowercase_applied(self):
+        """All tokens are lowercased."""
+        result = _parse_keywords("LOSARTAN 50MG GENVEN")
+        assert result == ["losartan", "50mg", "genven"]
+
+    def test_leading_trailing_whitespace_stripped(self):
+        """Leading and trailing whitespace is stripped before splitting."""
+        result = _parse_keywords("  losartan 50mg  ")
+        assert result == ["losartan", "50mg"]
+
+    def test_empty_string_returns_empty_list(self):
+        """Empty drug name returns empty list."""
+        result = _parse_keywords("")
+        assert result == []
+
+    def test_single_word(self):
+        """Single word is returned as single-element list."""
+        result = _parse_keywords("RESVERATROL")
+        assert result == ["resveratrol"]
+
+    def test_special_characters_in_tokens(self):
+        """Special chars like - and / are preserved within tokens."""
+        result = _parse_keywords("250mg-75mg-125mg x60")
+        assert result == ["250mg-75mg-125mg", "x60"]
+
+
+class TestFilterExactResultsWithCrossChain:
+    """Test cross-chain keyword matching in async filter."""
+
+    def _make_result(self, name: str, pharmacy: str = "Farmatodo") -> DrugResult:
+        return DrugResult(
+            drug_name=name,
+            pharmacy_name=pharmacy,
+            price_bs=Decimal("100"),
+            available=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_chain_results_added_to_exact(self):
+        """Cross-chain keyword matches are appended to exact matches."""
+        results = [
+            self._make_result("RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"),
+        ]
+        cross_chain_result = self._make_result(
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmatodo"
+        )
+
+        with patch(
+            "farmafacil.services.search.find_cross_chain_matches",
+            new=AsyncMock(return_value=[cross_chain_result]),
+        ):
+            exact, similar = await filter_exact_results_with_cross_chain(
+                results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
+            )
+
+        assert len(exact) == 2
+        assert len(similar) == 0
+        pharmacies = {r.pharmacy_name for r in exact}
+        assert "Farmatodo" in pharmacies
+        assert "Farmacias SAAS" in pharmacies
+
+    @pytest.mark.asyncio
+    async def test_cross_chain_not_duplicated_in_similar(self):
+        """If a cross-chain match was in similar, it is removed from similar and added to exact."""
+        farmatodo_product = self._make_result(
+            "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
+            "Farmatodo",
+        )
+        results = [
+            self._make_result("RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"),
+            farmatodo_product,
+        ]
+
+        with patch(
+            "farmafacil.services.search.find_cross_chain_matches",
+            new=AsyncMock(return_value=[farmatodo_product]),
+        ):
+            exact, similar = await filter_exact_results_with_cross_chain(
+                results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
+            )
+
+        # The Farmatodo product should be in exact, not similar
+        exact_names = [r.drug_name for r in exact]
+        similar_names = [r.drug_name for r in similar]
+        assert farmatodo_product.drug_name in exact_names
+        assert farmatodo_product.drug_name not in similar_names
+
+    @pytest.mark.asyncio
+    async def test_no_cross_chain_results_unchanged(self):
+        """When cross-chain finds nothing, original exact/similar split is unchanged."""
+        results = [
+            self._make_result("RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"),
+            self._make_result("RESVERATROL NAD+VID CAP 250MG X60 HERB", "Farmatodo"),
+        ]
+
+        with patch(
+            "farmafacil.services.search.find_cross_chain_matches",
+            new=AsyncMock(return_value=[]),
+        ):
+            exact, similar = await filter_exact_results_with_cross_chain(
+                results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
+            )
+
+        assert len(exact) == 1
+        assert exact[0].pharmacy_name == "Farmacias SAAS"
+        assert len(similar) == 1
+
+    @pytest.mark.asyncio
+    async def test_exclude_names_passed_to_cross_chain_lookup(self):
+        """The exclude_names set passed to find_cross_chain_matches contains existing exact names."""
+        saas_product = self._make_result(
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB", "Farmacias SAAS"
+        )
+        results = [saas_product]
+        captured_exclude: list[set] = []
+
+        async def capture_call(query_keywords, city_code, exclude_names):
+            captured_exclude.append(set(exclude_names))
+            return []
+
+        with patch(
+            "farmafacil.services.search.find_cross_chain_matches",
+            new=capture_call,
+        ):
+            await filter_exact_results_with_cross_chain(
+                results, "RESVERATROL NAD+VID CAP 125MG X60 HERB"
+            )
+
+        # The exact match drug_name (lowercased) must be in exclude_names
+        assert len(captured_exclude) == 1
+        assert "resveratrol nad+vid cap 125mg x60 herb" in captured_exclude[0]

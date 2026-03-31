@@ -223,6 +223,10 @@ class Product(Base):
         String(100), nullable=True, comment="Per-unit label (e.g., 'Capsulas')",
     )
     product_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    keywords: Mapped[list | None] = mapped_column(
+        JSON, nullable=True,
+        comment="Lowercase tokens from drug_name split by whitespace, for cross-chain matching",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

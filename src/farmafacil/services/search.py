@@ -13,7 +13,9 @@ from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
 from farmafacil.scrapers.saas import SAASScraper
 from farmafacil.services.product_cache import (
+    _parse_keywords,
     find_cached_products,
+    find_cross_chain_matches,
     get_cached_results,
     save_search_results,
 )
@@ -107,6 +109,51 @@ def filter_exact_results(
     return exact, similar
 
 
+async def filter_exact_results_with_cross_chain(
+    results: list[DrugResult],
+    query: str,
+    city_code: str | None = None,
+) -> tuple[list[DrugResult], list[DrugResult]]:
+    """Split results into exact matches and similar, adding cross-chain keyword matches.
+
+    First applies strict case-insensitive string matching (same as
+    filter_exact_results). Then queries the product catalog for any products
+    from OTHER chains whose keywords all appear in the query's keywords, and
+    appends those to the exact matches list.
+
+    Cross-chain matches supplement exact name matches — they are included in the
+    same result list. Products already in exact matches (by drug_name) are not
+    duplicated.
+
+    Args:
+        results: All drug search results from the scrapers.
+        query: The user's search query.
+        city_code: Optional city code for price lookup in cross-chain matches.
+
+    Returns:
+        Tuple of (exact_matches_plus_cross_chain, similar_products).
+    """
+    exact, similar = filter_exact_results(results, query)
+
+    # Build set of exact-match drug names (lowercased) to avoid duplicates
+    exact_names: set[str] = {r.drug_name.lower().strip() for r in exact}
+
+    # Parse query into keywords and search for cross-chain matches
+    query_keywords = _parse_keywords(query)
+    if query_keywords:
+        cross_chain = await find_cross_chain_matches(query_keywords, city_code, exact_names)
+        if cross_chain:
+            # Remove cross-chain results from similar list if present there
+            cross_chain_names = {r.drug_name.lower().strip() for r in cross_chain}
+            similar = [r for r in similar if r.drug_name.lower().strip() not in cross_chain_names]
+            exact = exact + cross_chain
+            logger.info(
+                "Added %d cross-chain matches for '%s'", len(cross_chain), query
+            )
+
+    return exact, similar
+
+
 async def search_drug(
     query: str,
     city: str | None = None,
@@ -181,10 +228,12 @@ async def search_drug(
             all_results, city_code, latitude, longitude
         )
 
-    # 4. For specific queries, filter to exact matches
+    # 4. For specific queries, filter to exact matches (with cross-chain keyword lookup)
     similar_count = 0
     if specific and all_results:
-        exact, similar = filter_exact_results(all_results, query)
+        exact, similar = await filter_exact_results_with_cross_chain(
+            all_results, query, city_code
+        )
         if exact:
             similar_count = len(similar)
             all_results = exact

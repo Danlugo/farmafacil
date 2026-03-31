@@ -211,6 +211,84 @@ async def save_search_results(
     )
 
 
+def _parse_keywords(drug_name: str) -> list[str]:
+    """Parse a drug name into lowercase whitespace-split tokens.
+
+    Tokenizes the drug_name by splitting on whitespace and lowercasing each
+    token. No stemming or fuzzy logic — tokens are exact lowercased words.
+    The + character is preserved as part of adjacent tokens (e.g., "NAD+VID"
+    stays as one token "nad+vid").
+
+    Args:
+        drug_name: Product name string (e.g., "RESVERATROL NAD+VID CAP 125MG X60 HERB").
+
+    Returns:
+        List of lowercase tokens (e.g., ["resveratrol", "nad+vid", "cap", "125mg", "x60", "herb"]).
+    """
+    return [token.lower() for token in drug_name.strip().split()]
+
+
+async def find_cross_chain_matches(
+    query_keywords: list[str],
+    city_code: str | None,
+    exclude_names: set[str],
+) -> list["DrugResult"]:
+    """Find products in other chains where ALL query keywords appear in product keywords.
+
+    Searches the products table for products whose stored keywords list contains
+    every keyword from query_keywords. Only returns products whose drug_name
+    (lowercased, stripped) is not in exclude_names. Checks that prices are
+    available for the given city.
+
+    Args:
+        query_keywords: Lowercase tokens to match against (ALL must be present).
+        city_code: City code to filter for available prices.
+        exclude_names: Lowercased drug_name values already in exact results (to avoid duplicates).
+
+    Returns:
+        List of DrugResult for matching products from other chains.
+    """
+    if not query_keywords:
+        return []
+
+    effective_city = city_code or "ALL"
+
+    async with async_session() as session:
+        # Load all products that have keywords stored
+        result = await session.execute(
+            select(Product).where(Product.keywords.is_not(None))
+        )
+        products = result.scalars().all()
+
+    matches: list[DrugResult] = []
+    for product in products:
+        # Skip products already in exact results
+        if product.drug_name.lower().strip() in exclude_names:
+            continue
+
+        product_kw_set = set(product.keywords or [])
+        # ALL query keywords must appear in the product's keyword set
+        if not all(kw in product_kw_set for kw in query_keywords):
+            continue
+
+        # Find a price for this city
+        price_row = None
+        for p in product.prices:
+            if p.city_code == effective_city:
+                price_row = p
+                break
+
+        matches.append(_product_to_drug_result(product, price_row))
+
+    if matches:
+        logger.info(
+            "Cross-chain keyword match: %d products for keywords=%s (city=%s)",
+            len(matches), query_keywords, city_code,
+        )
+
+    return matches
+
+
 def _extract_external_id(drug: DrugResult) -> str:
     """Extract a stable external ID from a DrugResult.
 
@@ -253,6 +331,8 @@ async def _upsert_product(
     )
     product = result.scalar_one_or_none()
 
+    keywords = _parse_keywords(drug.drug_name)
+
     if product is None:
         product = Product(
             external_id=external_id,
@@ -266,6 +346,7 @@ async def _upsert_product(
             unit_count=drug.unit_count,
             unit_label=drug.unit_label,
             product_url=drug.url,
+            keywords=keywords,
         )
         session.add(product)
         await session.flush()  # Get the id
@@ -280,6 +361,7 @@ async def _upsert_product(
         product.unit_count = drug.unit_count
         product.unit_label = drug.unit_label
         product.product_url = drug.url
+        product.keywords = keywords
         product.updated_at = now.replace(tzinfo=None)
 
     return product
