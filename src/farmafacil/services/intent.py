@@ -134,7 +134,7 @@ INSTRUCCIONES: Analiza el mensaje del usuario y responde en formato estructurado
 
 FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
 ACTION: [greeting|drug_search|question|unknown]
-DRUG: [nombre genérico del medicamento si aplica]
+DRUG: [nombre del medicamento o producto tal como lo escribió el usuario. Si da un nombre específico de producto, mantenerlo completo. Solo simplificar si describe síntomas.]
 NAME: [nombre de la persona si se presenta]
 LOCATION: [zona/barrio/ciudad si menciona ubicación]
 RESPONSE: [respuesta conversacional si es una pregunta]
@@ -169,11 +169,20 @@ EJEMPLOS:
   ACTION: drug_search
   DRUG: ibuprofeno
 
+- "dame precios de RESVERATROL NAD+VID CAP 125MG X60 HERB" →
+  ACTION: drug_search
+  DRUG: RESVERATROL NAD+VID CAP 125MG X60 HERB
+
+- "busco Losartán Potásico 50mg Biumak Caja x 30" →
+  ACTION: drug_search
+  DRUG: Losartán Potásico 50mg Biumak Caja x 30
+
 - "donde queda la farmacia Tepuy?" →
   ACTION: question
   RESPONSE: La farmacia Farmatodo TEPUY está ubicada en la Av. Río de Janeiro con Calle Monterrey, Urb. Las Mercedes, Caracas. Puedes buscar cualquier medicamento y te digo si está disponible allí.
 
 REGLAS:
+- Si el usuario da un nombre ESPECÍFICO de producto (con dosis, marca, presentación), usa ese nombre COMPLETO en DRUG — NO lo simplifiques
 - Si mencionan síntomas, traduce al medicamento genérico más probable
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Si preguntan sobre salud, responde brevemente (2-3 oraciones) y recuérdales que pueden buscar medicamentos
