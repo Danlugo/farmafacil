@@ -7,11 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from farmafacil import __version__
+from farmafacil.api.admin import setup_admin
 from farmafacil.api.routes import router
 from farmafacil.bot.webhook import webhook_router
 from farmafacil.config import LOG_LEVEL
 from farmafacil.db.seed import seed_intents
-from farmafacil.db.session import close_db, init_db
+from farmafacil.db.session import close_db, engine, init_db
 from farmafacil.services.settings import seed_settings
 from farmafacil.services.store_backfill import backfill_stores
 
@@ -43,6 +44,10 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
     app.include_router(webhook_router)
+
+    # Mount SQLAdmin dashboard at /admin
+    setup_admin(app, engine)
+
     return app
 
 
