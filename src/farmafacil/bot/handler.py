@@ -3,7 +3,7 @@
 import logging
 
 from farmafacil.bot.formatter import format_search_results
-from farmafacil.bot.whatsapp import send_text_message
+from farmafacil.bot.whatsapp import send_image_message, send_text_message
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
@@ -121,6 +121,14 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         )
         reply = format_search_results(response)
         await send_text_message(sender, reply)
+
+        # Send thumbnail images for top results so user can verify the product
+        for result in response.results[:3]:
+            if result.image_url:
+                caption = f"{result.drug_name}"
+                if result.price_bs:
+                    caption += f" — Bs. {result.price_bs:,.2f}"
+                await send_image_message(sender, result.image_url, caption)
 
     elif intent.action == "question" and intent.response_text:
         await send_text_message(sender, intent.response_text)
