@@ -125,6 +125,66 @@ async def update_user_preference(phone_number: str, preference: str) -> User:
         return user
 
 
+async def validate_user_profile(user: User) -> User:
+    """Check user profile for inconsistent data and auto-repair.
+
+    Catches states like: onboarding says "awaiting_preference" but name is
+    missing, or onboarding is complete but location is missing.
+
+    Args:
+        user: The User record to validate.
+
+    Returns:
+        The (possibly repaired) User record.
+    """
+    step = user.onboarding_step
+    needs_fix = False
+    new_step = step
+
+    if step is None:
+        # Onboarding "complete" — verify all required fields exist
+        if not user.name:
+            new_step = "awaiting_name"
+            needs_fix = True
+        elif not user.latitude or not user.zone_name:
+            new_step = "awaiting_location"
+            needs_fix = True
+        elif not user.display_preference:
+            new_step = "awaiting_preference"
+            needs_fix = True
+    elif step == "awaiting_preference":
+        # Should have name + location by now
+        if not user.name:
+            new_step = "awaiting_name"
+            needs_fix = True
+        elif not user.latitude or not user.zone_name:
+            new_step = "awaiting_location"
+            needs_fix = True
+    elif step == "awaiting_location":
+        # Should have name by now
+        if not user.name:
+            new_step = "awaiting_name"
+            needs_fix = True
+
+    if needs_fix:
+        logger.warning(
+            "User %s has inconsistent profile (step=%s, name=%s, zone=%s) — "
+            "resetting to %s",
+            user.phone_number, step, user.name, user.zone_name, new_step,
+        )
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.phone_number == user.phone_number)
+            )
+            db_user = result.scalar_one()
+            db_user.onboarding_step = new_step
+            await session.commit()
+            await session.refresh(db_user)
+            return db_user
+
+    return user
+
+
 async def set_onboarding_step(phone_number: str, step: str | None) -> User:
     """Set the user's current onboarding step.
 

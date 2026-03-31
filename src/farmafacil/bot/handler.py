@@ -17,6 +17,7 @@ from farmafacil.services.users import (
     update_user_location,
     update_user_name,
     update_user_preference,
+    validate_user_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         return
 
     user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
     step = user.onboarding_step
     text_lower = text.lower()
 
@@ -120,6 +122,16 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             return
 
         name = intent.detected_name or text.strip().title()
+
+        # Validate name — reject common non-names
+        if not _is_valid_name(name):
+            await send_text_message(
+                sender,
+                "No logre entender tu nombre. Dime solo tu nombre, por favor.\n\n"
+                "Ejemplo: _Maria_, _Jose_, _Carlos_"
+            )
+            return
+
         user = await update_user_name(sender, name)
 
         # Did they also mention a location?
@@ -297,6 +309,29 @@ async def _try_store_lookup(text: str) -> object | None:
             return store
 
     return None
+
+
+_NOT_NAMES = {
+    "hi", "hello", "hey", "hola", "buenas", "buenos", "ola", "que tal",
+    "good", "ok", "si", "no", "yes", "gracias", "thanks", "bye", "chao",
+    "ayuda", "help", "losartan", "acetaminofen", "ibuprofeno", "1", "2",
+}
+
+
+def _is_valid_name(name: str) -> bool:
+    """Check if a string looks like a real person's name."""
+    if not name or len(name.strip()) < 2:
+        return False
+    if name.lower().strip() in _NOT_NAMES:
+        return False
+    # Reject if it's all digits or has special characters
+    stripped = name.strip()
+    if stripped.isdigit():
+        return False
+    # Reject very long "names" (likely a sentence)
+    if len(stripped.split()) > 4:
+        return False
+    return True
 
 
 def _parse_preference(text: str) -> str | None:
