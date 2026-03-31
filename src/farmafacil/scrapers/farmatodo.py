@@ -116,18 +116,33 @@ class FarmatodoScraper(BaseScraper):
         offer_price_bs = self._get_offer_price(hit, city_code)
         in_stock = len(hit.get("stores_with_stock", [])) > 0
 
+        # Calculate per-unit price
+        unit_count = hit.get("measurePum")
+        unit_label = hit.get("labelPum")
+        best_price = offer_price_bs or price_bs
+        unit_price_str = None
+        if unit_count and unit_count > 0 and best_price:
+            unit_price = best_price / unit_count
+            unit_price_str = f"{unit_label} {unit_price:.2f}" if unit_label else None
+
         return DrugResult(
             drug_name=hit.get("mediaDescription", hit.get("brand", "Unknown")),
             pharmacy_name=self.pharmacy_name,
-            price_bs=offer_price_bs or price_bs,
+            price_bs=best_price,
+            full_price_bs=price_bs if offer_price_bs else None,
+            discount_pct=hit.get("offerText"),
             available=in_stock,
             url=self._build_product_url(hit),
             last_checked=datetime.now(tz=UTC),
             requires_prescription=hit.get("requirePrescription") == "true",
             image_url=hit.get("mediaImageUrl"),
-            brand=hit.get("brand"),
+            brand=hit.get("marca") or hit.get("brand"),
             drug_class=hit.get("rms_class"),
+            unit_label=unit_price_str,
+            unit_count=unit_count,
+            description=(hit.get("largeDescription") or "").strip() or None,
             stores_in_stock=len(hit.get("stores_with_stock", [])),
+            stores_with_stock_ids=hit.get("stores_with_stock", []),
         )
 
     def _get_price(self, hit: dict, city_code: str | None) -> Decimal | None:

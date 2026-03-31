@@ -3,6 +3,7 @@
 import logging
 
 from farmafacil.bot.formatter import format_search_results
+from farmafacil.models.schemas import DrugResult
 from farmafacil.bot.whatsapp import send_image_message, send_text_message
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
@@ -122,12 +123,10 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         reply = format_search_results(response)
         await send_text_message(sender, reply)
 
-        # Send thumbnail images for top results so user can verify the product
+        # Send product cards as image messages (mimics Farmatodo app)
         for result in response.results[:3]:
             if result.image_url:
-                caption = f"{result.drug_name}"
-                if result.price_bs:
-                    caption += f" — Bs. {result.price_bs:,.2f}"
+                caption = _build_product_caption(result)
                 await send_image_message(sender, result.image_url, caption)
 
     elif intent.action == "question" and intent.response_text:
@@ -140,3 +139,60 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             "Envia el nombre de un medicamento y te busco donde esta disponible.\n\n"
             "Escribe _ayuda_ para ver las instrucciones.",
         )
+
+
+def _build_product_caption(result: DrugResult) -> str:
+    """Build a Farmatodo-style product card caption for WhatsApp.
+
+    Mimics the Farmatodo app card layout:
+    - Discount badge
+    - Brand
+    - Product name
+    - Offer price + original price strikethrough
+    - Per-unit price
+    - Nearby store + distance
+
+    Args:
+        result: Drug search result with pricing and store data.
+
+    Returns:
+        Formatted WhatsApp caption string.
+    """
+    lines = []
+
+    # Discount badge
+    if result.discount_pct:
+        lines.append(f"\U0001f7e2 *{result.discount_pct} DCTO*")
+
+    # Brand
+    if result.brand:
+        lines.append(f"_{result.brand}_")
+
+    # Product name
+    lines.append(f"*{result.drug_name}*")
+
+    # Price line: offer price + original strikethrough
+    if result.price_bs is not None:
+        price_line = f"*Bs. {result.price_bs:,.2f}*"
+        if result.full_price_bs and result.full_price_bs != result.price_bs:
+            price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
+        lines.append(price_line)
+
+    # Per-unit price
+    if result.unit_label:
+        lines.append(f"{result.unit_label}")
+
+    # Prescription required
+    if result.requires_prescription:
+        lines.append("\U0001f4cb Requiere receta")
+
+    # Stock info
+    if result.stores_in_stock > 0:
+        lines.append(f"\u2705 Disponible en {result.stores_in_stock} tiendas")
+
+    # Nearest store
+    if result.nearby_stores:
+        closest = result.nearby_stores[0]
+        lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")
+
+    return "\n".join(lines)

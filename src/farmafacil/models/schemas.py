@@ -34,6 +34,11 @@ class DrugResult(BaseModel):
     image_url: str | None = Field(None, description="Product image URL")
     brand: str | None = Field(None, description="Drug brand/manufacturer")
     drug_class: str | None = Field(None, description="Pharmacological class")
+    full_price_bs: Decimal | None = Field(None, description="Original price before discount")
+    discount_pct: str | None = Field(None, description="Discount percentage (e.g., '20%')")
+    unit_label: str | None = Field(None, description="Per-unit label (e.g., 'Capsulas a Bs')")
+    unit_count: int | None = Field(None, description="Number of units in package")
+    description: str | None = Field(None, description="Product description")
     stores_in_stock: int = Field(0, description="Number of stores with stock")
     stores_with_stock_ids: list[int] = Field(
         default_factory=list, description="Store IDs that have this drug"
