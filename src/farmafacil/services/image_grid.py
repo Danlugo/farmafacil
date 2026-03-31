@@ -1,4 +1,4 @@
-"""Generate product grid images for WhatsApp — clean multi-pharmacy cards."""
+"""Generate product grid images for WhatsApp — single-column phone-optimized."""
 
 import io
 import logging
@@ -13,16 +13,19 @@ from farmafacil.models.schemas import DrugResult
 
 logger = logging.getLogger(__name__)
 
-# Grid layout constants — optimized for WhatsApp (2-col, phone-readable at 3x)
-CARD_WIDTH = 1000
-CARD_HEIGHT = 1300
-CARD_PADDING = 40
-IMAGE_SIZE = 900  # 90% of card width
-GRID_COLS = 2
-GRID_GAP = 30
-GRID_MARGIN = 40
+# ── Layout: single-column, horizontal cards (image left + text right) ──
+# Target: 1080px wide (standard phone @3x). WhatsApp shows at ~375px = 2.88x shrink.
+# At that ratio, 48pt text renders as ~17pt on screen = very readable.
+CANVAS_WIDTH = 1080
+CARD_HEIGHT = 440
+CARD_MARGIN = 24
+CARD_GAP = 20
+CARD_RADIUS = 24
+IMAGE_SIZE = 380  # Square product image on the left
+TEXT_LEFT = IMAGE_SIZE + 40  # Text starts after image + gap
+TEXT_PADDING_RIGHT = 30
 
-# Colors — neutral multi-pharmacy theme
+# Colors
 BG_COLOR = (245, 245, 245)
 CARD_BG = (255, 255, 255)
 TEXT_COLOR = (33, 33, 33)
@@ -30,20 +33,19 @@ PRICE_COLOR = (27, 94, 32)
 OLD_PRICE_COLOR = (158, 158, 158)
 DISCOUNT_BG = (76, 175, 80)
 DISCOUNT_TEXT = (255, 255, 255)
-BRAND_COLOR = (117, 117, 117)
 STOCK_COLOR = (76, 175, 80)
 NO_STOCK_COLOR = (244, 67, 54)
 BORDER_COLOR = (224, 224, 224)
 DISTANCE_COLOR = (63, 81, 181)
 
-# Pharmacy badge colors — each chain gets a distinct color
+# Pharmacy badge colors
 PHARMACY_COLORS: dict[str, tuple[int, int, int]] = {
-    "Farmatodo": (255, 193, 7),       # Yellow
+    "Farmatodo": (255, 165, 0),       # Orange
     "Farmacias SAAS": (63, 81, 181),  # Blue
     "Locatel": (0, 150, 136),         # Teal
     "Farmahorro": (233, 30, 99),      # Pink
 }
-PHARMACY_DEFAULT_COLOR = (97, 97, 97)  # Grey fallback
+PHARMACY_DEFAULT_COLOR = (97, 97, 97)
 
 
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -109,132 +111,158 @@ def _draw_card(
     result: DrugResult,
     product_img: Image.Image | None,
     canvas: Image.Image,
-    x: int,
     y: int,
 ) -> None:
-    """Draw a single product card onto the canvas.
+    """Draw a horizontal product card — image left, text right.
 
-    Layout (top to bottom):
-    - Discount badge (top-left) + Pharmacy badge (top-right)
-    - Product image (centered)
-    - Product name (bold, 1-2 lines)
-    - Price (green, bold) + old price (strikethrough)
-    - Distance to nearest store (if available)
-    - Stock indicator
+    Layout:
+    ┌──────────────────────────────────────────────┐
+    │  ┌─────────┐  PHARMACY BADGE                 │
+    │  │         │  Product Name (2 lines max)      │
+    │  │  IMAGE  │  Bs. 316.00  ~~Bs. 665.00~~     │
+    │  │         │  📍 1.9 km — TEPUY               │
+    │  └─────────┘  ✓ 198 tiendas                  │
+    └──────────────────────────────────────────────┘
     """
-    font_pharmacy = _get_font(36, bold=True)
-    font_name = _get_font(44, bold=True)
-    font_price = _get_font(60, bold=True)
-    font_old_price = _get_font(38)
-    font_discount = _get_font(34, bold=True)
-    font_detail = _get_font(38)
+    x = CARD_MARGIN
+    card_w = CANVAS_WIDTH - 2 * CARD_MARGIN
 
-    text_area = CARD_WIDTH - 2 * CARD_PADDING
+    # Fonts — sized for 1080px canvas viewed on phone
+    font_pharmacy = _get_font(32, bold=True)
+    font_name = _get_font(38, bold=True)
+    font_price = _get_font(52, bold=True)
+    font_old_price = _get_font(34)
+    font_discount = _get_font(28, bold=True)
+    font_detail = _get_font(34)
 
-    # Card background
+    text_max_w = card_w - TEXT_LEFT - TEXT_PADDING_RIGHT
+
+    # ── Card background ──
     draw.rounded_rectangle(
-        [x, y, x + CARD_WIDTH, y + CARD_HEIGHT],
-        radius=12,
+        [x, y, x + card_w, y + CARD_HEIGHT],
+        radius=CARD_RADIUS,
         fill=CARD_BG,
         outline=BORDER_COLOR,
-        width=1,
+        width=2,
     )
 
-    # ── Pharmacy badge (top-right) ──
-    pharmacy_name = result.pharmacy_name or ""
-    if pharmacy_name:
-        badge_color = PHARMACY_COLORS.get(pharmacy_name, PHARMACY_DEFAULT_COLOR)
-        pw = _text_width(pharmacy_name, font_pharmacy)
-        badge_x = x + CARD_WIDTH - pw - 40
-        draw.rounded_rectangle(
-            [badge_x - 14, y + 16, x + CARD_WIDTH - 16, y + 62],
-            radius=18,
-            fill=badge_color,
-        )
-        draw.text((badge_x, y + 18), pharmacy_name, fill=(255, 255, 255), font=font_pharmacy)
+    # ── Product image (left side, vertically centered) ──
+    img_pad = 20
+    img_display = IMAGE_SIZE - 2 * img_pad
+    img_x = x + img_pad
+    img_y = y + (CARD_HEIGHT - img_display) // 2
 
-    # ── Discount badge (top-left) ──
-    if result.discount_pct:
-        badge_text = f" {result.discount_pct} "
-        dw = _text_width(badge_text, font_discount)
-        draw.rounded_rectangle(
-            [x + 16, y + 16, x + dw + 36, y + 62],
-            radius=18,
-            fill=DISCOUNT_BG,
-        )
-        draw.text((x + 22, y + 18), badge_text, fill=DISCOUNT_TEXT, font=font_discount)
-
-    # ── Product image (centered, 90% of card width) ──
-    img_x = x + (CARD_WIDTH - IMAGE_SIZE) // 2
-    img_y = y + 76
     if product_img:
-        resized = product_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
-        canvas.paste(resized, (img_x, img_y), resized if resized.mode == "RGBA" else None)
+        resized = product_img.resize(
+            (img_display, img_display), Image.Resampling.LANCZOS
+        )
+        canvas.paste(
+            resized, (img_x, img_y), resized if resized.mode == "RGBA" else None
+        )
     else:
         draw.rectangle(
-            [img_x, img_y, img_x + IMAGE_SIZE, img_y + IMAGE_SIZE],
+            [img_x, img_y, img_x + img_display, img_y + img_display],
             fill=(240, 240, 240),
             outline=BORDER_COLOR,
         )
         draw.text(
-            (img_x + 340, img_y + 400), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
+            (img_x + 80, img_y + 140),
+            "Sin imagen",
+            fill=OLD_PRICE_COLOR,
+            font=font_detail,
         )
 
-    # ── Text area below image ──
-    ty = img_y + IMAGE_SIZE + 24
+    # ── Discount badge (overlaid on image, top-left) ──
+    if result.discount_pct:
+        badge_text = f" {result.discount_pct} "
+        dw = _text_width(badge_text, font_discount)
+        draw.rounded_rectangle(
+            [img_x, img_y, img_x + dw + 16, img_y + 38],
+            radius=12,
+            fill=DISCOUNT_BG,
+        )
+        draw.text(
+            (img_x + 8, img_y + 4),
+            badge_text,
+            fill=DISCOUNT_TEXT,
+            font=font_discount,
+        )
+
+    # ── Text area (right side) ──
+    tx = x + TEXT_LEFT
+    ty = y + 28
+
+    # Pharmacy badge
+    pharmacy_name = result.pharmacy_name or ""
+    if pharmacy_name:
+        badge_color = PHARMACY_COLORS.get(pharmacy_name, PHARMACY_DEFAULT_COLOR)
+        pw = _text_width(pharmacy_name, font_pharmacy)
+        draw.rounded_rectangle(
+            [tx, ty, tx + pw + 20, ty + 42],
+            radius=14,
+            fill=badge_color,
+        )
+        draw.text(
+            (tx + 10, ty + 4),
+            pharmacy_name,
+            fill=(255, 255, 255),
+            font=font_pharmacy,
+        )
+        ty += 54
 
     # Product name (up to 2 lines)
     name = result.drug_name or ""
-    line1 = _truncate_text(name, font_name, text_area)
-    draw.text((x + CARD_PADDING, ty), line1, fill=TEXT_COLOR, font=font_name)
-    ty += 56
+    line1 = _truncate_text(name, font_name, text_max_w)
+    draw.text((tx, ty), line1, fill=TEXT_COLOR, font=font_name)
+    ty += 48
 
     if len(line1) < len(name) and not line1.endswith("..."):
-        line2 = _truncate_text(name[len(line1):].strip(), font_name, text_area)
-        draw.text((x + CARD_PADDING, ty), line2, fill=TEXT_COLOR, font=font_name)
-        ty += 56
+        line2 = _truncate_text(name[len(line1) :].strip(), font_name, text_max_w)
+        draw.text((tx, ty), line2, fill=TEXT_COLOR, font=font_name)
+        ty += 48
 
-    ty += 12
+    ty += 10
 
-    # ── Price ──
+    # Price
     if result.price_bs is not None:
         price_text = f"Bs. {result.price_bs:,.2f}"
-        draw.text((x + CARD_PADDING, ty), price_text, fill=PRICE_COLOR, font=font_price)
+        draw.text((tx, ty), price_text, fill=PRICE_COLOR, font=font_price)
 
-        # Old price (strikethrough)
         if result.full_price_bs and result.full_price_bs != result.price_bs:
             px_end = _text_width(price_text, font_price)
             old_text = f"Bs. {result.full_price_bs:,.2f}"
-            old_x = x + CARD_PADDING + px_end + 16
-            draw.text((old_x, ty + 12), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
+            old_x = tx + px_end + 14
+            draw.text(
+                (old_x, ty + 10), old_text, fill=OLD_PRICE_COLOR, font=font_old_price
+            )
             old_w = _text_width(old_text, font_old_price)
-            strike_y = ty + 32
+            strike_y = ty + 28
             draw.line(
                 [(old_x, strike_y), (old_x + old_w, strike_y)],
                 fill=OLD_PRICE_COLOR,
                 width=2,
             )
 
-        ty += 76
+        ty += 66
 
-    # ── Distance to nearest store ──
+    # Distance
     if result.nearby_stores:
         closest = result.nearby_stores[0]
         dist_text = f"\U0001f4cd {closest.distance_km:.1f} km — {closest.store_name}"
-        dist_text = _truncate_text(dist_text, font_detail, text_area)
-        draw.text((x + CARD_PADDING, ty), dist_text, fill=DISTANCE_COLOR, font=font_detail)
-        ty += 48
+        dist_text = _truncate_text(dist_text, font_detail, text_max_w)
+        draw.text((tx, ty), dist_text, fill=DISTANCE_COLOR, font=font_detail)
+        ty += 44
 
-    # ── Stock status ──
+    # Stock
     if result.available:
         if result.stores_in_stock > 0:
             stock_text = f"\u2713 {result.stores_in_stock} tiendas"
         else:
             stock_text = "\u2713 Disponible"
-        draw.text((x + CARD_PADDING, ty), stock_text, fill=STOCK_COLOR, font=font_detail)
+        draw.text((tx, ty), stock_text, fill=STOCK_COLOR, font=font_detail)
     else:
         draw.text(
-            (x + CARD_PADDING, ty), "\u2717 Sin stock", fill=NO_STOCK_COLOR, font=font_detail
+            (tx, ty), "\u2717 Sin stock", fill=NO_STOCK_COLOR, font=font_detail
         )
 
 
@@ -285,14 +313,15 @@ def _interleave_for_grid(
 async def generate_product_grid(
     results: list[DrugResult], max_products: int = 4
 ) -> str | None:
-    """Generate a product grid image from search results.
+    """Generate a single-column product list image for WhatsApp.
 
     Results are interleaved across pharmacies (round-robin) so every chain
-    is represented, with the best-priced items from each shown first.
+    is represented. Layout is horizontal cards stacked vertically — one
+    card per row for maximum readability on phone screens.
 
     Args:
         results: Drug search results to display.
-        max_products: Maximum products to show (default 4, max 6).
+        max_products: Maximum products to show (default 4).
 
     Returns:
         Path to the generated temporary image file, or None on failure.
@@ -303,13 +332,9 @@ async def generate_product_grid(
         return None
 
     n = len(products)
-    cols = min(n, GRID_COLS)
-    rows = (n + cols - 1) // cols
+    canvas_h = 2 * CARD_MARGIN + n * CARD_HEIGHT + (n - 1) * CARD_GAP
 
-    canvas_w = 2 * GRID_MARGIN + cols * CARD_WIDTH + (cols - 1) * GRID_GAP
-    canvas_h = 2 * GRID_MARGIN + rows * CARD_HEIGHT + (rows - 1) * GRID_GAP
-
-    canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
+    canvas = Image.new("RGB", (CANVAS_WIDTH, canvas_h), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
     # Download all product images
@@ -321,19 +346,19 @@ async def generate_product_grid(
         else:
             product_images.append(None)
 
-    # Draw each card
+    # Draw each card vertically stacked
     for i, (result, prod_img) in enumerate(zip(products, product_images)):
-        col = i % cols
-        row = i // cols
-        cx = GRID_MARGIN + col * (CARD_WIDTH + GRID_GAP)
-        cy = GRID_MARGIN + row * (CARD_HEIGHT + GRID_GAP)
-        _draw_card(draw, result, prod_img, canvas, cx, cy)
+        cy = CARD_MARGIN + i * (CARD_HEIGHT + CARD_GAP)
+        _draw_card(draw, result, prod_img, canvas, cy)
 
     # Save to temp file
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     canvas.save(tmp.name, "PNG", optimize=True)
     logger.info(
         "Generated product grid: %s (%dx%d, %d products)",
-        tmp.name, canvas_w, canvas_h, n,
+        tmp.name,
+        CANVAS_WIDTH,
+        canvas_h,
+        n,
     )
     return tmp.name
