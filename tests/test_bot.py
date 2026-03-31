@@ -115,7 +115,7 @@ class TestFormatter:
         assert "Sin stock" in text
 
     def test_format_truncates_at_max(self):
-        """More than MAX_RESULTS_SHOWN results shows truncation message."""
+        """More than MAX_PRODUCTS unique products shows truncation message."""
         results = [
             DrugResult(
                 drug_name=f"Drug {i}",
@@ -132,45 +132,37 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "8 resultados mas" in text
+        assert "4 productos mas" in text
 
-    def test_format_interleaves_pharmacies(self):
-        """Results are interleaved across pharmacies (round-robin)."""
+    def test_format_groups_same_product(self):
+        """Same product from multiple pharmacies is grouped under one entry."""
         response = SearchResponse(
             query="losartan",
             results=[
                 DrugResult(
-                    drug_name="SAAS Drug 1",
-                    pharmacy_name="Farmacias SAAS",
-                    price_bs=Decimal("1"),
-                    available=True,
-                ),
-                DrugResult(
-                    drug_name="SAAS Drug 2",
+                    drug_name="Losartan 50mg",
                     pharmacy_name="Farmacias SAAS",
                     price_bs=Decimal("2"),
                     available=True,
                 ),
                 DrugResult(
-                    drug_name="Farmatodo Drug 1",
+                    drug_name="Losartan 50mg",
                     pharmacy_name="Farmatodo",
                     price_bs=Decimal("900"),
                     available=True,
                 ),
-                DrugResult(
-                    drug_name="Farmatodo Drug 2",
-                    pharmacy_name="Farmatodo",
-                    price_bs=Decimal("950"),
-                    available=True,
-                ),
             ],
-            total=4,
+            total=2,
             searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
         )
         text = format_search_results(response)
-        # Both pharmacies should appear in results despite price gap
-        assert "SAAS Drug 1" in text
-        assert "Farmatodo Drug 1" in text
+        # Product name should appear only once (as header)
+        assert text.count("*1. Losartan 50mg*") == 1
+        # Both pharmacies listed under it
+        assert "Farmacias SAAS" in text
+        assert "Farmatodo" in text
+        # No second numbered product
+        assert "*2." not in text
 
     def test_format_multi_pharmacy(self):
         """Results from multiple pharmacies show pharmacy names."""
