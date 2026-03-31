@@ -1,4 +1,4 @@
-"""Generate product grid images for WhatsApp — mimics Farmatodo app cards."""
+"""Generate product grid images for WhatsApp — clean multi-pharmacy cards."""
 
 import io
 import logging
@@ -13,19 +13,19 @@ from farmafacil.models.schemas import DrugResult
 logger = logging.getLogger(__name__)
 
 # Grid layout constants
-CARD_WIDTH = 380
-CARD_HEIGHT = 480
+CARD_WIDTH = 440
+CARD_HEIGHT = 520
 CARD_PADDING = 16
-IMAGE_SIZE = 200
+IMAGE_SIZE = 280
 GRID_COLS = 3
-GRID_GAP = 12
+GRID_GAP = 14
 GRID_MARGIN = 20
 
-# Colors (matching Farmatodo's yellow/white theme)
+# Colors — neutral multi-pharmacy theme
 BG_COLOR = (245, 245, 245)
 CARD_BG = (255, 255, 255)
 TEXT_COLOR = (33, 33, 33)
-PRICE_COLOR = (0, 0, 0)
+PRICE_COLOR = (27, 94, 32)
 OLD_PRICE_COLOR = (158, 158, 158)
 DISCOUNT_BG = (76, 175, 80)
 DISCOUNT_TEXT = (255, 255, 255)
@@ -33,6 +33,16 @@ BRAND_COLOR = (117, 117, 117)
 STOCK_COLOR = (76, 175, 80)
 NO_STOCK_COLOR = (244, 67, 54)
 BORDER_COLOR = (224, 224, 224)
+DISTANCE_COLOR = (63, 81, 181)
+
+# Pharmacy badge colors — each chain gets a distinct color
+PHARMACY_COLORS: dict[str, tuple[int, int, int]] = {
+    "Farmatodo": (255, 193, 7),       # Yellow
+    "Farmacias SAAS": (63, 81, 181),  # Blue
+    "Locatel": (0, 150, 136),         # Teal
+    "Farmahorro": (233, 30, 99),      # Pink
+}
+PHARMACY_DEFAULT_COLOR = (97, 97, 97)  # Grey fallback
 
 
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -57,6 +67,15 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
     return ImageFont.load_default()
 
 
+def _text_width(text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
+    """Get the pixel width of rendered text."""
+    try:
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0]
+    except AttributeError:
+        return int(font.getlength(text))
+
+
 async def _download_image(url: str) -> Image.Image | None:
     """Download a product image from URL."""
     try:
@@ -69,27 +88,17 @@ async def _download_image(url: str) -> Image.Image | None:
         return None
 
 
-def _truncate_text(text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int) -> str:
+def _truncate_text(
+    text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int
+) -> str:
     """Truncate text with ellipsis to fit within max_width."""
     if not text:
         return ""
-    try:
-        bbox = font.getbbox(text)
-        text_width = bbox[2] - bbox[0]
-    except AttributeError:
-        text_width = font.getlength(text)
-
-    if text_width <= max_width:
+    if _text_width(text, font) <= max_width:
         return text
-
     while len(text) > 3:
         text = text[:-1]
-        try:
-            bbox = font.getbbox(text + "...")
-            w = bbox[2] - bbox[0]
-        except AttributeError:
-            w = font.getlength(text + "...")
-        if w <= max_width:
+        if _text_width(text + "...", font) <= max_width:
             return text + "..."
     return text[:3] + "..."
 
@@ -102,19 +111,26 @@ def _draw_card(
     x: int,
     y: int,
 ) -> None:
-    """Draw a single product card onto the canvas."""
+    """Draw a single product card onto the canvas.
+
+    Layout (top to bottom):
+    - Discount badge (top-left) + Pharmacy badge (top-right)
+    - Product image (centered)
+    - Product name (bold, 1-2 lines)
+    - Price (green, bold) + old price (strikethrough)
+    - Distance to nearest store (if available)
+    - Stock indicator
+    """
     font_pharmacy = _get_font(13, bold=True)
-    font_brand = _get_font(16)
-    font_name = _get_font(17, bold=True)
+    font_name = _get_font(16, bold=True)
     font_price = _get_font(22, bold=True)
-    font_old_price = _get_font(16)
-    font_discount = _get_font(15, bold=True)
-    font_stock = _get_font(14)
-    font_store = _get_font(14)
+    font_old_price = _get_font(15)
+    font_discount = _get_font(14, bold=True)
+    font_detail = _get_font(14)
 
     text_area = CARD_WIDTH - 2 * CARD_PADDING
 
-    # Card background with rounded corners (approximate with rectangle)
+    # Card background
     draw.rounded_rectangle(
         [x, y, x + CARD_WIDTH, y + CARD_HEIGHT],
         radius=12,
@@ -123,129 +139,111 @@ def _draw_card(
         width=1,
     )
 
-    # Pharmacy badge (top-right corner)
-    pharmacy_label = result.pharmacy_name or ""
-    if pharmacy_label:
-        try:
-            plabel_bbox = font_pharmacy.getbbox(pharmacy_label)
-            plabel_w = plabel_bbox[2] - plabel_bbox[0]
-        except AttributeError:
-            plabel_w = int(font_pharmacy.getlength(pharmacy_label))
-        badge_x = x + CARD_WIDTH - plabel_w - 16
+    # ── Pharmacy badge (top-right) ──
+    pharmacy_name = result.pharmacy_name or ""
+    if pharmacy_name:
+        badge_color = PHARMACY_COLORS.get(pharmacy_name, PHARMACY_DEFAULT_COLOR)
+        pw = _text_width(pharmacy_name, font_pharmacy)
+        badge_x = x + CARD_WIDTH - pw - 20
         draw.rounded_rectangle(
-            [badge_x - 4, y + 6, x + CARD_WIDTH - 8, y + 26],
-            radius=4,
-            fill=(63, 81, 181),
+            [badge_x - 6, y + 8, x + CARD_WIDTH - 8, y + 28],
+            radius=10,
+            fill=badge_color,
         )
-        draw.text((badge_x, y + 7), pharmacy_label, fill=(255, 255, 255), font=font_pharmacy)
+        draw.text((badge_x, y + 9), pharmacy_name, fill=(255, 255, 255), font=font_pharmacy)
 
-    # Discount badge (top-left)
+    # ── Discount badge (top-left) ──
     if result.discount_pct:
         badge_text = f" {result.discount_pct} "
+        dw = _text_width(badge_text, font_discount)
         draw.rounded_rectangle(
-            [x + 8, y + 8, x + 80, y + 32],
-            radius=4,
+            [x + 8, y + 8, x + dw + 16, y + 28],
+            radius=10,
             fill=DISCOUNT_BG,
         )
         draw.text((x + 12, y + 9), badge_text, fill=DISCOUNT_TEXT, font=font_discount)
 
-    # Product image (centered)
+    # ── Product image (centered) ──
     img_x = x + (CARD_WIDTH - IMAGE_SIZE) // 2
-    img_y = y + 40
+    img_y = y + 36
     if product_img:
         resized = product_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
-        # Paste with alpha mask for transparency
         canvas.paste(resized, (img_x, img_y), resized if resized.mode == "RGBA" else None)
     else:
-        # Placeholder
         draw.rectangle(
             [img_x, img_y, img_x + IMAGE_SIZE, img_y + IMAGE_SIZE],
             fill=(240, 240, 240),
             outline=BORDER_COLOR,
         )
         draw.text(
-            (img_x + 60, img_y + 90), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_stock
+            (img_x + 50, img_y + 85), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
         )
 
-    # Text area starts below image
-    ty = img_y + IMAGE_SIZE + 12
-
-    # Brand
-    if result.brand:
-        brand_text = _truncate_text(result.brand, font_brand, text_area)
-        draw.text((x + CARD_PADDING, ty), brand_text, fill=BRAND_COLOR, font=font_brand)
-        ty += 22
+    # ── Text area below image ──
+    ty = img_y + IMAGE_SIZE + 10
 
     # Product name (up to 2 lines)
     name = result.drug_name or ""
     line1 = _truncate_text(name, font_name, text_area)
     draw.text((x + CARD_PADDING, ty), line1, fill=TEXT_COLOR, font=font_name)
-    ty += 24
+    ty += 22
 
-    # If name was truncated, show second line
     if len(line1) < len(name) and not line1.endswith("..."):
         line2 = _truncate_text(name[len(line1):].strip(), font_name, text_area)
         draw.text((x + CARD_PADDING, ty), line2, fill=TEXT_COLOR, font=font_name)
-        ty += 24
+        ty += 22
 
     ty += 4
 
-    # Price
+    # ── Price ──
     if result.price_bs is not None:
-        price_text = f"Bs.{result.price_bs:,.2f}"
+        price_text = f"Bs. {result.price_bs:,.2f}"
         draw.text((x + CARD_PADDING, ty), price_text, fill=PRICE_COLOR, font=font_price)
 
         # Old price (strikethrough)
         if result.full_price_bs and result.full_price_bs != result.price_bs:
-            try:
-                bbox = font_price.getbbox(price_text)
-                px_end = bbox[2] - bbox[0]
-            except AttributeError:
-                px_end = int(font_price.getlength(price_text))
-
-            old_text = f"Bs.{result.full_price_bs:,.2f}"
+            px_end = _text_width(price_text, font_price)
+            old_text = f"Bs. {result.full_price_bs:,.2f}"
             old_x = x + CARD_PADDING + px_end + 8
             draw.text((old_x, ty + 4), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
-            # Strikethrough line
-            try:
-                old_bbox = font_old_price.getbbox(old_text)
-                old_w = old_bbox[2] - old_bbox[0]
-            except AttributeError:
-                old_w = int(font_old_price.getlength(old_text))
+            old_w = _text_width(old_text, font_old_price)
             strike_y = ty + 14
-            draw.line([(old_x, strike_y), (old_x + old_w, strike_y)], fill=OLD_PRICE_COLOR, width=1)
+            draw.line(
+                [(old_x, strike_y), (old_x + old_w, strike_y)],
+                fill=OLD_PRICE_COLOR,
+                width=1,
+            )
 
         ty += 30
 
-    # Unit price
-    if result.unit_label:
-        draw.text(
-            (x + CARD_PADDING, ty), result.unit_label, fill=OLD_PRICE_COLOR, font=font_stock
-        )
+    # ── Distance to nearest store ──
+    if result.nearby_stores:
+        closest = result.nearby_stores[0]
+        dist_text = f"\U0001f4cd {closest.distance_km:.1f} km — {closest.store_name}"
+        dist_text = _truncate_text(dist_text, font_detail, text_area)
+        draw.text((x + CARD_PADDING, ty), dist_text, fill=DISTANCE_COLOR, font=font_detail)
         ty += 20
 
-    # Stock status
-    ty += 4
-    if result.available and result.stores_in_stock > 0:
-        stock_text = f"✓ {result.stores_in_stock} tiendas"
-        draw.text((x + CARD_PADDING, ty), stock_text, fill=STOCK_COLOR, font=font_stock)
-    elif not result.available:
-        draw.text((x + CARD_PADDING, ty), "✗ Sin stock", fill=NO_STOCK_COLOR, font=font_stock)
-
-    # Nearest store
-    if result.nearby_stores:
-        ty += 18
-        closest = result.nearby_stores[0]
-        store_text = _truncate_text(
-            f"📍 {closest.store_name} — {closest.distance_km:.1f}km",
-            font_store,
-            text_area,
+    # ── Stock status ──
+    if result.available:
+        if result.stores_in_stock > 0:
+            stock_text = f"\u2713 {result.stores_in_stock} tiendas"
+        else:
+            stock_text = "\u2713 Disponible"
+        draw.text((x + CARD_PADDING, ty), stock_text, fill=STOCK_COLOR, font=font_detail)
+    else:
+        draw.text(
+            (x + CARD_PADDING, ty), "\u2717 Sin stock", fill=NO_STOCK_COLOR, font=font_detail
         )
-        draw.text((x + CARD_PADDING, ty), store_text, fill=BRAND_COLOR, font=font_store)
 
 
-async def generate_product_grid(results: list[DrugResult], max_products: int = 6) -> str | None:
+async def generate_product_grid(
+    results: list[DrugResult], max_products: int = 6
+) -> str | None:
     """Generate a product grid image from search results.
+
+    Results are sorted by price (lowest first) to match the text summary.
+    Each card shows the product image, price, pharmacy badge, and distance.
 
     Args:
         results: Drug search results to display.
@@ -254,7 +252,6 @@ async def generate_product_grid(results: list[DrugResult], max_products: int = 6
     Returns:
         Path to the generated temporary image file, or None on failure.
     """
-    # Sort by price (lowest first) for consistent ordering with text
     sorted_results = sorted(
         results,
         key=lambda r: r.price_bs if r.price_bs is not None else Decimal("999999"),
@@ -276,7 +273,7 @@ async def generate_product_grid(results: list[DrugResult], max_products: int = 6
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
-    # Download all product images in parallel-ish (sequential for simplicity)
+    # Download all product images
     product_images: list[Image.Image | None] = []
     for p in products:
         if p.image_url:
@@ -296,5 +293,8 @@ async def generate_product_grid(results: list[DrugResult], max_products: int = 6
     # Save to temp file
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     canvas.save(tmp.name, "PNG", optimize=True)
-    logger.info("Generated product grid: %s (%dx%d, %d products)", tmp.name, canvas_w, canvas_h, n)
+    logger.info(
+        "Generated product grid: %s (%dx%d, %d products)",
+        tmp.name, canvas_w, canvas_h, n,
+    )
     return tmp.name
