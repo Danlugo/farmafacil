@@ -94,9 +94,11 @@ class TestFormatter:
         assert "El Cafetal" in text
         assert "TEPUY" in text
         assert "0.5 km" in text
+        assert "CHUAO" in text
+        assert "1.9 km" in text
 
     def test_format_unavailable(self):
-        """Unavailable drug shows correct icon."""
+        """Unavailable drug shows Sin stock label."""
         response = SearchResponse(
             query="test",
             results=[
@@ -110,7 +112,6 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "\u274c" in text
         assert "Sin stock" in text
 
     def test_format_truncates_at_max(self):
