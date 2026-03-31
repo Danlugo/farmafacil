@@ -10,23 +10,22 @@ MAX_STORES_PER_PHARMACY = 3
 
 
 def _group_by_product(results: list[DrugResult]) -> list[tuple[str, list[DrugResult]]]:
-    """Group results by product name, preserving order of first appearance.
+    """Group results by product name, dedup, and interleave across pharmacies.
+
+    1. Group by exact product name, dedup same-pharmacy entries.
+    2. Sort pharmacies within each group (available first, then by price).
+    3. Interleave output so products alternate between pharmacy chains.
 
     Returns a list of (product_name, [results_from_different_pharmacies]).
-    Within each group, available items come first, sorted by price.
     """
     groups: dict[str, list[DrugResult]] = defaultdict(list)
-    order: list[str] = []
+    seen: set[tuple[str, str]] = set()  # (product_name, pharmacy_name)
 
     for r in results:
-        name = r.drug_name
-        if name not in groups:
-            order.append(name)
-        # Avoid duplicates from same pharmacy (same product listed multiple times)
-        already = [existing for existing in groups[name]
-                   if existing.pharmacy_name == r.pharmacy_name]
-        if not already:
-            groups[name].append(r)
+        key = (r.drug_name, r.pharmacy_name)
+        if key not in seen:
+            seen.add(key)
+            groups[r.drug_name].append(r)
 
     # Sort pharmacies within each product: available first, then by price
     for name in groups:
@@ -37,7 +36,30 @@ def _group_by_product(results: list[DrugResult]) -> list[tuple[str, list[DrugRes
             )
         )
 
-    return [(name, groups[name]) for name in order]
+    # Split products by their primary pharmacy (first/cheapest), then interleave
+    by_pharmacy: dict[str, list[str]] = defaultdict(list)
+    for name, pharmacy_results in groups.items():
+        primary = pharmacy_results[0].pharmacy_name
+        by_pharmacy[primary].append(name)
+
+    # Round-robin across pharmacy chains
+    interleaved: list[str] = []
+    chains = sorted(by_pharmacy.keys())
+    indices = {chain: 0 for chain in chains}
+
+    total = sum(len(v) for v in by_pharmacy.values())
+    while len(interleaved) < total:
+        added = False
+        for chain in chains:
+            idx = indices[chain]
+            if idx < len(by_pharmacy[chain]):
+                interleaved.append(by_pharmacy[chain][idx])
+                indices[chain] = idx + 1
+                added = True
+        if not added:
+            break
+
+    return [(name, groups[name]) for name in interleaved]
 
 
 def _format_price(result: DrugResult) -> str:
