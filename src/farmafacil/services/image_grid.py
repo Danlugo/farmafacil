@@ -13,14 +13,14 @@ from farmafacil.models.schemas import DrugResult
 
 logger = logging.getLogger(__name__)
 
-# Grid layout constants — optimized for WhatsApp (2-col, phone-friendly)
-CARD_WIDTH = 600
-CARD_HEIGHT = 780
-CARD_PADDING = 24
-IMAGE_SIZE = 540  # 90% of card width
+# Grid layout constants — optimized for WhatsApp (2-col, phone-readable at 3x)
+CARD_WIDTH = 1000
+CARD_HEIGHT = 1300
+CARD_PADDING = 40
+IMAGE_SIZE = 900  # 90% of card width
 GRID_COLS = 2
-GRID_GAP = 18
-GRID_MARGIN = 24
+GRID_GAP = 30
+GRID_MARGIN = 40
 
 # Colors — neutral multi-pharmacy theme
 BG_COLOR = (245, 245, 245)
@@ -122,12 +122,12 @@ def _draw_card(
     - Distance to nearest store (if available)
     - Stock indicator
     """
-    font_pharmacy = _get_font(20, bold=True)
-    font_name = _get_font(26, bold=True)
-    font_price = _get_font(36, bold=True)
-    font_old_price = _get_font(22)
-    font_discount = _get_font(20, bold=True)
-    font_detail = _get_font(22)
+    font_pharmacy = _get_font(36, bold=True)
+    font_name = _get_font(44, bold=True)
+    font_price = _get_font(60, bold=True)
+    font_old_price = _get_font(38)
+    font_discount = _get_font(34, bold=True)
+    font_detail = _get_font(38)
 
     text_area = CARD_WIDTH - 2 * CARD_PADDING
 
@@ -145,28 +145,28 @@ def _draw_card(
     if pharmacy_name:
         badge_color = PHARMACY_COLORS.get(pharmacy_name, PHARMACY_DEFAULT_COLOR)
         pw = _text_width(pharmacy_name, font_pharmacy)
-        badge_x = x + CARD_WIDTH - pw - 24
+        badge_x = x + CARD_WIDTH - pw - 40
         draw.rounded_rectangle(
-            [badge_x - 8, y + 10, x + CARD_WIDTH - 10, y + 36],
-            radius=12,
+            [badge_x - 14, y + 16, x + CARD_WIDTH - 16, y + 62],
+            radius=18,
             fill=badge_color,
         )
-        draw.text((badge_x, y + 11), pharmacy_name, fill=(255, 255, 255), font=font_pharmacy)
+        draw.text((badge_x, y + 18), pharmacy_name, fill=(255, 255, 255), font=font_pharmacy)
 
     # ── Discount badge (top-left) ──
     if result.discount_pct:
         badge_text = f" {result.discount_pct} "
         dw = _text_width(badge_text, font_discount)
         draw.rounded_rectangle(
-            [x + 10, y + 10, x + dw + 20, y + 36],
-            radius=12,
+            [x + 16, y + 16, x + dw + 36, y + 62],
+            radius=18,
             fill=DISCOUNT_BG,
         )
-        draw.text((x + 14, y + 11), badge_text, fill=DISCOUNT_TEXT, font=font_discount)
+        draw.text((x + 22, y + 18), badge_text, fill=DISCOUNT_TEXT, font=font_discount)
 
     # ── Product image (centered, 90% of card width) ──
     img_x = x + (CARD_WIDTH - IMAGE_SIZE) // 2
-    img_y = y + 44
+    img_y = y + 76
     if product_img:
         resized = product_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
         canvas.paste(resized, (img_x, img_y), resized if resized.mode == "RGBA" else None)
@@ -177,24 +177,24 @@ def _draw_card(
             outline=BORDER_COLOR,
         )
         draw.text(
-            (img_x + 200, img_y + 240), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
+            (img_x + 340, img_y + 400), "Sin imagen", fill=OLD_PRICE_COLOR, font=font_detail
         )
 
     # ── Text area below image ──
-    ty = img_y + IMAGE_SIZE + 16
+    ty = img_y + IMAGE_SIZE + 24
 
     # Product name (up to 2 lines)
     name = result.drug_name or ""
     line1 = _truncate_text(name, font_name, text_area)
     draw.text((x + CARD_PADDING, ty), line1, fill=TEXT_COLOR, font=font_name)
-    ty += 34
+    ty += 56
 
     if len(line1) < len(name) and not line1.endswith("..."):
         line2 = _truncate_text(name[len(line1):].strip(), font_name, text_area)
         draw.text((x + CARD_PADDING, ty), line2, fill=TEXT_COLOR, font=font_name)
-        ty += 34
+        ty += 56
 
-    ty += 8
+    ty += 12
 
     # ── Price ──
     if result.price_bs is not None:
@@ -205,17 +205,17 @@ def _draw_card(
         if result.full_price_bs and result.full_price_bs != result.price_bs:
             px_end = _text_width(price_text, font_price)
             old_text = f"Bs. {result.full_price_bs:,.2f}"
-            old_x = x + CARD_PADDING + px_end + 12
-            draw.text((old_x, ty + 8), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
+            old_x = x + CARD_PADDING + px_end + 16
+            draw.text((old_x, ty + 12), old_text, fill=OLD_PRICE_COLOR, font=font_old_price)
             old_w = _text_width(old_text, font_old_price)
-            strike_y = ty + 20
+            strike_y = ty + 32
             draw.line(
                 [(old_x, strike_y), (old_x + old_w, strike_y)],
                 fill=OLD_PRICE_COLOR,
                 width=2,
             )
 
-        ty += 46
+        ty += 76
 
     # ── Distance to nearest store ──
     if result.nearby_stores:
@@ -223,7 +223,7 @@ def _draw_card(
         dist_text = f"\U0001f4cd {closest.distance_km:.1f} km — {closest.store_name}"
         dist_text = _truncate_text(dist_text, font_detail, text_area)
         draw.text((x + CARD_PADDING, ty), dist_text, fill=DISTANCE_COLOR, font=font_detail)
-        ty += 30
+        ty += 48
 
     # ── Stock status ──
     if result.available:
