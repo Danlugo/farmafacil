@@ -11,7 +11,7 @@ from farmafacil.api.admin import setup_admin
 from farmafacil.api.routes import router
 from farmafacil.bot.webhook import webhook_router
 from farmafacil.config import LOG_LEVEL
-from farmafacil.db.seed import seed_intents
+from farmafacil.db.seed import seed_ai_roles, seed_intents
 from farmafacil.db.session import close_db, engine, init_db
 from farmafacil.services.settings import seed_settings
 from farmafacil.services.store_backfill import backfill_stores
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown events."""
     await init_db()
     await seed_intents()
+    await seed_ai_roles()
     await seed_settings()
     await backfill_stores()
     yield

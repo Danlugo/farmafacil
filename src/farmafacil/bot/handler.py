@@ -6,6 +6,7 @@ import os
 from farmafacil.bot.formatter import format_search_results
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_text_message
 from farmafacil.models.schemas import DrugResult
+from farmafacil.services.ai_responder import classify_with_ai, generate_response
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
@@ -109,12 +110,11 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         return
 
     if step == "awaiting_name":
-        # Always use LLM here to distinguish greetings from actual names
-        from farmafacil.services.intent import classify_intent_llm
-        intent = await classify_intent_llm(text)
+        # Always use AI here to distinguish greetings from actual names
+        ai_result = await classify_with_ai(text, user.id, user.name or "")
 
         # If it's just a greeting (hi, hola), re-ask for name
-        if intent.action == "greeting" and not intent.detected_name:
+        if ai_result.action == "greeting" and not ai_result.detected_name:
             await send_text_message(
                 sender,
                 "\U0001f60a Hola! Dime tu nombre para poder atenderte mejor.\n\n"
@@ -122,7 +122,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             )
             return
 
-        name = intent.detected_name or text.strip().title()
+        name = ai_result.detected_name or text.strip().title()
 
         # Validate name — reject common non-names
         if not _is_valid_name(name):
@@ -136,8 +136,8 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         user = await update_user_name(sender, name)
 
         # Did they also mention a location?
-        if intent.detected_location:
-            location = await geocode_zone(intent.detected_location)
+        if ai_result.detected_location:
+            location = await geocode_zone(ai_result.detected_location)
             if location:
                 user = await update_user_location(
                     sender, location["lat"], location["lng"],
@@ -153,8 +153,8 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         return
 
     if step == "awaiting_location":
-        # Try to geocode — but also check if LLM can extract location
-        intent = await classify_intent(text)
+        # Try to geocode — but also check if AI can extract location
+        intent = await classify_intent(text, user.id, user.name or "")
         location_text = intent.detected_location or text
 
         location = await geocode_zone(location_text)
@@ -206,8 +206,8 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             await _handle_view_similar(sender, user)
             return
 
-    # Classify intent (keywords first, LLM fallback)
-    intent = await classify_intent(text)
+    # Classify intent (keywords first, AI fallback)
+    intent = await classify_intent(text, user.id, user.name or "")
     display_name = user.name or "amigo"
 
     # Auto-update profile if LLM detected new info
@@ -273,21 +273,17 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         store = await _try_store_lookup(text)
         if store:
             await send_text_message(sender, format_store_info(store))
-        elif intent.response_text:
-            await send_text_message(sender, intent.response_text)
         else:
-            await send_text_message(
-                sender,
-                "No tengo informacion sobre eso. Enviame el nombre de un medicamento para buscar.",
-            )
+            # Use AI responder for complex questions
+            ai_result = await generate_response(text, user.id, display_name)
+            logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
+            await send_text_message(sender, ai_result.text)
 
     else:
-        await send_text_message(
-            sender,
-            f"*{display_name}*, no estoy seguro de lo que necesitas.\n"
-            "Enviame el nombre de un medicamento para buscar.\n\n"
-            "Escribe _ayuda_ para ver las instrucciones.",
-        )
+        # Unknown intent — try AI responder before giving up
+        ai_result = await generate_response(text, user.id, display_name)
+        logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
+        await send_text_message(sender, ai_result.text)
 
 
 async def _try_store_lookup(text: str) -> object | None:

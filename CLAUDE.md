@@ -38,7 +38,7 @@ docker compose logs -f app
 - **Farmatodo Algolia API** for drug search (no HTML scraping)
 - **Farmacias SAAS VTEX API** for drug search (shared VTEXScraper base)
 - **WhatsApp Business Cloud API** (Meta) for bot
-- **Claude Haiku** for intent detection fallback
+- **Claude Haiku** for AI role-based responses and intent classification
 - **OpenStreetMap Nominatim** for geocoding zones
 - **Pillow** for product grid image generation
 
@@ -49,10 +49,10 @@ docker compose logs -f app
 | `src/farmafacil/api/` | FastAPI routes, app factory |
 | `src/farmafacil/bot/` | WhatsApp webhook, handler, formatter |
 | `src/farmafacil/scrapers/` | Pharmacy scrapers (Farmatodo via Algolia, SAAS via VTEX) |
-| `src/farmafacil/services/` | Business logic, intent, geocode, cache, stores |
+| `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (186 tests) |
+| `tests/` | pytest test suite (206 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -69,6 +69,10 @@ docker compose logs -f app
 | `app_settings` | Admin-editable config (cache TTL, etc.) |
 | `conversation_logs` | Every inbound/outbound WhatsApp message |
 | `search_logs` | Search analytics |
+| `ai_roles` | AI personas with system prompts (admin-editable) |
+| `ai_role_rules` | Behavioral rules per AI role (like rules/*.md) |
+| `ai_role_skills` | Skill definitions per AI role (capabilities) |
+| `user_memories` | Per-user AI memory (conversation context, preferences) |
 
 ## API Endpoints
 

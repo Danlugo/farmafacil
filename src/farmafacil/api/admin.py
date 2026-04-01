@@ -10,6 +10,9 @@ from starlette.requests import Request
 
 from farmafacil.config import ADMIN_PASSWORD, ADMIN_SECRET_KEY, ADMIN_USERNAME
 from farmafacil.models.database import (
+    AiRole,
+    AiRoleRule,
+    AiRoleSkill,
     AppSetting,
     ConversationLog,
     DrugListing,
@@ -22,6 +25,7 @@ from farmafacil.models.database import (
     SearchLog,
     SearchQuery,
     User,
+    UserMemory,
 )
 
 
@@ -533,12 +537,178 @@ class DrugListingAdmin(ModelView, model=DrugListing):
     page_size_options = [10, 25, 50, 100]
 
 
+class AiRoleAdmin(ModelView, model=AiRole):
+    """Admin view for AI roles (personas with system prompts)."""
+
+    name = "AI Role"
+    name_plural = "AI Roles"
+    icon = "fa-solid fa-brain"
+
+    column_list = [
+        AiRole.id,
+        AiRole.name,
+        AiRole.display_name,
+        AiRole.is_active,
+        AiRole.updated_at,
+    ]
+    column_searchable_list = [AiRole.name, AiRole.display_name]
+    column_sortable_list = [AiRole.id, AiRole.name, AiRole.is_active]
+    column_default_sort = "name"
+
+    column_labels = {
+        "name": "Slug",
+        "display_name": "Display Name",
+        "description": "Description (for router)",
+        "system_prompt": "System Prompt",
+        "is_active": "Active",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    form_widget_args = {
+        "system_prompt": {"rows": 20},
+        "description": {"rows": 3},
+    }
+
+    form_include_pk = False
+    page_size = 25
+
+
+class AiRoleRuleAdmin(ModelView, model=AiRoleRule):
+    """Admin view for AI role rules (behavioral guidelines)."""
+
+    name = "AI Rule"
+    name_plural = "AI Rules"
+    icon = "fa-solid fa-scale-balanced"
+
+    column_list = [
+        AiRoleRule.id,
+        AiRoleRule.role_id,
+        AiRoleRule.name,
+        AiRoleRule.sort_order,
+        AiRoleRule.is_active,
+        AiRoleRule.updated_at,
+    ]
+    column_searchable_list = [AiRoleRule.name]
+    column_sortable_list = [
+        AiRoleRule.id,
+        AiRoleRule.role_id,
+        AiRoleRule.name,
+        AiRoleRule.sort_order,
+        AiRoleRule.is_active,
+    ]
+    column_default_sort = [("role_id", False), ("sort_order", False)]
+
+    column_labels = {
+        "role_id": "Role ID",
+        "name": "Rule Name",
+        "description": "Description",
+        "content": "Rule Content",
+        "sort_order": "Sort Order",
+        "is_active": "Active",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    form_widget_args = {
+        "content": {"rows": 15},
+        "description": {"rows": 2},
+    }
+
+    form_include_pk = False
+    page_size = 25
+
+
+class AiRoleSkillAdmin(ModelView, model=AiRoleSkill):
+    """Admin view for AI role skills (capabilities)."""
+
+    name = "AI Skill"
+    name_plural = "AI Skills"
+    icon = "fa-solid fa-wand-magic-sparkles"
+
+    column_list = [
+        AiRoleSkill.id,
+        AiRoleSkill.role_id,
+        AiRoleSkill.name,
+        AiRoleSkill.is_active,
+        AiRoleSkill.updated_at,
+    ]
+    column_searchable_list = [AiRoleSkill.name]
+    column_sortable_list = [
+        AiRoleSkill.id,
+        AiRoleSkill.role_id,
+        AiRoleSkill.name,
+        AiRoleSkill.is_active,
+    ]
+    column_default_sort = [("role_id", False), ("name", False)]
+
+    column_labels = {
+        "role_id": "Role ID",
+        "name": "Skill Name",
+        "description": "Description",
+        "content": "Skill Definition",
+        "is_active": "Active",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    form_widget_args = {
+        "content": {"rows": 15},
+        "description": {"rows": 2},
+    }
+
+    form_include_pk = False
+    page_size = 25
+
+
+class UserMemoryAdmin(ModelView, model=UserMemory):
+    """Admin view for per-user AI memory."""
+
+    name = "User Memory"
+    name_plural = "User Memories"
+    icon = "fa-solid fa-book-open"
+
+    column_list = [
+        UserMemory.id,
+        UserMemory.user_id,
+        UserMemory.updated_by,
+        UserMemory.updated_at,
+    ]
+    column_searchable_list = [UserMemory.memory_text]
+    column_sortable_list = [
+        UserMemory.id,
+        UserMemory.user_id,
+        UserMemory.updated_by,
+        UserMemory.updated_at,
+    ]
+    column_default_sort = ("updated_at", True)
+
+    column_labels = {
+        "user_id": "User ID",
+        "memory_text": "Memory (Markdown)",
+        "updated_by": "Updated By",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    form_widget_args = {
+        "memory_text": {"rows": 20},
+    }
+
+    form_include_pk = False
+    page_size = 25
+
+
 # All admin views to register — order determines sidebar order
 ADMIN_VIEWS = [
     UserAdmin,
     ConversationLogAdmin,
     SearchLogAdmin,
     IntentKeywordAdmin,
+    AiRoleAdmin,
+    AiRoleRuleAdmin,
+    AiRoleSkillAdmin,
+    UserMemoryAdmin,
     PharmacyLocationAdmin,
     PharmacyAdmin,
     DrugListingAdmin,

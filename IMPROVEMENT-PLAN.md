@@ -42,7 +42,23 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
-*(No items yet)*
+### Item 5: AI Roles Management System
+
+- **Status:** DONE
+- **Added:** 2026-03-31
+- **Completed:** 2026-03-31
+- **Problem:** LLM system prompts were hardcoded in intent.py. No way to manage AI behavior from the admin UI. No per-user memory across sessions.
+- **Solution implemented:** Built a 3-layer AI management system:
+  1. **AI Roles** (`ai_roles` table) — personas with system prompts, editable via admin
+  2. **AI Rules + Skills** (`ai_role_rules`, `ai_role_skills` tables) — behavioral guidelines and capability definitions per role
+  3. **Client Memory** (`user_memories` table) — per-user AI memory, auto-updated after conversations
+  - Added role router (`ai_router.py`) that selects the right role via lightweight LLM call
+  - Added AI responder (`ai_responder.py`) that assembles prompt from role + rules + skills + memory
+  - Added 4 admin views for managing roles, rules, skills, and user memories
+  - Seeded 2 default roles: pharmacy_advisor (4 rules, 2 skills) and app_support (2 rules)
+  - Simplified intent.py to keyword-only; LLM classification now goes through AI responder
+- **Files created:** `services/ai_roles.py`, `services/ai_router.py`, `services/ai_responder.py`, `services/user_memory.py`, `tests/test_ai_roles.py`
+- **Files modified:** `models/database.py`, `api/admin.py`, `api/app.py`, `bot/handler.py`, `services/intent.py`, `db/seed.py`
 
 ---
 

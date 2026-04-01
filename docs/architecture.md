@@ -57,13 +57,50 @@ User (WhatsApp)
 6. If onboarding not complete → rigid step-by-step wizard
 7. If onboarding complete:
    a. Check DB keyword cache (instant, free)
-   b. If ambiguous → classify_intent_llm() via Claude Haiku
+   b. If ambiguous → AI role-based classification (classify_with_ai)
 8. Route by intent.action:
    - greeting   → send welcome-back message
    - help        → send HELP_MESSAGE
    - drug_search → search_drug() → format results → send text + image
-   - question    → try store lookup, else LLM-generated answer
-   - unknown     → prompt for drug name
+   - question    → try store lookup, else AI responder (role-based)
+   - unknown     → AI responder (role-based)
+```
+
+## AI Role System
+
+```
+Message → Intent Keywords (fast, free)
+  ↓ (no keyword match / complex)
+Message → Role Router (lightweight LLM: picks role from ai_roles)
+  ↓
+Selected Role → Assemble prompt:
+  • role.system_prompt (from ai_roles table)
+  • role's rules (from ai_role_rules, sorted by sort_order)
+  • role's skills (from ai_role_skills)
+  • client memory (from user_memories)
+  ↓
+Full LLM call → Response
+  ↓
+Auto-update client memory (non-blocking)
+```
+
+### AI Tables
+
+| Table | Purpose | Analogy |
+|-------|---------|---------|
+| `ai_roles` | AI personas with system prompts | CLAUDE.md |
+| `ai_role_rules` | Behavioral rules per role | rules/*.md |
+| `ai_role_skills` | Capability definitions per role | Skills |
+| `user_memories` | Per-user conversation context | Project memory |
+
+### Default Roles
+
+| Role | Slug | Purpose |
+|------|------|---------|
+| Asesor de Farmacia | `pharmacy_advisor` | Drug search, health questions, price comparison |
+| Soporte de App | `app_support` | App help, feature explanations, troubleshooting |
+
+All roles, rules, skills, and user memories are editable via `/admin`.
 ```
 
 ## External Services

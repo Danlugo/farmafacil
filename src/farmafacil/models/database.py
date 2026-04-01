@@ -312,6 +312,144 @@ class AppSetting(Base):
     )
 
 
+class AiRole(Base):
+    """An AI persona with a system prompt, used for LLM-powered responses.
+
+    Each role defines a distinct AI personality (e.g., pharmacy advisor,
+    app support) with its own system prompt, rules, and skills.
+    Analogous to a CLAUDE.md project file.
+    """
+
+    __tablename__ = "ai_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True, index=True,
+        comment="Slug identifier (e.g., pharmacy_advisor, app_support)",
+    )
+    display_name: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="Human-readable name",
+    )
+    description: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Short description for the role router to select this role",
+    )
+    system_prompt: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Base system prompt for this AI persona",
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    rules: Mapped[list["AiRoleRule"]] = relationship(
+        "AiRoleRule", back_populates="role", lazy="selectin",
+        order_by="AiRoleRule.sort_order",
+    )
+    skills: Mapped[list["AiRoleSkill"]] = relationship(
+        "AiRoleSkill", back_populates="role", lazy="selectin",
+        order_by="AiRoleSkill.name",
+    )
+
+
+class AiRoleRule(Base):
+    """A behavioral rule attached to an AI role.
+
+    Analogous to a rules/*.md file in Claude's system.
+    Rules are injected into the prompt after the system prompt.
+    """
+
+    __tablename__ = "ai_role_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_roles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="Rule name (e.g., no_dosage_advice)",
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(300), nullable=True, comment="Short description of this rule",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Full rule text injected into prompt",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, default=0, comment="Order in which rules appear in prompt",
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    role: Mapped["AiRole"] = relationship("AiRole", back_populates="rules")
+
+
+class AiRoleSkill(Base):
+    """A skill/capability attached to an AI role.
+
+    Describes what the AI can do in this role (e.g., drug search,
+    store lookup, price comparison). Injected into the prompt.
+    """
+
+    __tablename__ = "ai_role_skills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_roles.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="Skill name (e.g., drug_search)",
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(300), nullable=True, comment="Short description of this skill",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Skill definition/instructions injected into prompt",
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    role: Mapped["AiRole"] = relationship("AiRole", back_populates="skills")
+
+
+class UserMemory(Base):
+    """Per-user AI memory — stores conversation context across sessions.
+
+    Analogous to a CLAUDE.md project file per client. Auto-updated by
+    the AI after conversations, also editable by admins.
+    """
+
+    __tablename__ = "user_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True,
+    )
+    memory_text: Mapped[str] = mapped_column(
+        Text, nullable=False, default="",
+        comment="Markdown-formatted memory (preferences, history, medical context)",
+    )
+    updated_by: Mapped[str] = mapped_column(
+        String(20), default="ai",
+        comment="Who last updated: ai or admin",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", backref="memory", uselist=False)
+
+
 class SearchLog(Base):
     """Log of user searches for analytics."""
 

@@ -1,19 +1,17 @@
-"""Intent detection — DB keywords first, LLM fallback for complex messages.
+"""Intent detection — DB keywords first, AI responder fallback for complex messages.
 
 Flow:
 1. Check DB keyword table for exact match (cached, instant)
 2. If message looks like a drug name (short, no question marks) — treat as drug search
-3. If ambiguous or conversational — call Claude Haiku to classify + extract profile data
+3. If ambiguous or conversational — delegate to AI responder (classify_with_ai)
 """
 
 import logging
 import time
 from dataclasses import dataclass
 
-import anthropic
 from sqlalchemy import select
 
-from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
 from farmafacil.db.session import async_session
 from farmafacil.models.database import IntentKeyword
 
@@ -113,105 +111,40 @@ async def classify_intent_keywords(text: str) -> Intent | None:
     return None
 
 
-async def classify_intent_llm(text: str) -> Intent:
-    """Use Claude Haiku to classify intent and extract profile data.
+async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
+    """Use AI responder to classify intent and extract profile data.
+
+    Delegates to the role-based AI system which loads its system prompt
+    from the database (editable via admin UI).
 
     Args:
         text: User message text.
+        user_id: The user's database ID.
+        user_name: The user's display name.
 
     Returns:
         Classified intent with optional drug name, name, location, or response.
     """
-    if not ANTHROPIC_API_KEY:
-        logger.warning("No ANTHROPIC_API_KEY set — falling back to drug search")
-        return Intent(action="drug_search", drug_query=text.strip())
+    from farmafacil.services.ai_responder import classify_with_ai
 
-    system_prompt = """Eres FarmaFacil, un asistente de WhatsApp que ayuda a personas en Venezuela a encontrar medicamentos en farmacias cercanas.
+    ai_result = await classify_with_ai(text, user_id, user_name)
 
-Tu personalidad: amigable, servicial, empático. Hablas español venezolano natural. Eres conciso (esto es WhatsApp).
-
-INSTRUCCIONES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
-
-FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
-ACTION: [greeting|drug_search|question|unknown]
-DRUG: [nombre del medicamento o producto tal como lo escribió el usuario. Si da un nombre específico de producto, mantenerlo completo. Solo simplificar si describe síntomas.]
-NAME: [nombre de la persona si se presenta]
-LOCATION: [zona/barrio/ciudad si menciona ubicación]
-RESPONSE: [respuesta conversacional si es una pregunta]
-
-EJEMPLOS:
-- "Hola soy María de Chacao, busco losartan" →
-  ACTION: drug_search
-  DRUG: losartan
-  NAME: María
-  LOCATION: Chacao
-
-- "necesito algo para el dolor de cabeza" →
-  ACTION: drug_search
-  DRUG: acetaminofen
-
-- "Me llamo José" →
-  ACTION: greeting
-  NAME: José
-
-- "estoy en La Boyera" →
-  ACTION: greeting
-  LOCATION: La Boyera
-
-- "hola buenas tardes" →
-  ACTION: greeting
-
-- "para qué sirve el losartán?" →
-  ACTION: question
-  RESPONSE: El losartán es un medicamento para tratar la presión arterial alta (hipertensión). Lo recetan frecuentemente en Venezuela. Consulta con tu médico para la dosis adecuada. Si quieres, envíame "losartan" y te busco dónde está disponible.
-
-- "me duele la garganta" →
-  ACTION: drug_search
-  DRUG: ibuprofeno
-
-- "dame precios de RESVERATROL NAD+VID CAP 125MG X60 HERB" →
-  ACTION: drug_search
-  DRUG: RESVERATROL NAD+VID CAP 125MG X60 HERB
-
-- "busco Losartán Potásico 50mg Biumak Caja x 30" →
-  ACTION: drug_search
-  DRUG: Losartán Potásico 50mg Biumak Caja x 30
-
-- "donde queda la farmacia Tepuy?" →
-  ACTION: question
-  RESPONSE: La farmacia Farmatodo TEPUY está ubicada en la Av. Río de Janeiro con Calle Monterrey, Urb. Las Mercedes, Caracas. Puedes buscar cualquier medicamento y te digo si está disponible allí.
-
-REGLAS:
-- Si el usuario da un nombre ESPECÍFICO de producto (con dosis, marca, presentación), usa ese nombre COMPLETO en DRUG — NO lo simplifiques
-- Si mencionan síntomas, traduce al medicamento genérico más probable
-- Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
-- Si preguntan sobre salud, responde brevemente (2-3 oraciones) y recuérdales que pueden buscar medicamentos
-- NO diagnostiques ni recomiendes dosis — sugiere consultar al médico
-- Si no entiendes: ACTION: unknown"""
-
-    try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=LLM_MODEL,
-            max_tokens=500,
-            system=system_prompt,
-            messages=[{"role": "user", "content": text}],
-        )
-        reply = response.content[0].text.strip()
-        logger.info("LLM intent for '%s': %s", text[:50], reply[:200])
-
-        return _parse_llm_response(reply)
-
-    except Exception:
-        logger.error("LLM classification failed", exc_info=True)
-        return Intent(action="drug_search", drug_query=text.strip())
+    return Intent(
+        action=ai_result.action,
+        drug_query=ai_result.drug_query,
+        response_text=ai_result.text if ai_result.text else None,
+        detected_name=ai_result.detected_name,
+        detected_location=ai_result.detected_location,
+    )
 
 
-async def classify_intent(text: str) -> Intent:
-    """Classify user intent — DB keywords first, LLM fallback.
+async def classify_intent(text: str, user_id: int = 0, user_name: str = "") -> Intent:
+    """Classify user intent — DB keywords first, AI fallback.
 
     Args:
         text: User message text.
+        user_id: The user's database ID (for AI fallback).
+        user_name: The user's display name (for AI fallback).
 
     Returns:
         Classified Intent.
@@ -222,31 +155,6 @@ async def classify_intent(text: str) -> Intent:
         logger.debug("Keyword intent: %s for '%s'", intent.action, text[:50])
         return intent
 
-    # Ambiguous — use LLM
-    logger.info("Keyword detection inconclusive for '%s' — calling LLM", text[:50])
-    return await classify_intent_llm(text)
-
-
-def _parse_llm_response(reply: str) -> Intent:
-    """Parse the structured LLM response into an Intent."""
-    fields: dict[str, str] = {}
-    for line in reply.strip().split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, _, value = line.partition(":")
-            key = key.strip().upper()
-            value = value.strip()
-            if key in ("ACTION", "DRUG", "NAME", "LOCATION", "RESPONSE"):
-                fields[key] = value
-
-    action = fields.get("ACTION", "unknown").lower()
-    if action not in ("greeting", "drug_search", "question", "unknown"):
-        action = "question" if fields.get("RESPONSE") else "unknown"
-
-    return Intent(
-        action=action,
-        drug_query=fields.get("DRUG"),
-        response_text=fields.get("RESPONSE"),
-        detected_name=fields.get("NAME"),
-        detected_location=fields.get("LOCATION"),
-    )
+    # Ambiguous — use AI responder
+    logger.info("Keyword detection inconclusive for '%s' — calling AI", text[:50])
+    return await classify_intent_ai(text, user_id, user_name)
