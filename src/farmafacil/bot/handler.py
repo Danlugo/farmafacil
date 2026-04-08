@@ -11,6 +11,12 @@ from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
+from farmafacil.services.search_feedback import (
+    log_search,
+    parse_feedback,
+    record_feedback,
+    record_feedback_detail,
+)
 from farmafacil.services.settings import get_setting, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
@@ -77,6 +83,11 @@ MSG_ASK_NEW_PREFERENCE = (
     "*1.* \U0001f4f8 *Imagen grande*\n*2.* \U0001f5bc *Galeria*\n\nResponde *1* o *2*"
 )
 MSG_ASK_NEW_NAME = "Como te llamas?"
+
+MSG_ASK_FEEDBACK = "\u00bfTe sirvi\u00f3? (s\u00ed/no)"
+MSG_FEEDBACK_THANKS = "\u00a1Gracias por tu respuesta! \U0001f44d"
+MSG_FEEDBACK_SORRY = "Lamento eso. \u00bfQu\u00e9 buscabas exactamente o qu\u00e9 estuvo mal?"
+MSG_FEEDBACK_DETAIL_THANKS = "Gracias por explicarnos. Vamos a mejorar. \U0001f4aa"
 
 MSG_NEED_LOCATION = (
     "{name}, necesito saber tu ubicacion para buscarte farmacias cercanas.\n\n"
@@ -180,6 +191,33 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             )
         else:
             await send_text_message(sender, MSG_INVALID_PREFERENCE)
+        return
+
+    if step == "awaiting_feedback":
+        feedback = parse_feedback(text)
+        if feedback == "yes":
+            if user.last_search_log_id:
+                await record_feedback(user.last_search_log_id, "yes")
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_FEEDBACK_THANKS)
+        elif feedback == "no":
+            if user.last_search_log_id:
+                await record_feedback(user.last_search_log_id, "no")
+            await set_onboarding_step(sender, "awaiting_feedback_detail")
+            await send_text_message(sender, MSG_FEEDBACK_SORRY)
+        else:
+            # Not a feedback response — clear step and process normally
+            await set_onboarding_step(sender, None)
+            # Fall through to normal message handling below
+            step = None
+        if feedback is not None:
+            return
+
+    if step == "awaiting_feedback_detail":
+        if user.last_search_log_id:
+            await record_feedback_detail(user.last_search_log_id, text)
+        await set_onboarding_step(sender, None)
+        await send_text_message(sender, MSG_FEEDBACK_DETAIL_THANKS)
         return
 
     # ── Onboarding complete — smart conversational flow ─────────────────
@@ -304,6 +342,8 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 async def _handle_drug_search(sender: str, user, query: str, display_name: str) -> None:
     """Perform a drug search and send results to the user.
 
+    After showing results, asks for feedback: "¿Te sirvió? (sí/no)".
+
     Args:
         sender: WhatsApp phone number.
         user: User record with location and preferences.
@@ -311,7 +351,6 @@ async def _handle_drug_search(sender: str, user, query: str, display_name: str) 
         display_name: User's display name.
     """
     logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
-    await update_last_search(sender, query)
     response = await search_drug(
         query=query,
         city_code=user.city_code,
@@ -319,6 +358,12 @@ async def _handle_drug_search(sender: str, user, query: str, display_name: str) 
         longitude=user.longitude,
         zone_name=user.zone_name,
     )
+
+    # Log the search and save the log ID for feedback tracking
+    results_count = len(response.results) if response.results else 0
+    search_log_id = await log_search(user.id, query, results_count)
+    await update_last_search(sender, query, search_log_id)
+
     # Send grid/detail image FIRST, then text summary below
     if response.results:
         if user.display_preference == "detail":
@@ -328,6 +373,10 @@ async def _handle_drug_search(sender: str, user, query: str, display_name: str) 
 
     reply = format_search_results(response)
     await send_text_message(sender, reply)
+
+    # Ask for feedback
+    await set_onboarding_step(sender, "awaiting_feedback")
+    await send_text_message(sender, MSG_ASK_FEEDBACK)
 
 
 async def _try_store_lookup(text: str) -> object | None:

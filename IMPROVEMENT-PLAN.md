@@ -70,6 +70,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files modified:** `models/database.py` (User.response_mode column + __repr__ methods), `services/settings.py` (response_mode default + resolve_response_mode), `bot/handler.py` (ai_only routing + _handle_drug_search helper), `api/admin.py` (response_mode in User admin)
 - **Files created:** `tests/test_response_mode.py` (11 tests)
 
+### Item 7: Search Feedback Loop
+
+- **Status:** DONE
+- **Added:** 2026-04-08
+- **Completed:** 2026-04-08
+- **Problem:** No way to validate whether drug search results were useful. Need a feedback mechanism to measure success and improve.
+- **Solution implemented:** After every drug search, bot asks "¿Te sirvió? (sí/no)". Positive feedback is logged. Negative feedback triggers follow-up "¿Qué buscabas exactamente?" and records the detail. All feedback stored in `search_logs.feedback` and `search_logs.feedback_detail`. Users can also skip feedback by sending a normal message (falls through to regular handling).
+- **Files created:** `services/search_feedback.py`, `tests/test_search_feedback.py` (18 tests)
+- **Files modified:** `models/database.py` (feedback/feedback_detail on SearchLog, last_search_log_id on User), `bot/handler.py` (feedback flow + MSG constants), `services/users.py` (update_last_search accepts search_log_id), `api/admin.py` (feedback column in SearchLog admin)
+
 ---
 
 ## P3 — Low

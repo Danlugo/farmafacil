@@ -61,6 +61,10 @@ class User(Base):
         String(300), nullable=True,
         comment="Last drug search query for 'ver similares' feature",
     )
+    last_search_log_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="ID of the most recent search_logs entry (for feedback)",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -479,5 +483,13 @@ class SearchLog(Base):
     results_count: Mapped[int] = mapped_column(Integer, default=0)
     source: Mapped[str] = mapped_column(
         String(50), default="whatsapp", comment="api, whatsapp, web",
+    )
+    feedback: Mapped[str | None] = mapped_column(
+        String(10), nullable=True,
+        comment="User feedback: yes, no, or NULL (no response)",
+    )
+    feedback_detail: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="User explanation when feedback is negative",
     )
     searched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

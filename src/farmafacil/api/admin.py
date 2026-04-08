@@ -433,6 +433,7 @@ class SearchLogAdmin(ModelView, model=SearchLog):
         SearchLog.user_id,
         SearchLog.query,
         SearchLog.results_count,
+        SearchLog.feedback,
         SearchLog.source,
         SearchLog.searched_at,
     ]
@@ -450,6 +451,8 @@ class SearchLogAdmin(ModelView, model=SearchLog):
         "user_id": "User ID",
         "query": "Search Query",
         "results_count": "Results Found",
+        "feedback": "Feedback",
+        "feedback_detail": "Feedback Detail",
         "source": "Source",
         "searched_at": "Searched At",
     }
