@@ -57,6 +57,10 @@ class User(Base):
         String(20), nullable=True, default=None,
         comment="Override response mode: NULL=use global, hybrid, ai_only",
     )
+    chat_debug: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, default=None,
+        comment="Override chat debug: NULL=use global, enabled, disabled",
+    )
     last_search_query: Mapped[str | None] = mapped_column(
         String(300), nullable=True,
         comment="Last drug search query for 'ver similares' feature",

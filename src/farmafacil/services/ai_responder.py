@@ -33,6 +33,8 @@ class AiResponse:
     drug_query: str | None = None
     detected_name: str | None = None
     detected_location: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 # ── Hardcoded fallback prompt (safety net if no roles in DB) ──────────
@@ -89,7 +91,9 @@ async def generate_response(
         logger.warning("No AI roles in DB — using hardcoded fallback prompt")
 
     # 5. Call the LLM
-    response_text = await _call_llm(system_prompt, message, user_name)
+    response_text, input_tokens, output_tokens = await _call_llm(
+        system_prompt, message, user_name
+    )
 
     # 6. Schedule async memory update (don't block the response)
     try:
@@ -97,7 +101,12 @@ async def generate_response(
     except Exception:
         logger.error("Memory update failed (non-blocking)", exc_info=True)
 
-    return AiResponse(text=response_text, role_used=role_used)
+    return AiResponse(
+        text=response_text,
+        role_used=role_used,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 async def classify_with_ai(message: str, user_id: int, user_name: str) -> AiResponse:
@@ -164,6 +173,8 @@ REGLAS:
 
         parsed = _parse_structured_response(reply)
         parsed.role_used = role.name if role else "fallback"
+        parsed.input_tokens = response.usage.input_tokens
+        parsed.output_tokens = response.usage.output_tokens
         return parsed
 
     except Exception:
@@ -176,7 +187,9 @@ REGLAS:
         )
 
 
-async def _call_llm(system_prompt: str, message: str, user_name: str) -> str:
+async def _call_llm(
+    system_prompt: str, message: str, user_name: str,
+) -> tuple[str, int, int]:
     """Make the LLM call with the assembled prompt.
 
     Args:
@@ -185,11 +198,11 @@ async def _call_llm(system_prompt: str, message: str, user_name: str) -> str:
         user_name: The user's display name (for context).
 
     Returns:
-        The LLM response text.
+        Tuple of (response_text, input_tokens, output_tokens).
     """
     if not ANTHROPIC_API_KEY:
         logger.warning("No ANTHROPIC_API_KEY — cannot generate AI response")
-        return "Lo siento, no puedo responder en este momento. Enviame el nombre de un medicamento para buscar."
+        return ("Lo siento, no puedo responder en este momento. Enviame el nombre de un medicamento para buscar.", 0, 0)
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -204,11 +217,15 @@ async def _call_llm(system_prompt: str, message: str, user_name: str) -> str:
                 }
             ],
         )
-        return response.content[0].text.strip()
+        return (
+            response.content[0].text.strip(),
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
 
     except Exception:
         logger.error("LLM call failed", exc_info=True)
-        return "Lo siento, tuve un error. Enviame el nombre de un medicamento para buscar."
+        return ("Lo siento, tuve un error. Enviame el nombre de un medicamento para buscar.", 0, 0)
 
 
 def _parse_structured_response(reply: str) -> AiResponse:

@@ -1,6 +1,6 @@
 # FarmaFacil — WhatsApp Bot Conversation Flow
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-04-08
 
 ## Overview
 
@@ -193,3 +193,56 @@ Any registered user can update their profile at any time:
 | "cambiar nombre" | Enters awaiting_name step |
 
 These are managed via the `intent_keywords` table and can be extended via `POST /api/v1/intents`.
+
+---
+
+## Search Feedback
+
+After every drug search, the bot asks "¿Te sirvió? (sí/no)". The flow uses `onboarding_step` to track state:
+
+| Step | User sends | Bot behavior |
+|------|-----------|-------------|
+| `awaiting_feedback` | "sí", "ok", "👍", etc. | Records positive feedback, thanks user |
+| `awaiting_feedback` | "no", "👎", "nada", etc. | Records negative feedback, asks follow-up |
+| `awaiting_feedback` | anything else | Clears step, processes as normal message |
+| `awaiting_feedback_detail` | any text | Records detail, thanks user |
+
+Feedback is stored in `search_logs.feedback` (yes/no) and `search_logs.feedback_detail` (free text).
+
+---
+
+## Response Mode
+
+The bot supports two response modes, controlled globally via `app_settings.response_mode` and overridable per-user via `users.response_mode`:
+
+| Mode | Behavior |
+|------|----------|
+| `hybrid` (default) | Keywords + preset answers first, LLM for complex questions |
+| `ai_only` | Everything goes through AI classifier — no keyword routing |
+
+Resolution: user override → global setting → fallback to `hybrid`.
+
+---
+
+## Chat Debug Mode
+
+When enabled, the bot appends a debug footer to every AI-powered response showing:
+
+```
+---
+🔧 DEBUG
+ai model: claude-haiku-4-5-20251001
+ai role: pharmacy_advisor
+tokens: 142 in / 87 out
+total questions: 23
+total success: 8
+```
+
+Controlled via `app_settings.chat_debug` (global) and `users.chat_debug` (per-user override).
+
+| Setting | Values |
+|---------|--------|
+| Global | `enabled` / `disabled` (default: disabled) |
+| Per-user | `enabled` / `disabled` / NULL (NULL = use global) |
+
+Resolution: user override → global setting → fallback to `disabled`.

@@ -17,7 +17,8 @@ from farmafacil.services.search_feedback import (
     record_feedback,
     record_feedback_detail,
 )
-from farmafacil.services.settings import get_setting, resolve_response_mode
+from farmafacil.services.chat_debug import build_debug_footer, get_user_stats
+from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
     get_or_create_user,
@@ -222,9 +223,11 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # ── Onboarding complete — smart conversational flow ─────────────────
 
-    # Resolve response mode: user override → global setting
+    # Resolve response mode and debug mode: user override → global setting
     global_mode = await get_setting("response_mode")
+    global_debug = await get_setting("chat_debug")
     mode = resolve_response_mode(user.response_mode, global_mode)
+    debug_on = resolve_chat_debug(user.chat_debug, global_debug)
     display_name = user.name or "amigo"
 
     # AI-only mode — bypass keyword routing, send everything to AI
@@ -241,15 +244,24 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
                     sender, MSG_NEED_LOCATION.format(name=display_name)
                 )
                 return
-            await _handle_drug_search(sender, user, ai_result.drug_query, display_name)
+            await _handle_drug_search(
+                sender, user, ai_result.drug_query, display_name,
+                debug_on=debug_on, ai_result=ai_result,
+            )
             return
 
         # For all other actions, generate a full AI response
         if ai_result.text:
-            await send_text_message(sender, ai_result.text)
+            reply = ai_result.text
+            tokens_ai = ai_result
         else:
             full_result = await generate_response(text, user.id, display_name)
-            await send_text_message(sender, full_result.text)
+            reply = full_result.text
+            tokens_ai = full_result
+
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tokens_ai)
+        await send_text_message(sender, reply)
         return
 
     # ── Hybrid mode — check keywords first, AI fallback ───────────────
@@ -319,7 +331,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             return
 
         query = intent.drug_query or text
-        await _handle_drug_search(sender, user, query, display_name)
+        await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)
 
     elif intent.action == "question":
         # Check if the question is about a pharmacy store
@@ -330,16 +342,29 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             # Use AI responder for complex questions
             ai_result = await generate_response(text, user.id, display_name)
             logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
-            await send_text_message(sender, ai_result.text)
+            reply = ai_result.text
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
 
     else:
         # Unknown intent — try AI responder before giving up
         ai_result = await generate_response(text, user.id, display_name)
         logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
-        await send_text_message(sender, ai_result.text)
+        reply = ai_result.text
+        if debug_on:
+            reply += await _build_debug(sender, user.id, ai_result)
+        await send_text_message(sender, reply)
 
 
-async def _handle_drug_search(sender: str, user, query: str, display_name: str) -> None:
+async def _handle_drug_search(
+    sender: str,
+    user,
+    query: str,
+    display_name: str,
+    debug_on: bool = False,
+    ai_result=None,
+) -> None:
     """Perform a drug search and send results to the user.
 
     After showing results, asks for feedback: "¿Te sirvió? (sí/no)".
@@ -349,6 +374,8 @@ async def _handle_drug_search(sender: str, user, query: str, display_name: str) 
         user: User record with location and preferences.
         query: Drug name or search term.
         display_name: User's display name.
+        debug_on: Whether to append debug footer.
+        ai_result: AiResponse from classification (for token stats).
     """
     logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
     response = await search_drug(
@@ -372,6 +399,8 @@ async def _handle_drug_search(sender: str, user, query: str, display_name: str) 
             await _send_grid_image(sender, response)
 
     reply = format_search_results(response)
+    if debug_on:
+        reply += await _build_debug(sender, user.id, ai_result)
     await send_text_message(sender, reply)
 
     # Ask for feedback
@@ -480,6 +509,30 @@ def _build_product_caption(result: DrugResult) -> str:
         closest = result.nearby_stores[0]
         lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")
     return "\n".join(lines)
+
+
+async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
+    """Build a debug footer from AI response and user stats.
+
+    Args:
+        sender: WhatsApp phone number.
+        user_id: User database ID.
+        ai_result: AiResponse with role_used and token counts (optional).
+
+    Returns:
+        Formatted debug footer string.
+    """
+    stats = await get_user_stats(sender, user_id)
+    role = getattr(ai_result, "role_used", "keyword") if ai_result else "keyword"
+    in_tok = getattr(ai_result, "input_tokens", 0) if ai_result else 0
+    out_tok = getattr(ai_result, "output_tokens", 0) if ai_result else 0
+    return build_debug_footer(
+        role_used=role,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        total_questions=stats["total_questions"],
+        total_success=stats["total_success"],
+    )
 
 
 async def _handle_view_similar(sender: str, user) -> None:

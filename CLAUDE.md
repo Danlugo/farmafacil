@@ -60,14 +60,14 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (235 tests) |
+| `tests/` | pytest test suite (246 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Phone, name, location, display preference, response mode override, last search log ID, onboarding step |
+| `users` | Phone, name, location, display preference, response mode override, chat debug override, last search log ID, onboarding step |
 | `intent_keywords` | Bot keyword→action mappings (admin-editable) |
 | `pharmacy_locations` | Physical store locations (generic, multi-chain) |
 | `products` | Permanent product catalog (never deleted, only upserted) |
