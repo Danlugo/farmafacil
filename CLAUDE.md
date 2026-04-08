@@ -19,11 +19,11 @@ uvicorn farmafacil.api.app:app --reload
 pytest
 ```
 
-## Production Deployment (10.0.0.114)
+## Production Deployment (10.0.0.116)
 
 ```bash
 # SSH to server
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116
 
 # Deploy
 cd ~/workspace/farmafacil && git pull
@@ -35,7 +35,7 @@ curl http://localhost:8100/health
 docker compose logs -f app
 ```
 
-**Server:** 10.0.0.114 (Linux Mint, 32GB RAM, Docker 29.1)
+**Server:** 10.0.0.116 (Linux Mint, 32GB RAM, Docker 29.1)
 **Ports:** App=8100, Postgres=5433, ngrok=4040
 **ngrok URL:** https://amparo-chromophoric-christia.ngrok-free.dev
 

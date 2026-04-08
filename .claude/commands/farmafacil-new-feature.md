@@ -15,7 +15,7 @@ Implement a new feature described by the user, add it to `IMPROVEMENT-PLAN.md`, 
 - **LLM**: Claude Haiku for intent detection
 - **Admin**: SQLAdmin dashboard at /admin (auth-protected)
 - **Tests**: pytest + pytest-asyncio (`.venv/bin/python -m pytest`)
-- **Production server**: 10.0.0.114 (Docker Compose, ports: app=8100, postgres=5433)
+- **Production server**: 10.0.0.116 (Docker Compose, ports: app=8100, postgres=5433)
 - **ngrok tunnel**: amparo-chromophoric-christia.ngrok-free.dev
 - **Version**: read from `src/farmafacil/__init__.py` → `__version__`
 
@@ -94,7 +94,7 @@ Implement a new feature described by the user, add it to `IMPROVEMENT-PLAN.md`, 
 ### 10. Deploy to production
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114 \
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116 \
   "cd ~/workspace/farmafacil && git pull && docker compose build --no-cache && docker compose down && docker compose up -d"
 ```
 
@@ -102,10 +102,10 @@ ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114 \
 
 ```bash
 # Health check
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114 "curl -s http://localhost:8100/health"
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116 "curl -s http://localhost:8100/health"
 
 # Check logs for errors
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.114 "cd ~/workspace/farmafacil && docker compose logs --tail=20 app"
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116 "cd ~/workspace/farmafacil && docker compose logs --tail=20 app"
 ```
 
 - Health endpoint must return `{"status":"ok"}`

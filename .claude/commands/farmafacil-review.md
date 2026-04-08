@@ -14,7 +14,7 @@ This is a **review-only** skill. You do NOT implement changes. You analyze, diag
 - **Source**: `src/farmafacil/` — api/, bot/, scrapers/, services/, models/, db/, config.py
 - **Tests**: `tests/*.py` (pytest + pytest-asyncio, 71+ tests)
 - **Docs**: `CLAUDE.md`, `docs/` (architecture.md, api-reference.md, bot-flow.md, deployment.md, troubleshooting.md, adding-pharmacies.md)
-- **Production**: Docker on 10.0.0.114, ngrok tunnel for WhatsApp webhooks
+- **Production**: Docker on 10.0.0.116, ngrok tunnel for WhatsApp webhooks
 - **Key external services**: Farmatodo Algolia API, WhatsApp Business Cloud API, OpenStreetMap Nominatim, Claude Haiku (Anthropic)
 
 ## Steps
@@ -41,7 +41,7 @@ PROJECT CONTEXT:
 - Database: 10 tables (users, products, product_prices, search_queries, intent_keywords, pharmacy_locations, app_settings, conversation_logs, search_logs, product_cache[deprecated])
 - External APIs: Farmatodo Algolia (drug search), WhatsApp Business Cloud API (Meta), OpenStreetMap Nominatim (geocoding), Claude Haiku (intent detection)
 - Tests: tests/ directory, pytest + pytest-asyncio
-- Production: Docker Compose (app + postgres:16) on 10.0.0.114, ngrok for HTTPS tunnel
+- Production: Docker Compose (app + postgres:16) on 10.0.0.116, ngrok for HTTPS tunnel
 - Admin: SQLAdmin at /admin with username/password auth
 - Read CLAUDE.md first for full context
 - [FOCUS AREA: {user's focus if provided, otherwise "full-spectrum review"}]

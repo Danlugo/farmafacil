@@ -213,7 +213,7 @@ WhatsApp messages from users don't trigger any bot response and nothing appears 
 
 1. **ngrok running?**
    ```bash
-   curl http://10.0.0.114:4040/api/tunnels
+   curl http://10.0.0.116:4040/api/tunnels
    ```
    Should return the active tunnel URL.
 
