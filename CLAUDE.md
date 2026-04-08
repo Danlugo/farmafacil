@@ -2,6 +2,14 @@
 
 Venezuela pharmacy drug finder with WhatsApp integration.
 
+## Rules
+
+- ALWAYS be truthful with the user. Provide facts, proof of work, and analysis. Never guess or assume.
+- If something failed, say it failed. If you didn't verify something, say so.
+- Include actual command output or logs as evidence of completed work.
+- If you're uncertain about something, state that explicitly rather than presenting assumptions as facts.
+- Never report a deployment, test run, or operation as successful without showing the actual output that proves it.
+
 ## Quick Start (Local Dev)
 
 ```bash
