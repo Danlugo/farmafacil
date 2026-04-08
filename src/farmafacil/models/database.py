@@ -53,6 +53,10 @@ class User(Base):
         String(30), nullable=True, default="awaiting_name",
         comment="Current onboarding step (NULL = complete)",
     )
+    response_mode: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, default=None,
+        comment="Override response mode: NULL=use global, hybrid, ai_only",
+    )
     last_search_query: Mapped[str | None] = mapped_column(
         String(300), nullable=True,
         comment="Last drug search query for 'ver similares' feature",
@@ -61,6 +65,11 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    def __repr__(self) -> str:
+        """Return user name and phone for admin UI display."""
+        label = self.name or self.phone_number
+        return f"{label} ({self.phone_number})" if self.name else self.phone_number
 
 
 class Pharmacy(Base):
@@ -352,6 +361,9 @@ class AiRole(Base):
         order_by="AiRoleSkill.name",
     )
 
+    def __repr__(self) -> str:
+        return self.display_name or self.name
+
 
 class AiRoleRule(Base):
     """A behavioral rule attached to an AI role.
@@ -387,6 +399,9 @@ class AiRoleRule(Base):
 
     role: Mapped["AiRole"] = relationship("AiRole", back_populates="rules")
 
+    def __repr__(self) -> str:
+        return self.name
+
 
 class AiRoleSkill(Base):
     """A skill/capability attached to an AI role.
@@ -418,6 +433,9 @@ class AiRoleSkill(Base):
     )
 
     role: Mapped["AiRole"] = relationship("AiRole", back_populates="skills")
+
+    def __repr__(self) -> str:
+        return self.name
 
 
 class UserMemory(Base):

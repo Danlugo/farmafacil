@@ -16,6 +16,7 @@ DEFAULTS: dict[str, tuple[str, str]] = {
     "max_grid_products": ("6", "Maximum products in grid image"),
     "max_detail_products": ("3", "Maximum products in detail image mode"),
     "store_backfill_interval_hours": ("24", "How often to refresh store locations (hours)"),
+    "response_mode": ("hybrid", "Bot response mode: hybrid (keywords+AI) or ai_only (all AI)"),
 }
 
 
@@ -57,3 +58,27 @@ async def get_setting(key: str) -> str:
 async def get_setting_int(key: str) -> int:
     """Get a setting as integer."""
     return int(await get_setting(key))
+
+
+_VALID_MODES = {"hybrid", "ai_only"}
+
+
+def resolve_response_mode(user_mode: str | None, global_mode: str) -> str:
+    """Resolve the effective response mode for a user.
+
+    User override takes priority over the global setting.
+    Invalid values fall back to 'hybrid' with a warning.
+
+    Args:
+        user_mode: The user's response_mode (None = use global).
+        global_mode: The global app setting.
+
+    Returns:
+        'hybrid' or 'ai_only'.
+    """
+    if user_mode in _VALID_MODES:
+        return user_mode
+    if global_mode not in _VALID_MODES:
+        logger.warning("Invalid global response_mode '%s' — defaulting to hybrid", global_mode)
+        return "hybrid"
+    return global_mode

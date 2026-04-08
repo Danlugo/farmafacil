@@ -52,21 +52,21 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (206 tests) |
+| `tests/` | pytest test suite (217 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Phone, name, location, display preference, onboarding step |
+| `users` | Phone, name, location, display preference, response mode override, onboarding step |
 | `intent_keywords` | Bot keyword→action mappings (admin-editable) |
 | `pharmacy_locations` | Physical store locations (generic, multi-chain) |
 | `products` | Permanent product catalog (never deleted, only upserted) |
 | `product_prices` | Per-location pricing with refresh timestamps (FK → products) |
 | `search_queries` | Maps search query + city to product IDs for cache lookups |
 | `product_cache` | DEPRECATED — legacy cache (replaced by products/product_prices/search_queries) |
-| `app_settings` | Admin-editable config (cache TTL, etc.) |
+| `app_settings` | Admin-editable config (cache TTL, response mode, etc.) |
 | `conversation_logs` | Every inbound/outbound WhatsApp message |
 | `search_logs` | Search analytics |
 | `ai_roles` | AI personas with system prompts (admin-editable) |

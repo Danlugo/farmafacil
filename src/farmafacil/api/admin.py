@@ -43,6 +43,7 @@ class UserAdmin(ModelView, model=User):
         User.zone_name,
         User.city_code,
         User.display_preference,
+        User.response_mode,
         User.onboarding_step,
         User.created_at,
     ]
@@ -64,6 +65,7 @@ class UserAdmin(ModelView, model=User):
         "zone_name": "Zone / Neighborhood",
         "city_code": "City Code",
         "display_preference": "Display Preference",
+        "response_mode": "Response Mode",
         "onboarding_step": "Onboarding Step",
         "created_at": "Created",
         "updated_at": "Updated",

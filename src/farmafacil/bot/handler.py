@@ -11,6 +11,7 @@ from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
 from farmafacil.services.search import search_drug
+from farmafacil.services.settings import get_setting, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
     get_or_create_user,
@@ -183,6 +184,38 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # ── Onboarding complete — smart conversational flow ─────────────────
 
+    # Resolve response mode: user override → global setting
+    global_mode = await get_setting("response_mode")
+    mode = resolve_response_mode(user.response_mode, global_mode)
+    display_name = user.name or "amigo"
+
+    # AI-only mode — bypass keyword routing, send everything to AI
+    if mode == "ai_only":
+        logger.info("AI-only mode for %s — routing to AI classifier", sender)
+        ai_result = await classify_with_ai(text, user.id, display_name)
+        logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
+
+        # If AI detects a drug search, perform it
+        if ai_result.action == "drug_search" and ai_result.drug_query:
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            await _handle_drug_search(sender, user, ai_result.drug_query, display_name)
+            return
+
+        # For all other actions, generate a full AI response
+        if ai_result.text:
+            await send_text_message(sender, ai_result.text)
+        else:
+            full_result = await generate_response(text, user.id, display_name)
+            await send_text_message(sender, full_result.text)
+        return
+
+    # ── Hybrid mode — check keywords first, AI fallback ───────────────
+
     # Check change commands via DB keywords (before LLM call)
     cache = await _get_keyword_cache()
     if text_lower in cache:
@@ -208,7 +241,6 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # Classify intent (keywords first, AI fallback)
     intent = await classify_intent(text, user.id, user.name or "")
-    display_name = user.name or "amigo"
 
     # Auto-update profile if LLM detected new info
     if intent.detected_name and intent.detected_name != user.name:
@@ -249,24 +281,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             return
 
         query = intent.drug_query or text
-        logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
-        await update_last_search(sender, query)
-        response = await search_drug(
-            query=query,
-            city_code=user.city_code,
-            latitude=user.latitude,
-            longitude=user.longitude,
-            zone_name=user.zone_name,
-        )
-        # Send grid/detail image FIRST, then text summary below
-        if response.results:
-            if user.display_preference == "detail":
-                await _send_detail_images(sender, response.results)
-            else:
-                await _send_grid_image(sender, response)
-
-        reply = format_search_results(response)
-        await send_text_message(sender, reply)
+        await _handle_drug_search(sender, user, query, display_name)
 
     elif intent.action == "question":
         # Check if the question is about a pharmacy store
@@ -284,6 +299,35 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         ai_result = await generate_response(text, user.id, display_name)
         logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
         await send_text_message(sender, ai_result.text)
+
+
+async def _handle_drug_search(sender: str, user, query: str, display_name: str) -> None:
+    """Perform a drug search and send results to the user.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with location and preferences.
+        query: Drug name or search term.
+        display_name: User's display name.
+    """
+    logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
+    await update_last_search(sender, query)
+    response = await search_drug(
+        query=query,
+        city_code=user.city_code,
+        latitude=user.latitude,
+        longitude=user.longitude,
+        zone_name=user.zone_name,
+    )
+    # Send grid/detail image FIRST, then text summary below
+    if response.results:
+        if user.display_preference == "detail":
+            await _send_detail_images(sender, response.results)
+        else:
+            await _send_grid_image(sender, response)
+
+    reply = format_search_results(response)
+    await send_text_message(sender, reply)
 
 
 async def _try_store_lookup(text: str) -> object | None:
