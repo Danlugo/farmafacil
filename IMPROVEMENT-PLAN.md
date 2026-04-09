@@ -49,14 +49,23 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Notes:** Investigated 2026-04-09: DNS SERVFAIL on farmahorro.com.ve, wxana.com returns 403, xana.com returns 403. Wikipedia confirms dissolution in 2025. No viable API to scrape.
 - **Replacement:** See Item 17 (Farmarebajas Scraper) — discovered during investigation as a viable alternative with a public WooCommerce Store API.
 
-### Item 17: Farmarebajas Scraper (WooCommerce)
+### Item 17: 4th Pharmacy Scraper
 
-- **Status:** PENDING
+- **Status:** DEFERRED
 - **Added:** 2026-04-09
-- **Problem:** With Farmahorro closed (Item 4), FarmaFacil needs a 4th pharmacy data source. Farmarebajas (farmarebajas.com) is an active Venezuelan online pharmacy with 60+ years of experience, offering medicines, health, beauty, and wellness products with delivery.
-- **Suggested solution:** Create `src/farmafacil/scrapers/farmarebajas.py` subclassing `BaseScraper`. Uses WooCommerce Store API (public, no auth): `GET https://farmarebajas.com/wp-json/wc/store/v1/products?search=<query>&per_page=<n>`. Returns: product name, USD price (in cents, divide by 100), images, brands, categories, stock status, SKU, permalink.
-- **API findings (verified 2026-04-09):**
-  - Endpoint: `https://farmarebajas.com/wp-json/wc/store/v1/products?search=losartan&per_page=10`
+- **Problem:** With Farmahorro closed (Item 4), FarmaFacil needs a 4th pharmacy data source with physical stores in Venezuela (required for store-level availability and "nearest store" feature).
+- **Investigation (2026-04-09) — all candidates:**
+
+| Chain | Stores | API | Verdict |
+|-------|--------|-----|---------|
+| Farmarebajas (farmarebajas.com) | 0 — online-only | ✅ Public WooCommerce Store API (`/wp-json/wc/store/v1/products?search=<query>`) | ❌ No physical stores — can't show "nearest store" |
+| FarmaBien (farmabien.com) | 122+ across VE (Mérida, Caracas, Maracaibo, Barinas, etc.) | ❌ Protected — `/api/search` returns 403 Forbidden | Best candidate but API is auth-protected; needs client-side auth reverse-engineering |
+| Medicinas To Go (medicinastogo.com) | Unknown | ❌ No e-commerce — orders via email only | Not viable |
+| Farmacias XANA (wxana.com) | ~9 in Caracas area | ❌ 403 Forbidden on all URLs | No public catalog at all |
+| Farmahorro (farmahorro.com.ve) | 0 — closed Sept 2025 | ❌ DNS SERVFAIL | Acquired by DRONENA, all 89 stores closed |
+
+- **Farmarebajas API details (verified, public, working — but no stores):**
+  - Endpoint: `GET https://farmarebajas.com/wp-json/wc/store/v1/products?search=losartan&per_page=10`
   - Response: JSON array of product objects
   - Price: `prices.price` in cents (e.g., "197" = $1.97 USD), `prices.currency_code` = "USD"
   - Stock: `is_purchasable` boolean + `add_to_cart.text` present
@@ -64,12 +73,10 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
   - Brand: `brands[0].name` (e.g., "Lab. Calox")
   - Categories: `categories[].name` (e.g., "Antihipertensivos")
   - No auth required, no rate limiting observed
-- **Other pharmacies investigated (2026-04-09):**
-  - FarmaBien (farmabien.com): Custom Next.js + Payload CMS, search via `?term=<query>` — viable but needs more reverse-engineering
-  - Medicinas To Go (medicinastogo.com): WordPress + Elementor, no real e-commerce — orders via email, not viable
-  - Farmacias XANA (wxana.com / xana.com): 403 Forbidden, no public catalog
-- **Affected files:** `src/farmafacil/scrapers/farmarebajas.py` (new), `src/farmafacil/services/search.py` (register scraper), `tests/test_farmarebajas_scraper.py` (new)
-- **Effort:** Low (2 hours — API already verified, scraper code drafted)
+- **FarmaBien store locator:** `https://www.farmabien.com/tiendas` — 122+ stores across Mérida (15+), Caracas (10+), Barinas (7+), Maracaibo (6+), San Cristóbal (5+), Trujillo, Lara, Zulia, Anzoátegui
+- **FarmaBien tech stack:** Next.js (App Router) + Payload CMS, search via `/productos?term=<query>`, client-side rendering (no SSR product data), API at `/api/search` protected (403)
+- **Next step:** Revisit FarmaBien when time permits — reverse-engineer client-side auth flow (cookies, tokens, or session) to unlock `/api/search`
+- **Effort:** High (6+ hours — auth reverse-engineering, fragile integration)
 
 ---
 
