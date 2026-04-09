@@ -1,6 +1,7 @@
 """API route definitions."""
 
 from fastapi import APIRouter, Query
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
 from farmafacil import __version__
@@ -248,3 +249,171 @@ async def delete_intent(intent_id: int) -> dict:
         from farmafacil.services.intent import _load_keyword_cache
         await _load_keyword_cache()
         return {"id": intent.id, "deactivated": True}
+
+
+# ── Admin User Stats Page ──────────────────────────────────────────────
+
+
+@router.get("/admin/user-stats/{user_id}", response_class=HTMLResponse)
+async def admin_user_stats(user_id: int) -> HTMLResponse:
+    """Render an HTML stats dashboard for a single user.
+
+    Args:
+        user_id: Database ID of the user.
+
+    Returns:
+        HTML page with usage stats, cost estimates, and activity metrics.
+    """
+    from farmafacil.services.chat_debug import estimate_cost_breakdown, get_user_stats
+
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            return HTMLResponse("<h1>User not found</h1>", status_code=404)
+
+        stats = await get_user_stats(user.phone_number, user.id)
+
+        # Search counts
+        total_searches = (
+            await session.execute(
+                select(func.count(SearchLog.id)).where(SearchLog.user_id == user_id)
+            )
+        ).scalar() or 0
+        successful_searches = stats["total_success"]
+
+        # Recent searches
+        recent = await session.execute(
+            select(SearchLog.query, SearchLog.results_count, SearchLog.feedback, SearchLog.searched_at)
+            .where(SearchLog.user_id == user_id)
+            .order_by(SearchLog.searched_at.desc())
+            .limit(10)
+        )
+        recent_searches = recent.all()
+
+    costs = estimate_cost_breakdown(stats)
+    success_rate = (successful_searches / total_searches * 100) if total_searches > 0 else 0
+
+    # Build HTML
+    searches_html = ""
+    for s in recent_searches:
+        fb = s.feedback or "—"
+        ts = s.searched_at.strftime("%Y-%m-%d %H:%M") if s.searched_at else "—"
+        fb_class = "success" if fb == "yes" else ("danger" if fb == "no" else "")
+        searches_html += (
+            f"<tr><td>{s.query}</td><td>{s.results_count}</td>"
+            f'<td class="{fb_class}">{fb}</td><td>{ts}</td></tr>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Stats — {user.name or user.phone_number}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               max-width: 900px; margin: 40px auto; padding: 0 20px; color: #333; }}
+        h1 {{ color: #1a73e8; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 24px 0; }}
+        .card {{ background: #f8f9fa; border-radius: 8px; padding: 20px; border: 1px solid #e0e0e0; }}
+        .card .label {{ font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .card .value {{ font-size: 28px; font-weight: 700; margin-top: 4px; }}
+        .card .sub {{ font-size: 12px; color: #888; margin-top: 4px; }}
+        .cost {{ color: #1a73e8; }}
+        .success {{ color: #0d904f; }}
+        .danger {{ color: #d93025; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
+        th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid #e0e0e0; }}
+        th {{ background: #f1f3f4; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }}
+        a.back {{ display: inline-block; margin-bottom: 16px; color: #1a73e8; text-decoration: none; }}
+        a.back:hover {{ text-decoration: underline; }}
+        .section {{ margin-top: 32px; }}
+        .section h2 {{ font-size: 18px; color: #444; border-bottom: 2px solid #1a73e8; padding-bottom: 8px; }}
+    </style>
+</head>
+<body>
+    <a class="back" href="/admin/user/details/{user_id}">&larr; Back to User</a>
+    <h1>{user.name or "Unknown"} &mdash; Usage Stats</h1>
+    <p>Phone: {user.phone_number} &bull; Zone: {user.zone_name or "—"} &bull; City: {user.city_code or "—"}</p>
+
+    <div class="section">
+        <h2>Activity</h2>
+        <div class="grid">
+            <div class="card">
+                <div class="label">Questions</div>
+                <div class="value">{stats['total_questions']}</div>
+                <div class="sub">Total inbound messages</div>
+            </div>
+            <div class="card">
+                <div class="label">Searches</div>
+                <div class="value">{total_searches}</div>
+                <div class="sub">{successful_searches} successful ({success_rate:.0f}%)</div>
+            </div>
+            <div class="card">
+                <div class="label">Success Rate</div>
+                <div class="value {'success' if success_rate >= 50 else 'danger'}">{success_rate:.0f}%</div>
+                <div class="sub">Positive feedback / total searches</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Token Usage</h2>
+        <div class="grid">
+            <div class="card">
+                <div class="label">Total Tokens</div>
+                <div class="value">{stats['total_tokens_in'] + stats['total_tokens_out']:,}</div>
+                <div class="sub">{stats['total_tokens_in']:,} in / {stats['total_tokens_out']:,} out</div>
+            </div>
+            <div class="card">
+                <div class="label">Haiku</div>
+                <div class="value">{stats['calls_haiku']}</div>
+                <div class="sub">{stats['tokens_in_haiku']:,} in / {stats['tokens_out_haiku']:,} out</div>
+            </div>
+            <div class="card">
+                <div class="label">Sonnet</div>
+                <div class="value">{stats['calls_sonnet']}</div>
+                <div class="sub">{stats['tokens_in_sonnet']:,} in / {stats['tokens_out_sonnet']:,} out</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Estimated Cost</h2>
+        <div class="grid">
+            <div class="card">
+                <div class="label">Total Cost</div>
+                <div class="value cost">${costs['cost_total']:.4f}</div>
+                <div class="sub">All models combined</div>
+            </div>
+            <div class="card">
+                <div class="label">Haiku Cost</div>
+                <div class="value cost">${costs['cost_haiku']:.4f}</div>
+                <div class="sub">$1.00 / $5.00 per MTok</div>
+            </div>
+            <div class="card">
+                <div class="label">Sonnet Cost</div>
+                <div class="value cost">${costs['cost_sonnet']:.4f}</div>
+                <div class="sub">$3.00 / $15.00 per MTok</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Recent Searches</h2>
+        <table>
+            <thead>
+                <tr><th>Query</th><th>Results</th><th>Feedback</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+                {searches_html if searches_html else '<tr><td colspan="4">No searches yet</td></tr>'}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="section" style="margin-top:40px; padding-top:16px; border-top:1px solid #e0e0e0; color:#888; font-size:12px;">
+        FarmaFacil v{__version__} &bull;
+        <a href="/api/v1/stats?phone={user.phone_number}" style="color:#1a73e8;">JSON API</a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(html)

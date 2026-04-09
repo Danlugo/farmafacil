@@ -4,6 +4,7 @@ Provides a full admin UI at /admin for managing all database tables.
 Authentication required via username/password.
 """
 
+from markupsafe import Markup
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
@@ -83,6 +84,21 @@ class UserAdmin(ModelView, model=User):
         "onboarding_step": "Onboarding Step",
         "created_at": "Created",
         "updated_at": "Updated",
+    }
+
+    column_formatters = {
+        User.id: lambda m, _: Markup(
+            f'{m.id} <a href="/admin/user-stats/{m.id}" '
+            f'title="View stats" style="text-decoration:none">📊</a>'
+        ),
+    }
+    column_formatters_detail = {
+        User.total_tokens_in: lambda m, _: Markup(
+            f'{m.total_tokens_in:,} &nbsp; '
+            f'<a href="/admin/user-stats/{m.id}" '
+            f'style="color:#1a73e8;text-decoration:none;font-size:13px;">'
+            f'View full stats &rarr;</a>'
+        ),
     }
 
     form_include_pk = False

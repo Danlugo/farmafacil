@@ -61,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (411 tests) |
+| `tests/` | pytest test suite (417 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -94,6 +94,7 @@ docker compose logs -f app
 | `GET /api/v1/intents` | View/manage intent keywords |
 | `POST /api/v1/intents` | Add intent keyword |
 | `GET /api/v1/stats` | Usage stats (global or per-user) |
+| `GET /admin/user-stats/{id}` | HTML stats dashboard per user |
 | `GET /webhook` | WhatsApp verification |
 | `POST /webhook` | WhatsApp incoming messages |
 
