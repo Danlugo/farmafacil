@@ -101,8 +101,8 @@ class TestSymptomTranslationSkill:
         content = symptom_skill["content"].lower()
         assert "reconoce" in content or "reconozca" in content
 
-    def test_skill_content_includes_response_instruction(self):
-        """Skill should require a RESPONSE before searching."""
+    def test_skill_content_includes_alternatives_instruction(self):
+        """Skill should instruct AI to mention alternatives."""
         from farmafacil.db.seed import DEFAULT_ROLES
 
         pharmacy_role = next(r for r in DEFAULT_ROLES if r["name"] == "pharmacy_advisor")
@@ -110,7 +110,7 @@ class TestSymptomTranslationSkill:
             s for s in pharmacy_role["skills"] if s["name"] == "symptom_translation"
         )
         content = symptom_skill["content"].lower()
-        assert "response" in content
+        assert "alternativa" in content
 
     def test_skill_content_mentions_doctor(self):
         """Skill should remind users to consult a doctor."""

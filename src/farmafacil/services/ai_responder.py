@@ -172,12 +172,13 @@ RESPONSE: [respuesta conversacional si es una pregunta]
 
 REGLAS:
 - Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
-- Si el usuario da un nombre ESPECÍFICO de producto (con dosis, marca, presentación), usa ese nombre COMPLETO en DRUG y NO incluyas RESPONSE — busca directamente sin preguntar nada
-- IMPORTANTE: Cuando el usuario pide un producto por nombre (aspirina, omeprazol, protector solar, etc.), NUNCA hagas preguntas de seguimiento. Solo busca el producto inmediatamente. NO incluyas RESPONSE para productos específicos.
-- Si mencionan SÍNTOMAS sin nombrar un producto (dolor, acidez, gripe, fiebre, etc.): clasifica como drug_search, pon el medicamento sugerido en DRUG, Y TAMBIÉN incluye una RESPONSE breve que: (1) reconozca el síntoma, (2) sugiera el medicamento que vas a buscar y por qué, (3) recuerde consultar al médico. Ejemplo: "Entiendo que tienes acidez estomacal. Te voy a buscar Omeprazol que es lo más común para eso. Recuerda que si es frecuente, consulta con tu médico."
+- Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
+- Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, que tal aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, e incluye una RESPONSE breve que: (1) reconozca el síntoma, (2) confirme que el producto es buena opción para eso, (3) mencione 1-2 alternativas que también podrían buscar (ej: "También podrías probar Acetaminofén o Ibuprofeno"), (4) recuerde consultar al médico. Ejemplo: "Entiendo que tienes dolor de cabeza. Aspirina es buena opción para eso. También podrías buscar Acetaminofén o Ibuprofeno. Recuerda consultar con tu médico si es frecuente."
+- Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez"): clasifica como drug_search, pon el medicamento sugerido en DRUG, e incluye RESPONSE con: (1) reconocimiento del síntoma, (2) por qué sugieres ese medicamento, (3) alternativas que podrían buscar, (4) recordatorio de consultar al médico.
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
+- NUNCA hagas preguntas de seguimiento en RESPONSE. Da información útil y alternativas, pero NO preguntes. El sistema buscará automáticamente.
 - Si no entiendes: ACTION: unknown"""
 
     if not ANTHROPIC_API_KEY:
