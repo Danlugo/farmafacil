@@ -32,6 +32,7 @@ WHATSAPP_API_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}
 # LLM (Claude Haiku for intent detection and conversational fallback)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
+LLM_MODEL_ELEVATED = os.getenv("LLM_MODEL_ELEVATED", "claude-sonnet-4-20250514")
 
 # Admin dashboard
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")

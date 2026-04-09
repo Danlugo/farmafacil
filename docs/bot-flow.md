@@ -155,7 +155,8 @@ When intent is `drug_search`:
 
 1. Check user has location (if not → prompt, set step to `awaiting_location`)
 2. **Symptom acknowledgment:** If the AI included a conversational response (e.g., "Entiendo que tienes acidez. Te busco Omeprazol..."), send it as a text message BEFORE the search results. This happens when users describe symptoms instead of naming a specific product.
-3. Call `search_drug(query, city_code, lat, lng, zone_name)`
+3. **Drug interaction check:** If the user has known medications in their memory (`user_memories`), extract them via `extract_medications_from_memory()`, then query the RxNorm/RxNav API via `check_interactions()`. If interactions are detected, send a ⚠️ warning message before search results.
+4. Call `search_drug(query, city_code, lat, lng, zone_name)`
 3. Format results as text via `format_search_results()`
 4. Send text message
 5. If results exist, send image based on preference:

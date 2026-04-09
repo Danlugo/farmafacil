@@ -9,7 +9,7 @@ from farmafacil.bot.formatter import format_search_results
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import classify_with_ai, generate_response
-from farmafacil.services.user_memory import auto_update_memory
+from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
@@ -22,6 +22,11 @@ from farmafacil.services.search_feedback import (
 )
 from farmafacil.config import LLM_MODEL
 from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
+from farmafacil.services.drug_interactions import (
+    check_interactions,
+    extract_medications_from_memory,
+    format_interaction_warning,
+)
 from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
@@ -459,6 +464,22 @@ async def _handle_drug_search(
         ai_result: AiResponse from classification (for token stats).
     """
     logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
+
+    # Check for drug interactions with user's known medications
+    client_memory = await get_memory(user.id)
+    known_meds = extract_medications_from_memory(client_memory)
+    if known_meds:
+        # Check interactions between the searched drug and known medications
+        drugs_to_check = [query] + known_meds
+        interaction_result = await check_interactions(drugs_to_check)
+        if interaction_result.has_interactions:
+            warning = format_interaction_warning(interaction_result)
+            await send_text_message(sender, warning)
+            logger.info(
+                "Drug interaction warning for %s: %s + %s",
+                sender, query, known_meds,
+            )
+
     response = await search_drug(
         query=query,
         city_code=user.city_code,

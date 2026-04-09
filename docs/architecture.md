@@ -112,6 +112,7 @@ All roles, rules, skills, and user memories are editable via `/admin`.
 | WhatsApp Business Cloud API | Send/receive messages | WHATSAPP_API_TOKEN (System User) |
 | OpenStreetMap Nominatim | Geocode Venezuelan zones | No key — User-Agent header |
 | Anthropic Claude Haiku | Intent detection fallback | ANTHROPIC_API_KEY |
+| NIH RxNorm/RxNav API | Drug interaction checking | No auth required |
 
 ## Database Schema
 
