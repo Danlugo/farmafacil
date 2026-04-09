@@ -42,6 +42,26 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 15: Drug Interaction Detection — OpenFDA / RxNorm / DrugBank Integration
+
+- **Status:** PENDING
+- **Added:** 2026-04-09
+- **Priority:** P2
+- **Problem:** The AI currently uses hardcoded common interaction patterns (e.g., anticoagulants + aspirin) to warn users. This is limited and doesn't cover the full range of drug interactions. Users who mention existing medications they take should get accurate, real-time interaction checks — not just pattern-matched guesses from Haiku.
+- **Suggested solution:** Integrate 3 medical data APIs as AI tools:
+  1. **OpenFDA** (api.fda.gov) — FDA drug adverse events, interactions, labels. Free, no auth.
+  2. **RxNorm** (NIH rxnav.nlm.nih.gov) — Standardized drug naming + interaction data. Free REST API.
+  3. **DrugBank** (drugbank.com) — Gold standard drug interaction database. Free academic tier, paid commercial.
+- **Architecture:**
+  - Store user's existing medications in `user_memories` (memory LLM already tracks life context — medications fit naturally)
+  - When user requests a product and has known medications in memory, query interaction APIs
+  - If interaction found → auto-upgrade to Sonnet/Opus for nuanced medical response
+  - If no interaction → stay on Haiku for speed/cost
+  - Add `LLM_MODEL_ELEVATED` config var for the higher model (claude-sonnet or claude-opus)
+- **Affected files:** New `src/farmafacil/services/drug_interactions.py`, modified `services/ai_responder.py` (model switching), modified `services/user_memory.py` (medication extraction), new tests
+- **Effort:** Large (8–12 hours — API integration, medication extraction from memory, model switching logic)
+- **Notes:** Current v0.8.1 has basic safety warnings via classification instructions + symptom_translation skill. This item upgrades that to real-time API-backed interaction checking. User medications are naturally stored in memory via the existing `auto_update_memory` flow.
+
 ### Item 5: AI Roles Management System
 
 - **Status:** DONE
