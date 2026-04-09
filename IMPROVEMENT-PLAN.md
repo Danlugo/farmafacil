@@ -41,13 +41,35 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 4: Farmahorro Scraper
 
-- **Status:** PENDING
+- **Status:** CANCELLED
 - **Added:** 2026-03-30
-- **Problem:** Farmahorro (farmahorro.com.ve) is a major Venezuelan pharmacy chain with an active online product catalog and delivery service. They were reportedly absorbed by DRONENA/XANA but still operate independently with their own website. Adding Farmahorro expands coverage to the popular/mass-market segment.
-- **Suggested solution:** Create `src/farmafacil/scrapers/farmahorro.py` subclassing `BaseScraper`. Investigate farmahorro.com.ve to identify the underlying tech stack and product search API. Extract product name, price, image URL, availability. They also partner with delivery platforms (PedidosYa, Coconecta) which may expose additional APIs.
-- **Affected files:** `src/farmafacil/scrapers/farmahorro.py` (new), `src/farmafacil/services/search.py` (register scraper), `tests/test_farmahorro_scraper.py` (new)
-- **Effort:** Medium (3–4 hours — need to reverse-engineer their catalog API first)
-- **Notes:** Farmahorro has an active website with product catalog and delivery (Mon–Fri, 8AM–4PM). Tech stack unknown — needs investigation. Social media: @farmahorrove on Instagram/X.
+- **Cancelled:** 2026-04-09
+- **Problem:** Farmahorro (farmahorro.com.ve) was a major Venezuelan pharmacy chain. Adding Farmahorro would have expanded coverage to the popular/mass-market segment.
+- **Cancellation reason:** Farmahorro was acquired by DRONENA (owners of Farmacias XANA) in September 2025. All 89 stores across 37 cities were permanently closed. The domain farmahorro.com.ve has broken DNS (SERVFAIL) — site is offline. The successor (Farmacias XANA) has no public e-commerce website or product search API (wxana.com returns 403). DRONENA is B2B-only (pharmaceutical distributor).
+- **Notes:** Investigated 2026-04-09: DNS SERVFAIL on farmahorro.com.ve, wxana.com returns 403, xana.com returns 403. Wikipedia confirms dissolution in 2025. No viable API to scrape.
+- **Replacement:** See Item 17 (Farmarebajas Scraper) — discovered during investigation as a viable alternative with a public WooCommerce Store API.
+
+### Item 17: Farmarebajas Scraper (WooCommerce)
+
+- **Status:** PENDING
+- **Added:** 2026-04-09
+- **Problem:** With Farmahorro closed (Item 4), FarmaFacil needs a 4th pharmacy data source. Farmarebajas (farmarebajas.com) is an active Venezuelan online pharmacy with 60+ years of experience, offering medicines, health, beauty, and wellness products with delivery.
+- **Suggested solution:** Create `src/farmafacil/scrapers/farmarebajas.py` subclassing `BaseScraper`. Uses WooCommerce Store API (public, no auth): `GET https://farmarebajas.com/wp-json/wc/store/v1/products?search=<query>&per_page=<n>`. Returns: product name, USD price (in cents, divide by 100), images, brands, categories, stock status, SKU, permalink.
+- **API findings (verified 2026-04-09):**
+  - Endpoint: `https://farmarebajas.com/wp-json/wc/store/v1/products?search=losartan&per_page=10`
+  - Response: JSON array of product objects
+  - Price: `prices.price` in cents (e.g., "197" = $1.97 USD), `prices.currency_code` = "USD"
+  - Stock: `is_purchasable` boolean + `add_to_cart.text` present
+  - Image: `images[0].thumbnail` (webp format, 250x250)
+  - Brand: `brands[0].name` (e.g., "Lab. Calox")
+  - Categories: `categories[].name` (e.g., "Antihipertensivos")
+  - No auth required, no rate limiting observed
+- **Other pharmacies investigated (2026-04-09):**
+  - FarmaBien (farmabien.com): Custom Next.js + Payload CMS, search via `?term=<query>` — viable but needs more reverse-engineering
+  - Medicinas To Go (medicinastogo.com): WordPress + Elementor, no real e-commerce — orders via email, not viable
+  - Farmacias XANA (wxana.com / xana.com): 403 Forbidden, no public catalog
+- **Affected files:** `src/farmafacil/scrapers/farmarebajas.py` (new), `src/farmafacil/services/search.py` (register scraper), `tests/test_farmarebajas_scraper.py` (new)
+- **Effort:** Low (2 hours — API already verified, scraper code drafted)
 
 ---
 
