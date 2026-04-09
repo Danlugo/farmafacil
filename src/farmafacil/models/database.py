@@ -69,6 +69,14 @@ class User(Base):
         Integer, nullable=True,
         comment="ID of the most recent search_logs entry (for feedback)",
     )
+    total_tokens_in: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative input tokens across all LLM calls",
+    )
+    total_tokens_out: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative output tokens across all LLM calls",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

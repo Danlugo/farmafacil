@@ -57,6 +57,8 @@ class Intent:
     response_text: str | None = None
     detected_name: str | None = None
     detected_location: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 HELP_MESSAGE = (
@@ -135,6 +137,8 @@ async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
         response_text=ai_result.text if ai_result.text else None,
         detected_name=ai_result.detected_name,
         detected_location=ai_result.detected_location,
+        input_tokens=ai_result.input_tokens,
+        output_tokens=ai_result.output_tokens,
     )
 
 

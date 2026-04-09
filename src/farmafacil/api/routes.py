@@ -1,13 +1,13 @@
 """API route definitions."""
 
 from fastapi import APIRouter, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from farmafacil import __version__
 from farmafacil.db.session import async_session
 from pydantic import BaseModel
 
-from farmafacil.models.database import ConversationLog, IntentKeyword, User
+from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
 from farmafacil.services.search import search_drug
 
@@ -148,6 +148,64 @@ async def create_intent(data: IntentCreate) -> dict:
         from farmafacil.services.intent import _load_keyword_cache
         await _load_keyword_cache()
         return {"id": intent.id, "action": intent.action, "keyword": intent.keyword}
+
+
+@router.get("/api/v1/stats")
+async def get_stats(phone: str | None = None) -> dict:
+    """Usage statistics — global totals or per-user breakdown.
+
+    Args:
+        phone: Optional phone number to get per-user stats.
+
+    Returns:
+        Dict with questions, tokens, and success counts.
+    """
+    async with async_session() as session:
+        if phone:
+            result = await session.execute(
+                select(User).where(User.phone_number == phone)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                return {"error": "user not found"}
+            from farmafacil.services.chat_debug import get_user_stats
+
+            stats = await get_user_stats(phone, user.id)
+            return {"phone": phone, "name": user.name, **stats}
+
+        # Global stats
+        total_users = (
+            await session.execute(select(func.count(User.id)))
+        ).scalar() or 0
+        total_questions = (
+            await session.execute(
+                select(func.count(ConversationLog.id)).where(
+                    ConversationLog.direction == "inbound"
+                )
+            )
+        ).scalar() or 0
+        total_success = (
+            await session.execute(
+                select(func.count(SearchLog.id)).where(
+                    SearchLog.feedback == "yes"
+                )
+            )
+        ).scalar() or 0
+        tokens = (
+            await session.execute(
+                select(
+                    func.coalesce(func.sum(User.total_tokens_in), 0),
+                    func.coalesce(func.sum(User.total_tokens_out), 0),
+                )
+            )
+        ).one()
+        return {
+            "total_users": total_users,
+            "total_questions": total_questions,
+            "total_success": total_success,
+            "total_tokens_in": tokens[0],
+            "total_tokens_out": tokens[1],
+        }
 
 
 @router.delete("/api/v1/intents/{intent_id}")

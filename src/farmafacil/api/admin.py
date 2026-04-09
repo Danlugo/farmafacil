@@ -45,6 +45,8 @@ class UserAdmin(ModelView, model=User):
         User.display_preference,
         User.response_mode,
         User.chat_debug,
+        User.total_tokens_in,
+        User.total_tokens_out,
         User.onboarding_step,
         User.created_at,
     ]
@@ -54,6 +56,8 @@ class UserAdmin(ModelView, model=User):
         User.phone_number,
         User.name,
         User.city_code,
+        User.total_tokens_in,
+        User.total_tokens_out,
         User.created_at,
     ]
     column_default_sort = ("created_at", True)
@@ -68,6 +72,8 @@ class UserAdmin(ModelView, model=User):
         "display_preference": "Display Preference",
         "response_mode": "Response Mode",
         "chat_debug": "Chat Debug",
+        "total_tokens_in": "Tokens In",
+        "total_tokens_out": "Tokens Out",
         "onboarding_step": "Onboarding Step",
         "created_at": "Created",
         "updated_at": "Updated",

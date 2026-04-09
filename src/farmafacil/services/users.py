@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
@@ -203,6 +203,30 @@ async def update_last_search(
         user.last_search_query = query
         if search_log_id is not None:
             user.last_search_log_id = search_log_id
+        await session.commit()
+
+
+async def increment_token_usage(
+    user_id: int, input_tokens: int, output_tokens: int,
+) -> None:
+    """Atomically increment a user's cumulative token counters.
+
+    Args:
+        user_id: The user's database ID.
+        input_tokens: Input tokens from the current LLM call.
+        output_tokens: Output tokens from the current LLM call.
+    """
+    if input_tokens == 0 and output_tokens == 0:
+        return
+    async with async_session() as session:
+        await session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(
+                total_tokens_in=User.total_tokens_in + input_tokens,
+                total_tokens_out=User.total_tokens_out + output_tokens,
+            )
+        )
         await session.commit()
 
 

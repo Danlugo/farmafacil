@@ -1,6 +1,6 @@
 # FarmaFacil — API Reference
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-04-08
 > Base URL (production): `https://amparo-chromophoric-christia.ngrok-free.dev`
 > Base URL (local dev): `http://localhost:8000`
 > Base URL (server direct): `http://10.0.0.116:8100`
@@ -243,6 +243,50 @@ Deactivate (soft delete) an intent keyword.
 {
   "id": 25,
   "deactivated": true
+}
+```
+
+---
+
+## Usage Statistics
+
+### GET /api/v1/stats
+
+Usage statistics — global totals or per-user breakdown.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| phone | string | No | Phone number for per-user stats |
+
+**Response 200 (global — no phone param):**
+```json
+{
+  "total_users": 42,
+  "total_questions": 1250,
+  "total_success": 87,
+  "total_tokens_in": 523000,
+  "total_tokens_out": 198000
+}
+```
+
+**Response 200 (per-user — with phone param):**
+```json
+{
+  "phone": "584121234567",
+  "name": "Maria",
+  "total_questions": 25,
+  "total_success": 3,
+  "total_tokens_in": 12500,
+  "total_tokens_out": 4800
+}
+```
+
+**Response 200 (user not found):**
+```json
+{
+  "error": "user not found"
 }
 ```
 

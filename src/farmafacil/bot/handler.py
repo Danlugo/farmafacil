@@ -22,6 +22,7 @@ from farmafacil.services.settings import get_setting, resolve_chat_debug, resolv
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
     get_or_create_user,
+    increment_token_usage,
     set_onboarding_step,
     update_last_search,
     update_user_location,
@@ -125,6 +126,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     if step == "awaiting_name":
         # Always use AI here to distinguish greetings from actual names
         ai_result = await classify_with_ai(text, user.id, user.name or "")
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
 
         # If it's just a greeting (hi, hola), re-ask for name
         if ai_result.action == "greeting" and not ai_result.detected_name:
@@ -234,6 +236,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     if mode == "ai_only":
         logger.info("AI-only mode for %s — routing to AI classifier", sender)
         ai_result = await classify_with_ai(text, user.id, display_name)
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
         logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
 
         # If AI detects a drug search, perform it
@@ -256,6 +259,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             tokens_ai = ai_result
         else:
             full_result = await generate_response(text, user.id, display_name)
+            await increment_token_usage(user.id, full_result.input_tokens, full_result.output_tokens)
             reply = full_result.text
             tokens_ai = full_result
 
@@ -291,6 +295,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
 
     # Classify intent (keywords first, AI fallback)
     intent = await classify_intent(text, user.id, user.name or "")
+    await increment_token_usage(user.id, intent.input_tokens, intent.output_tokens)
 
     # Auto-update profile if LLM detected new info
     if intent.detected_name and intent.detected_name != user.name:
@@ -341,6 +346,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         else:
             # Use AI responder for complex questions
             ai_result = await generate_response(text, user.id, display_name)
+            await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
             logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
             reply = ai_result.text
             if debug_on:
@@ -350,6 +356,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     else:
         # Unknown intent — try AI responder before giving up
         ai_result = await generate_response(text, user.id, display_name)
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
         logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
         reply = ai_result.text
         if debug_on:
@@ -532,6 +539,8 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
         output_tokens=out_tok,
         total_questions=stats["total_questions"],
         total_success=stats["total_success"],
+        total_tokens_in=stats["total_tokens_in"],
+        total_tokens_out=stats["total_tokens_out"],
     )
 
 
