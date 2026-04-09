@@ -178,7 +178,8 @@ REGLAS:
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
-- NUNCA hagas preguntas de seguimiento en RESPONSE. Da información útil y alternativas, pero NO preguntes. El sistema buscará automáticamente.
+- EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que TOMA otro medicamento o tiene una condición médica (ej: "tomo warfarina", "soy diabético", "estoy embarazada", "tomo anticoagulantes"), SIEMPRE incluye RESPONSE con: (1) advertencia de que podría haber interacciones, (2) recomendación FIRME de consultar con su médico o farmacéutico ANTES de tomar el producto, (3) busca el producto de todas formas pero con la advertencia. Ejemplo: "⚠️ Mencionas que tomas warfarina. Aspirina puede interactuar con anticoagulantes y aumentar riesgo de sangrado. Te recomiendo CONSULTAR CON TU MÉDICO antes de combinarlos. Te busco Aspirina de todas formas para que veas disponibilidad."
+- En general NO hagas preguntas de seguimiento. Da información útil, alternativas, y advertencias directamente. Solo pregunta si hay una preocupación de seguridad real (medicamentos que podrían interactuar).
 - Si no entiendes: ACTION: unknown"""
 
     if not ANTHROPIC_API_KEY:
