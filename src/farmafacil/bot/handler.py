@@ -7,6 +7,7 @@ from farmafacil.bot.formatter import format_search_results
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_text_message
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import classify_with_ai, generate_response
+from farmafacil.services.user_memory import auto_update_memory
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, classify_intent
@@ -99,6 +100,16 @@ MSG_NEED_LOCATION = (
 # ── Change command keywords ─────────────────────────────────────────────
 
 from farmafacil.services.intent import _get_keyword_cache
+
+
+async def _update_memory_safe(
+    user_id: int, user_name: str, user_message: str, bot_response: str,
+) -> None:
+    """Non-blocking memory update — errors are logged, never raised."""
+    try:
+        await auto_update_memory(user_id, user_name, user_message, bot_response)
+    except Exception:
+        logger.error("Memory update failed (non-blocking)", exc_info=True)
 
 
 async def handle_incoming_message(sender: str, message_text: str) -> None:
@@ -266,6 +277,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         if debug_on:
             reply += await _build_debug(sender, user.id, tokens_ai)
         await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
         return
 
     # ── Hybrid mode — check keywords first, AI fallback ───────────────
@@ -352,6 +364,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
             if debug_on:
                 reply += await _build_debug(sender, user.id, ai_result)
             await send_text_message(sender, reply)
+            await _update_memory_safe(user.id, display_name, text, reply)
 
     else:
         # Unknown intent — try AI responder before giving up
@@ -362,6 +375,7 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
         if debug_on:
             reply += await _build_debug(sender, user.id, ai_result)
         await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
 
 
 async def _handle_drug_search(
@@ -413,6 +427,10 @@ async def _handle_drug_search(
     # Ask for feedback
     await set_onboarding_step(sender, "awaiting_feedback")
     await send_text_message(sender, MSG_ASK_FEEDBACK)
+
+    # Update user memory with search context
+    summary = f"Searched: {query} → {results_count} results"
+    await _update_memory_safe(user.id, display_name, query, summary)
 
 
 async def _try_store_lookup(text: str) -> object | None:

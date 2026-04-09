@@ -3,16 +3,21 @@
 Each user gets a markdown-formatted memory document (like a CLAUDE.md per client)
 that stores preferences, conversation history, and context. Updated automatically
 by the AI after conversations, and also editable by admins via the dashboard.
+
+The memory builds a common-sense profile of each user over time: what they
+search for, who they buy for, their health conditions, communication style,
+preferred products, and behavioral patterns. It can reference profile data
+(location, preferences) and search history without duplicating it.
 """
 
 import logging
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
 from farmafacil.db.session import async_session
-from farmafacil.models.database import UserMemory
+from farmafacil.models.database import SearchLog, User, UserMemory
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +77,46 @@ async def update_memory(
         await session.commit()
 
 
+async def _get_user_context(user_id: int) -> str:
+    """Build a brief context string from user profile and search history.
+
+    Provides the memory LLM with factual data about the user so it can
+    build a well-rounded profile without hallucinating details.
+
+    Args:
+        user_id: The user's database ID.
+
+    Returns:
+        Context string with profile info and recent search patterns.
+    """
+    lines = []
+    async with async_session() as session:
+        # Profile info
+        result = await session.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            lines.append(f"Name: {user.name or 'unknown'}")
+            lines.append(f"Location: {user.zone_name or 'unknown'}")
+            lines.append(f"Display preference: {user.display_preference or 'unknown'}")
+
+        # Recent search queries (last 20)
+        result = await session.execute(
+            select(SearchLog.query, SearchLog.results_count)
+            .where(SearchLog.user_id == user_id)
+            .order_by(SearchLog.searched_at.desc())
+            .limit(20)
+        )
+        searches = result.all()
+        if searches:
+            search_list = [f"  - {s.query} ({s.results_count} results)" for s in searches]
+            lines.append(f"Recent searches ({len(searches)}):")
+            lines.extend(search_list)
+
+    return "\n".join(lines)
+
+
 async def auto_update_memory(
     user_id: int,
     user_name: str,
@@ -94,6 +139,7 @@ async def auto_update_memory(
         return
 
     existing_memory = await get_memory(user_id)
+    user_context = await _get_user_context(user_id)
 
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -101,27 +147,33 @@ async def auto_update_memory(
             model=LLM_MODEL,
             max_tokens=500,
             system=(
-                "You maintain a memory file for a pharmacy search bot user. "
-                "Given the existing memory and a new conversation exchange, "
-                "return the UPDATED memory. Keep it concise (bullet points). "
-                "Only add genuinely useful information:\n"
-                "- Health conditions, chronic medications\n"
-                "- Family members they buy medicine for\n"
-                "- Preferred pharmacies or zones\n"
-                "- Language preferences or communication style\n"
-                "- Important past interactions\n\n"
-                "Do NOT add: greetings, generic searches, one-time queries.\n"
-                "If the conversation has nothing worth remembering, return the "
-                "existing memory UNCHANGED.\n"
-                "Return ONLY the memory text, no explanations."
+                "You maintain a memory file for a pharmacy product search bot user "
+                "(like a CLAUDE.md — a living document that builds common sense about "
+                "this person). Given the existing memory, user profile, search history, "
+                "and a new interaction, return the UPDATED memory.\n\n"
+                "Keep it concise (bullet points in Spanish). Build a well-rounded profile:\n"
+                "- Health conditions, chronic medications, recurring needs\n"
+                "- Frequently searched products (note patterns from search history)\n"
+                "- Who they buy for (family members, dependents)\n"
+                "- Preferred pharmacies, zones, or brands\n"
+                "- Communication style (formal/informal, language quirks)\n"
+                "- Product preferences (generic vs brand, price-sensitive)\n"
+                "- Life context clues (e.g., baby products → has young child)\n"
+                "- Important complaints or feedback\n\n"
+                "RULES:\n"
+                "- Use the search history to identify patterns (2+ searches = recurring)\n"
+                "- Don't duplicate profile data that's already in the system (location, name)\n"
+                "- Do NOT add: greetings, generic bot commands, trivial one-time searches\n"
+                "- If the interaction has nothing worth remembering, return UNCHANGED\n"
+                "- Return ONLY the memory text in Spanish, no explanations"
             ),
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        f"User name: {user_name}\n\n"
-                        f"Existing memory:\n{existing_memory or '(empty — new user)'}\n\n"
-                        f"New conversation:\n"
+                        f"## User Profile\n{user_context}\n\n"
+                        f"## Existing Memory\n{existing_memory or '(vacío — usuario nuevo)'}\n\n"
+                        f"## New Interaction\n"
                         f"User: {user_message}\n"
                         f"Bot: {bot_response[:500]}\n\n"
                         "Return the updated memory:"

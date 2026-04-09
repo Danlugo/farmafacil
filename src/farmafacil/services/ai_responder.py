@@ -18,7 +18,7 @@ import anthropic
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.ai_router import DEFAULT_ROLE, route_to_role
-from farmafacil.services.user_memory import auto_update_memory, get_memory
+from farmafacil.services.user_memory import get_memory
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +97,8 @@ async def generate_response(
         system_prompt, message, user_name
     )
 
-    # 6. Schedule async memory update (don't block the response)
-    try:
-        await auto_update_memory(user_id, user_name, message, response_text)
-    except Exception:
-        logger.error("Memory update failed (non-blocking)", exc_info=True)
+    # Note: memory update is handled by the caller (handler.py) to ensure
+    # ALL interaction types (drug searches, questions, etc.) build memory.
 
     return AiResponse(
         text=response_text,
