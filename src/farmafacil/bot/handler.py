@@ -1,10 +1,10 @@
 """Handle incoming WhatsApp messages — smart conversational flow."""
 
+import asyncio
 import logging
 import os
 
 from farmafacil.bot.formatter import format_search_results
-import asyncio
 
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
 from farmafacil.models.schemas import DrugResult
@@ -20,7 +20,8 @@ from farmafacil.services.search_feedback import (
     record_feedback,
     record_feedback_detail,
 )
-from farmafacil.services.chat_debug import build_debug_footer, get_user_stats
+from farmafacil.config import LLM_MODEL
+from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
 from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.users import (
@@ -255,6 +256,37 @@ async def handle_incoming_message(
     mode = resolve_response_mode(user.response_mode, global_mode)
     debug_on = resolve_chat_debug(user.chat_debug, global_debug)
     display_name = user.name or "amigo"
+
+    # ── Special commands (available in all modes) ──────────────────────
+    if text_lower in ("/stats", "stats", "/debug"):
+        if debug_on:
+            stats = await get_user_stats(sender, user.id)
+            from farmafacil import __version__
+            global_cost = estimate_cost(
+                stats["global_tokens_in"], stats["global_tokens_out"]
+            )
+            user_cost = estimate_cost(
+                stats["total_tokens_in"], stats["total_tokens_out"]
+            )
+            msg = (
+                "\U0001f4ca *FarmaFacil Stats*\n\n"
+                f"app version: *{__version__}*\n"
+                f"ai model: *{LLM_MODEL}*\n\n"
+                f"\U0001f464 *Tu cuenta ({display_name}):*\n"
+                f"  preguntas: {stats['total_questions']}\n"
+                f"  busquedas exitosas: {stats['total_success']}\n"
+                f"  tokens: {stats['total_tokens_in']} in / {stats['total_tokens_out']} out\n"
+                f"  est costo: ${user_cost:.4f}\n\n"
+                f"\U0001f30d *Global (todos los usuarios):*\n"
+                f"  tokens: {stats['global_tokens_in']} in / {stats['global_tokens_out']} out\n"
+                f"  est costo: ${global_cost:.4f}"
+            )
+            await send_text_message(sender, msg)
+        else:
+            await send_text_message(
+                sender, "Este comando no esta disponible."
+            )
+        return
 
     # AI-only mode — bypass keyword routing, send everything to AI
     if mode == "ai_only":
