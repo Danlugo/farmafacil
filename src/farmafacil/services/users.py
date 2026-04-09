@@ -209,7 +209,7 @@ async def update_last_search(
 async def increment_token_usage(
     user_id: int, input_tokens: int, output_tokens: int,
 ) -> None:
-    """Atomically increment a user's cumulative token counters.
+    """Atomically increment cumulative token counters and store last call tokens.
 
     Args:
         user_id: The user's database ID.
@@ -225,6 +225,8 @@ async def increment_token_usage(
             .values(
                 total_tokens_in=User.total_tokens_in + input_tokens,
                 total_tokens_out=User.total_tokens_out + output_tokens,
+                last_tokens_in=input_tokens,
+                last_tokens_out=output_tokens,
             )
         )
         await session.commit()

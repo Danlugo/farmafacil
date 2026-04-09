@@ -66,15 +66,18 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
         )
         total_success = s_count.scalar() or 0
 
-        # Cumulative token totals from user record
+        # Cumulative + last call token totals from user record
         user_result = await session.execute(
-            select(User.total_tokens_in, User.total_tokens_out).where(
-                User.id == user_id
-            )
+            select(
+                User.total_tokens_in, User.total_tokens_out,
+                User.last_tokens_in, User.last_tokens_out,
+            ).where(User.id == user_id)
         )
         row = user_result.one_or_none()
         total_tokens_in = row.total_tokens_in if row else 0
         total_tokens_out = row.total_tokens_out if row else 0
+        last_tokens_in = row.last_tokens_in if row else 0
+        last_tokens_out = row.last_tokens_out if row else 0
 
         # Global token totals across all users
         global_result = await session.execute(
@@ -92,6 +95,8 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
         "total_success": total_success,
         "total_tokens_in": total_tokens_in,
         "total_tokens_out": total_tokens_out,
+        "last_tokens_in": last_tokens_in,
+        "last_tokens_out": last_tokens_out,
         "global_tokens_in": global_tokens_in,
         "global_tokens_out": global_tokens_out,
     }

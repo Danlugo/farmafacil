@@ -258,23 +258,30 @@ async def handle_incoming_message(
     display_name = user.name or "amigo"
 
     # ── Special commands (available in all modes) ──────────────────────
-    if text_lower in ("/stats", "stats", "/debug"):
+    if text_lower == "/stats":
         if debug_on:
             stats = await get_user_stats(sender, user.id)
             from farmafacil import __version__
-            global_cost = estimate_cost(
-                stats["global_tokens_in"], stats["global_tokens_out"]
+            last_cost = estimate_cost(
+                stats["last_tokens_in"], stats["last_tokens_out"]
             )
             user_cost = estimate_cost(
                 stats["total_tokens_in"], stats["total_tokens_out"]
+            )
+            global_cost = estimate_cost(
+                stats["global_tokens_in"], stats["global_tokens_out"]
             )
             msg = (
                 "\U0001f4ca *FarmaFacil Stats*\n\n"
                 f"app version: *{__version__}*\n"
                 f"ai model: *{LLM_MODEL}*\n\n"
-                f"\U0001f464 *Tu cuenta ({display_name}):*\n"
+                f"\U0001f464 *Mi cuenta ({display_name}):*\n"
                 f"  preguntas: {stats['total_questions']}\n"
-                f"  busquedas exitosas: {stats['total_success']}\n"
+                f"  busquedas exitosas: {stats['total_success']}\n\n"
+                f"  _Ultima llamada:_\n"
+                f"  tokens: {stats['last_tokens_in']} in / {stats['last_tokens_out']} out\n"
+                f"  est costo: ${last_cost:.4f}\n\n"
+                f"  _Acumulado:_\n"
                 f"  tokens: {stats['total_tokens_in']} in / {stats['total_tokens_out']} out\n"
                 f"  est costo: ${user_cost:.4f}\n\n"
                 f"\U0001f30d *Global (todos los usuarios):*\n"
