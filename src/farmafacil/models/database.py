@@ -189,8 +189,8 @@ class PharmacyLocation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     external_id: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True,
-        comment="ID from the source system (e.g., Farmatodo store ID)",
+        String(150), nullable=False, index=True,
+        comment="ID from the source system (e.g., Farmatodo store ID, VTEX pickup point ID)",
     )
     pharmacy_chain: Mapped[str] = mapped_column(
         String(100), nullable=False, index=True,
