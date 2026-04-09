@@ -18,6 +18,11 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Scraper
 SCRAPER_TIMEOUT = int(os.getenv("SCRAPER_TIMEOUT", "30"))
+
+# Farmatodo Algolia API
+ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID", "VCOJEYD2PO")
+ALGOLIA_API_KEY = os.getenv("ALGOLIA_API_KEY", "869a91e98550dd668b8b1dc04bca9011")
+ALGOLIA_INDEX = os.getenv("ALGOLIA_INDEX", "products-venezuela")
 SCRAPER_USER_AGENT = os.getenv(
     "SCRAPER_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

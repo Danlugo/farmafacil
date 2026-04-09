@@ -6,15 +6,12 @@ from decimal import Decimal
 
 import httpx
 
-from farmafacil.config import SCRAPER_TIMEOUT
+from farmafacil.config import ALGOLIA_API_KEY, ALGOLIA_APP_ID, ALGOLIA_INDEX, SCRAPER_TIMEOUT
 from farmafacil.models.schemas import DrugResult
 from farmafacil.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-ALGOLIA_APP_ID = "VCOJEYD2PO"
-ALGOLIA_API_KEY = "869a91e98550dd668b8b1dc04bca9011"
-ALGOLIA_INDEX = "products-venezuela"
 ALGOLIA_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/{ALGOLIA_INDEX}/query"
 
 # Farmatodo city codes for geographic filtering

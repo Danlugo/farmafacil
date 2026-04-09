@@ -36,6 +36,37 @@ def sample_algolia_hit():
     }
 
 
+class TestAlgoliaConfig:
+    """Test that Algolia credentials come from config, not hardcoded."""
+
+    def test_credentials_imported_from_config(self):
+        """Algolia constants are imported from config module."""
+        from farmafacil import config
+        from farmafacil.scrapers import farmatodo
+
+        # Verify the scraper module uses config values (not its own hardcoded ones)
+        assert farmatodo.ALGOLIA_APP_ID is config.ALGOLIA_APP_ID
+        assert farmatodo.ALGOLIA_API_KEY is config.ALGOLIA_API_KEY
+        assert farmatodo.ALGOLIA_INDEX is config.ALGOLIA_INDEX
+
+    def test_algolia_url_uses_config_values(self):
+        """ALGOLIA_URL is built from config values."""
+        from farmafacil.config import ALGOLIA_APP_ID, ALGOLIA_INDEX
+        from farmafacil.scrapers.farmatodo import ALGOLIA_URL
+
+        assert ALGOLIA_APP_ID in ALGOLIA_URL
+        assert ALGOLIA_INDEX in ALGOLIA_URL
+        assert ALGOLIA_URL.startswith(f"https://{ALGOLIA_APP_ID}")
+
+    def test_config_has_defaults(self):
+        """Config provides sensible defaults for Algolia credentials."""
+        from farmafacil.config import ALGOLIA_API_KEY, ALGOLIA_APP_ID, ALGOLIA_INDEX
+
+        assert ALGOLIA_APP_ID  # not empty
+        assert ALGOLIA_API_KEY  # not empty
+        assert ALGOLIA_INDEX  # not empty
+
+
 class TestFarmatodoScraper:
     """Test the Algolia hit parsing logic."""
 

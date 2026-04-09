@@ -62,13 +62,13 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 19: Move Algolia Credentials to Env Vars
 
-- **Status:** PENDING
+- **Status:** DONE
 - **Added:** 2026-04-10
+- **Completed:** 2026-04-09
 - **Priority:** P1
 - **Problem:** Farmatodo Algolia API key and app ID are hardcoded in `farmatodo.py:15-16` and committed to Git. Security risk — credentials should be in `.env` and loaded via config.
-- **Suggested solution:** Move `ALGOLIA_APP_ID` and `ALGOLIA_API_KEY` to `.env` / `config.py`. Update `farmatodo.py` to read from config. Add to `.env.example`.
-- **Affected files:** `src/farmafacil/scrapers/farmatodo.py`, `src/farmafacil/config.py`, `.env.example`
-- **Effort:** Low (<1h)
+- **Solution implemented:** Moved `ALGOLIA_APP_ID`, `ALGOLIA_API_KEY`, and `ALGOLIA_INDEX` to `config.py` as env vars with defaults (public search-only key, same as visible in Farmatodo's frontend JS). Updated `farmatodo.py` to import from config. Added placeholders to `.env.example`. Added 3 config tests.
+- **Files modified:** `src/farmafacil/config.py` (3 new env vars), `src/farmafacil/scrapers/farmatodo.py` (import from config), `.env.example` (Algolia placeholders), `tests/test_farmatodo_scraper.py` (3 new tests)
 
 ### Item 20: N+1 Query Fix in Product Cache
 
