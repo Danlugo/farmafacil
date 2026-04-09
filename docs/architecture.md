@@ -109,6 +109,7 @@ All roles, rules, skills, and user memories are editable via `/admin`.
 |---------|---------|------|
 | Farmatodo Algolia | Product search index | Static API key (public) |
 | Farmacias SAAS VTEX | Product search (Intelligent Search API) | No auth required |
+| Locatel VTEX | Product search (Intelligent Search API) | No auth required |
 | WhatsApp Business Cloud API | Send/receive messages | WHATSAPP_API_TOKEN (System User) |
 | OpenStreetMap Nominatim | Geocode Venezuelan zones | No key — User-Agent header |
 | Anthropic Claude Haiku | Intent detection fallback | ANTHROPIC_API_KEY |

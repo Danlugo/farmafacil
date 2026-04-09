@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 FARMATODO_STORES_API = "https://api-transactional.farmatodo.com/route/r/VE/v1/stores/nearby"
 SAAS_PICKUP_API = "https://www.farmaciasaas.com/api/checkout/pub/pickup-points"
+LOCATEL_PICKUP_API = "https://www.locatel.com.ve/api/checkout/pub/pickup-points"
 
 # Farmatodo city codes with center coordinates for store discovery
 FARMATODO_CITIES: dict[str, tuple[float, float]] = {
@@ -23,8 +24,8 @@ FARMATODO_CITIES: dict[str, tuple[float, float]] = {
     "PAM": (11.00, -63.85), "HIG": (10.07, -66.10), "UPA": (8.00, -62.40),
 }
 
-# SAAS center coordinates for pickup point discovery (Caracas-centric, covers Venezuela)
-SAAS_GEO_CENTERS: list[tuple[float, float]] = [
+# VTEX center coordinates for pickup point discovery (covers major Venezuelan cities)
+VTEX_GEO_CENTERS: list[tuple[float, float]] = [
     (10.48, -66.86),   # Caracas
     (10.64, -71.61),   # Maracaibo
     (10.16, -67.99),   # Valencia
@@ -44,6 +45,7 @@ async def backfill_stores() -> int:
     total_inserted = 0
     total_inserted += await _backfill_farmatodo_stores()
     total_inserted += await _backfill_saas_stores()
+    total_inserted += await _backfill_locatel_stores()
     return total_inserted
 
 
@@ -120,7 +122,7 @@ async def _backfill_saas_stores() -> int:
     all_stores: dict[str, dict] = {}  # keyed by pickup point ID
 
     async with httpx.AsyncClient(timeout=15) as client:
-        for lat, lng in SAAS_GEO_CENTERS:
+        for lat, lng in VTEX_GEO_CENTERS:
             try:
                 resp = await client.get(
                     SAAS_PICKUP_API,
@@ -163,7 +165,7 @@ async def _backfill_saas_stores() -> int:
 
             # Map city to Farmatodo city codes for compatibility
             city = addr.get("city", "")
-            city_code = _map_saas_city(city)
+            city_code = _map_vtex_city(city)
 
             street = addr.get("street", "")
             complement = addr.get("complement", "")
@@ -192,7 +194,91 @@ async def _backfill_saas_stores() -> int:
     return inserted
 
 
-def _map_saas_city(city_name: str) -> str:
+async def _backfill_locatel_stores() -> int:
+    """Fetch Locatel pickup points via VTEX public API.
+
+    Locatel stores are accessible via the same VTEX checkout pickup-points
+    endpoint as SAAS. Currently ~8 stores in Caracas + Valencia.
+
+    Returns:
+        Number of new stores inserted.
+    """
+    all_stores: dict[str, dict] = {}  # keyed by pickup point ID
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for lat, lng in VTEX_GEO_CENTERS:
+            try:
+                resp = await client.get(
+                    LOCATEL_PICKUP_API,
+                    params={"geoCoordinates": f"{lng};{lat}"},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for item in data.get("items", []):
+                    pp = item.get("pickupPoint", {})
+                    pp_id = pp.get("id")
+                    if pp_id:
+                        all_stores[pp_id] = pp
+            except Exception:
+                logger.warning(
+                    "Failed to fetch Locatel pickup points for geo %s,%s", lat, lng
+                )
+
+    logger.info("Fetched %d Locatel stores from API", len(all_stores))
+
+    inserted = 0
+    async with async_session() as session:
+        for pp_id, pp_data in all_stores.items():
+            ext_id = str(pp_id)
+            result = await session.execute(
+                select(PharmacyLocation).where(
+                    PharmacyLocation.external_id == ext_id,
+                    PharmacyLocation.pharmacy_chain == "Locatel",
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            addr = pp_data.get("address", {})
+            geo = addr.get("geoCoordinates", [])
+            store_lng, store_lat = (geo[0], geo[1]) if len(geo) == 2 else (None, None)
+
+            # Extract clean store name (remove "Locatel " prefix if present)
+            raw_name = pp_data.get("friendlyName", "")
+            name = raw_name.replace("Locatel ", "").strip() or raw_name
+
+            # Map city to Farmatodo city codes for compatibility
+            city = addr.get("city", "")
+            city_code = _map_vtex_city(city)
+
+            street = addr.get("street", "")
+            complement = addr.get("complement", "")
+            full_address = f"{street}, {complement}".strip(", ") if street else None
+
+            if existing is None:
+                session.add(PharmacyLocation(
+                    external_id=ext_id,
+                    pharmacy_chain="Locatel",
+                    name=name,
+                    name_lower=name.lower(),
+                    city_code=city_code,
+                    address=full_address,
+                    latitude=store_lat,
+                    longitude=store_lng,
+                ))
+                inserted += 1
+            else:
+                existing.address = full_address or existing.address
+                existing.latitude = store_lat or existing.latitude
+                existing.longitude = store_lng or existing.longitude
+
+        await session.commit()
+
+    logger.info("Inserted %d new Locatel locations", inserted)
+    return inserted
+
+
+def _map_vtex_city(city_name: str) -> str:
     """Map SAAS city names to Farmatodo-compatible city codes.
 
     Args:

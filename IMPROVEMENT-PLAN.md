@@ -18,15 +18,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files changed:** `src/farmafacil/scrapers/vtex.py` (new), `src/farmafacil/scrapers/saas.py` (new), `src/farmafacil/services/search.py` (modified), `tests/test_saas_scraper.py` (new, 13 unit + 2 integration tests), `pyproject.toml` (integration marker)
 - **Notes:** VTEX API is public, no auth needed. Endpoint: `GET /api/io/_v/api/intelligent-search/product_search/?query=<drug>`. Returns product name, price, list price, discount, image, availability, brand, categories.
 
-### Item 2: Locatel Scraper (VTEX GraphQL)
+### Item 2: Locatel Scraper (VTEX)
 
-- **Status:** PENDING
+- **Status:** DONE
 - **Added:** 2026-03-30
+- **Completed:** 2026-04-09
 - **Problem:** Locatel is one of Venezuela's largest pharmacy/retail chains with an online catalog at locatel.com.ve, also powered by VTEX. Adding Locatel significantly expands drug availability coverage.
-- **Suggested solution:** Create `src/farmafacil/scrapers/locatel.py` subclassing `BaseScraper` (or `VTEXScraper` if Item 1 creates the shared base). Use the same VTEX Intelligent Search GraphQL pattern. Locatel sells more than drugs (home goods, personal care), so filtering to pharmacy/health categories may be needed.
-- **Affected files:** `src/farmafacil/scrapers/locatel.py` (new), `src/farmafacil/services/search.py` (register scraper), `tests/test_locatel_scraper.py` (new)
-- **Effort:** Medium (2–3 hours, less if VTEXScraper base exists from Item 1)
-- **Notes:** Locatel uses the same VTEX platform as SAAS. Implement Item 1 first to establish the VTEX pattern, then Locatel becomes a thin adapter.
+- **Solution implemented:** Created `LocatelScraper` subclass of `VTEXScraper` (~19 lines) with `base_url = "https://www.locatel.com.ve"`. Registered in `ACTIVE_SCRAPERS` (now 3 scrapers: Farmatodo, SAAS, Locatel). Added Locatel store backfill via VTEX pickup-points API (~8 stores across Caracas + Valencia). Renamed shared constants from SAAS-specific to VTEX-generic (`SAAS_GEO_CENTERS` → `VTEX_GEO_CENTERS`, `_map_saas_city` → `_map_vtex_city`).
+- **Files created:** `src/farmafacil/scrapers/locatel.py` (new), `tests/test_locatel_scraper.py` (new — 14 unit + 2 integration tests)
+- **Files modified:** `src/farmafacil/services/search.py` (register scraper), `src/farmafacil/services/store_backfill.py` (Locatel store backfill + renamed shared constants)
+- **Notes:** Locatel VTEX API is public, no auth needed. Same endpoint pattern as SAAS. Product categories in Locatel are broader (Farmacia > MEDICAMENTOS) vs SAAS (Medicamentos > Cardiovascular > Antihipertensivos).
 
 ### Item 4: Farmahorro Scraper
 

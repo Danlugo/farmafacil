@@ -11,6 +11,7 @@ import re
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
+from farmafacil.scrapers.locatel import LocatelScraper
 from farmafacil.scrapers.saas import SAASScraper
 from farmafacil.services.product_cache import (
     _parse_keywords,
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 ACTIVE_SCRAPERS: list[BaseScraper] = [
     FarmatodoScraper(),
     SAASScraper(),
+    LocatelScraper(),
 ]
 
 # Patterns that indicate a specific product query (dosage, form, count, brand)

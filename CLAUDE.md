@@ -45,6 +45,7 @@ docker compose logs -f app
 - **SQLAlchemy 2.0** async ORM (SQLite dev / PostgreSQL prod)
 - **Farmatodo Algolia API** for drug search (no HTML scraping)
 - **Farmacias SAAS VTEX API** for drug search (shared VTEXScraper base)
+- **Locatel VTEX API** for drug search (shared VTEXScraper base)
 - **WhatsApp Business Cloud API** (Meta) for bot
 - **Claude Haiku** for AI role-based responses and intent classification
 - **OpenStreetMap Nominatim** for geocoding zones
@@ -60,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (348 tests) |
+| `tests/` | pytest test suite (362 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
