@@ -11,6 +11,28 @@ from farmafacil.models.database import ConversationLog, SearchLog, User
 
 logger = logging.getLogger(__name__)
 
+# ── Token cost rates (USD per million tokens) ─────────────────────────
+# Claude Haiku 4.5: $1.00/MTok input, $5.00/MTok output
+# Source: https://docs.anthropic.com/en/docs/about-claude/pricing
+COST_PER_MTOK_INPUT = 1.00
+COST_PER_MTOK_OUTPUT = 5.00
+
+
+def estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost for a given token count.
+
+    Args:
+        input_tokens: Number of input tokens.
+        output_tokens: Number of output tokens.
+
+    Returns:
+        Estimated cost in USD.
+    """
+    return (
+        (input_tokens / 1_000_000) * COST_PER_MTOK_INPUT
+        + (output_tokens / 1_000_000) * COST_PER_MTOK_OUTPUT
+    )
+
 
 async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
     """Get aggregate stats for a user.
@@ -102,6 +124,10 @@ def build_debug_footer(
     Returns:
         Formatted debug footer string.
     """
+    # Estimate costs
+    call_cost = estimate_cost(input_tokens, output_tokens)
+    global_cost = estimate_cost(global_tokens_in, global_tokens_out)
+
     return (
         "\n\n---\n"
         "\U0001f527 *DEBUG*\n"
@@ -109,8 +135,10 @@ def build_debug_footer(
         f"ai model: _{LLM_MODEL}_\n"
         f"ai role: _{role_used}_\n"
         f"tokens: _{input_tokens} in / {output_tokens} out_\n"
+        f"est cost: _${call_cost:.4f}_\n"
         f"user tokens: _{total_tokens_in} in / {total_tokens_out} out_\n"
         f"global tokens: _{global_tokens_in} in / {global_tokens_out} out_\n"
+        f"global est cost: _${global_cost:.4f}_\n"
         f"total questions: _{total_questions}_\n"
         f"total success: _{total_success}_"
     )

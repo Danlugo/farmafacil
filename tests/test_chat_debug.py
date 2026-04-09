@@ -2,7 +2,7 @@
 
 import pytest
 
-from farmafacil.services.chat_debug import build_debug_footer, get_user_stats
+from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
 from farmafacil.services.settings import resolve_chat_debug
 
 
@@ -95,6 +95,47 @@ class TestBuildDebugFooter:
             total_tokens_in=100, total_tokens_out=200,
         )
         assert "user tokens: _100 in / 200 out_" in footer
+
+    def test_footer_contains_est_cost(self):
+        footer = build_debug_footer(
+            "test_role", 1000, 200, 5, 1,
+        )
+        assert "est cost: _$" in footer
+
+    def test_footer_contains_global_est_cost(self):
+        footer = build_debug_footer(
+            "test_role", 10, 20, 5, 1,
+            global_tokens_in=500000, global_tokens_out=100000,
+        )
+        assert "global est cost: _$" in footer
+
+
+class TestEstimateCost:
+    """Test token cost estimation."""
+
+    def test_zero_tokens_zero_cost(self):
+        assert estimate_cost(0, 0) == 0.0
+
+    def test_one_million_input_tokens(self):
+        # $1.00 per MTok input
+        cost = estimate_cost(1_000_000, 0)
+        assert abs(cost - 1.00) < 0.001
+
+    def test_one_million_output_tokens(self):
+        # $5.00 per MTok output
+        cost = estimate_cost(0, 1_000_000)
+        assert abs(cost - 5.00) < 0.001
+
+    def test_mixed_tokens(self):
+        # 500 in ($0.0005) + 100 out ($0.0005) = $0.001
+        cost = estimate_cost(500, 100)
+        assert abs(cost - 0.001) < 0.0001
+
+    def test_typical_haiku_call(self):
+        # ~500 input + ~200 output is a typical call
+        # 500/1M * $1 + 200/1M * $5 = $0.0005 + $0.001 = $0.0015
+        cost = estimate_cost(500, 200)
+        assert abs(cost - 0.0015) < 0.0001
 
 
 class TestGetUserStats:
