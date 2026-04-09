@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 MSG_WELCOME = (
     "\U0001f48a *Hola! Soy FarmaFacil*\n\n"
-    "Te ayudo a encontrar medicamentos en farmacias de Venezuela.\n\n"
+    "Te ayudo a encontrar productos en farmacias de Venezuela.\n\n"
     "*Como te llamas?*"
 )
 
@@ -57,8 +57,8 @@ MSG_ASK_PREFERENCE = (
 
 MSG_READY = (
     "\u2705 Listo *{name}*! Ya estas configurado.\n\n"
-    "Enviame el nombre de un medicamento.\n"
-    "Ejemplo: _losartan_ o _acetaminofen_"
+    "Enviame el nombre de un producto de farmacia.\n"
+    "Ejemplo: _losartan_, _protector solar_, _vitamina C_"
 )
 
 MSG_LOCATION_NOT_FOUND = (
@@ -71,7 +71,7 @@ MSG_INVALID_PREFERENCE = "Responde *1* para imagen grande o *2* para galeria."
 
 MSG_RETURNING = (
     "\U0001f48a *Hola {name}!* Buscando en *{zone}* (_{pref}_).\n\n"
-    "Enviame el nombre de un medicamento.\n\n"
+    "Enviame el nombre de un producto de farmacia.\n\n"
     "\U0001f527 _Comandos:_\n"
     "\u2022 _cambiar zona_ — nueva ubicacion\n"
     "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
@@ -557,7 +557,7 @@ async def _handle_view_similar(sender: str, user) -> None:
     if not user.last_search_query:
         await send_text_message(
             sender,
-            "No tienes una busqueda reciente. Enviame el nombre de un medicamento.",
+            "No tienes una busqueda reciente. Enviame el nombre de un producto de farmacia.",
         )
         return
 

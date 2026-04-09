@@ -27,7 +27,7 @@ Triggered on the very first message from any phone number.
 
 **Bot sends:**
 > Hola! Soy FarmaFacil
-> Te ayudo a encontrar medicamentos en farmacias de Venezuela.
+> Te ayudo a encontrar productos en farmacias de Venezuela.
 > Como te llamas?
 
 **Side effect:** Step advances to `awaiting_name`.

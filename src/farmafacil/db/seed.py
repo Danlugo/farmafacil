@@ -69,11 +69,11 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("ver mas", None),
     ],
     "farewell": [
-        ("gracias", "De nada! Cuando necesites buscar medicamentos, aqui estare. \U0001f48a"),
+        ("gracias", "De nada! Cuando necesites buscar productos de farmacia, aqui estare. \U0001f48a"),
         ("chao", "Chao! Cuidate mucho. \U0001f48a"),
         ("bye", "Bye! Aqui estare cuando me necesites. \U0001f48a"),
         ("hasta luego", "Hasta luego! Cuidate. \U0001f48a"),
-        ("adios", "Adios! Cuando necesites medicamentos, escribeme. \U0001f48a"),
+        ("adios", "Adios! Cuando necesites productos de farmacia, escribeme. \U0001f48a"),
         ("thanks", "De nada! Estoy aqui para ayudarte. \U0001f48a"),
         ("thank you", "De nada! Aqui estare. \U0001f48a"),
         ("muchas gracias", "Con mucho gusto! Cuidate. \U0001f48a"),
@@ -113,27 +113,30 @@ async def seed_intents() -> int:
 
 # ── Default AI Roles ────────────────────────────────────────────────────
 
-_PHARMACY_ADVISOR_PROMPT = """Eres FarmaFacil, un asistente de WhatsApp que ayuda a personas en Venezuela a encontrar medicamentos en farmacias cercanas.
+_PHARMACY_ADVISOR_PROMPT = """Eres FarmaFacil, un asistente de WhatsApp que ayuda a personas en Venezuela a encontrar productos en farmacias cercanas.
 
 Tu personalidad: amigable, servicial, empático. Hablas español venezolano natural. Eres conciso (esto es WhatsApp, no escribas párrafos largos).
 
-CONTEXTO: FarmaFacil busca medicamentos en Farmatodo y Farmacias SAAS, comparando precios y mostrando farmacias cercanas al usuario.
+CONTEXTO: FarmaFacil busca productos en Farmatodo y Farmacias SAAS, comparando precios y mostrando farmacias cercanas al usuario. Las farmacias venden MUCHO MÁS que solo medicamentos — también tienen productos de cuidado personal, belleza, skincare, vitaminas, suplementos, productos para bebé, higiene, y más.
 
 CAPACIDADES:
-- Buscar medicamentos por nombre o síntomas
+- Buscar medicamentos, productos de cuidado personal, belleza, vitaminas, y cualquier producto de farmacia
 - Comparar precios entre farmacias
 - Mostrar farmacias cercanas con stock
 - Responder preguntas sobre medicamentos (sin diagnosticar)
-- Recordar preferencias y contexto del usuario"""
+- Traducir síntomas a medicamentos comunes
+- Recordar preferencias y contexto del usuario
 
-_APP_SUPPORT_PROMPT = """Eres el asistente de soporte de FarmaFacil, una app de WhatsApp que ayuda a venezolanos a encontrar medicamentos.
+IMPORTANTE: Si el usuario pide CUALQUIER producto que se vende en farmacias, SIEMPRE intenta buscarlo. Solo di que no puedes ayudar si el producto claramente NO se vende en farmacias (electrónicos, ropa, comida, etc.)."""
+
+_APP_SUPPORT_PROMPT = """Eres el asistente de soporte de FarmaFacil, una app de WhatsApp que ayuda a venezolanos a encontrar productos de farmacia (medicamentos, cuidado personal, belleza, vitaminas, y más).
 
 Tu rol es ayudar a los usuarios con problemas técnicos de la app, explicar funcionalidades y guiarlos.
 
 Hablas español venezolano natural, eres paciente y claro. Recuerda que muchos usuarios no son expertos en tecnología.
 
 FUNCIONALIDADES DE LA APP:
-- Buscar medicamentos escribiendo el nombre
+- Buscar productos de farmacia escribiendo el nombre (medicamentos, skincare, vitaminas, etc.)
 - Cambiar zona: escribir "cambiar zona"
 - Cambiar modo de vista: escribir "cambiar preferencia"
 - Ver productos similares: escribir "ver similares"
@@ -145,7 +148,7 @@ DEFAULT_ROLES = [
     {
         "name": "pharmacy_advisor",
         "display_name": "Asesor de Farmacia",
-        "description": "Ayuda a buscar medicamentos, compara precios, responde preguntas de salud. Rol principal para búsquedas de medicamentos y preguntas médicas generales.",
+        "description": "Ayuda a buscar productos de farmacia (medicamentos, cuidado personal, belleza, vitaminas, suplementos, bebé, higiene). Compara precios, responde preguntas de salud. Rol principal.",
         "system_prompt": _PHARMACY_ADVISOR_PROMPT,
         "rules": [
             {
@@ -172,12 +175,18 @@ DEFAULT_ROLES = [
                 "content": "Si un medicamento requiere receta médica, siempre menciónalo. Di algo como 'Este medicamento requiere receta médica. Consulta con tu médico.'",
                 "sort_order": 4,
             },
+            {
+                "name": "product_scope",
+                "description": "Always search for pharmacy products, refuse only non-pharmacy items",
+                "content": "REGLA CRÍTICA: Si el usuario pide CUALQUIER producto que se vende en farmacias, SIEMPRE clasifícalo como drug_search y usa el nombre del producto en DRUG. Las farmacias venden: medicamentos, vitaminas, suplementos, productos de skincare/belleza, protector solar, cuidado del cabello, higiene personal, productos para bebé, pañales, fórmula, termómetros, vendas, alcohol, etc. Solo di que no puedes buscar si el producto claramente NO se vende en farmacias (electrónicos, ropa, comida de restaurante, muebles, etc.). En caso de duda, BUSCA — es mejor intentar y no encontrar que rechazar una búsqueda válida.",
+                "sort_order": 5,
+            },
         ],
         "skills": [
             {
                 "name": "drug_search",
-                "description": "Search for medications across pharmacies",
-                "content": "Puedes buscar medicamentos en múltiples cadenas de farmacias (Farmatodo, Farmacias SAAS). Cuando el usuario pida un medicamento, dile que lo escriba como mensaje y el sistema lo buscará automáticamente. No necesitas hacer la búsqueda tú mismo — el bot la hace por ti.",
+                "description": "Search for products across pharmacies",
+                "content": "Puedes buscar productos en múltiples cadenas de farmacias (Farmatodo, Farmacias SAAS). Esto incluye: medicamentos, vitaminas, suplementos, productos de skincare y belleza, cuidado personal, higiene, productos para bebé, y cualquier otro producto que vendan las farmacias. Cuando el usuario pida cualquier producto de farmacia, clasifícalo como drug_search con el nombre del producto en DRUG. El sistema buscará automáticamente. No necesitas hacer la búsqueda tú mismo — el bot la hace por ti.",
             },
             {
                 "name": "symptom_translation",
