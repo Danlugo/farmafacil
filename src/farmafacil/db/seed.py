@@ -190,8 +190,8 @@ DEFAULT_ROLES = [
             },
             {
                 "name": "symptom_translation",
-                "description": "Translate symptoms to common medications",
-                "content": "Si el usuario describe síntomas en vez de un medicamento específico, traduce a medicamentos comunes:\n- Dolor de cabeza / fiebre → Acetaminofén, Ibuprofeno\n- Presión alta → Losartán, Enalapril, Amlodipino\n- Diabetes → Metformina\n- Dolor de estómago / gastritis → Omeprazol\n- Gripe → Antigripales, Acetaminofén\n- Alergia → Loratadina, Cetirizina\nSiempre sugiere consultar con el médico.",
+                "description": "Acknowledge symptoms, suggest medication, then search",
+                "content": "Si el usuario describe síntomas en vez de un producto específico:\n1. RECONOCE el síntoma con empatía ('Entiendo que tienes...')\n2. SUGIERE el medicamento común y explica brevemente por qué\n3. RECUERDA consultar al médico si persiste\n4. Clasifica como drug_search con el medicamento en DRUG\n\nEjemplos de traducción:\n- Dolor de cabeza / fiebre → Acetaminofén, Ibuprofeno\n- Presión alta → Losartán, Enalapril, Amlodipino\n- Diabetes → Metformina\n- Acidez / gastritis → Omeprazol\n- Gripe → Antigripales, Acetaminofén\n- Alergia → Loratadina, Cetirizina\n- Dolor muscular → Ibuprofeno, Diclofenac\n\nIMPORTANTE: Siempre incluye una RESPONSE conversacional antes de buscar. Nunca busques sin primero reconocer lo que siente el usuario.",
             },
         ],
     },

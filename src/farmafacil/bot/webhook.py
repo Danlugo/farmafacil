@@ -81,7 +81,7 @@ async def receive_webhook(request: Request) -> dict:
                         wa_message_id=wa_id,
                     )
 
-                    await handle_incoming_message(sender, text)
+                    await handle_incoming_message(sender, text, wa_message_id=wa_id)
 
                 elif msg_type == "location":
                     loc = message.get("location", {})

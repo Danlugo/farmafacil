@@ -173,9 +173,8 @@ RESPONSE: [respuesta conversacional si es una pregunta]
 REGLAS:
 - Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
 - Si el usuario da un nombre ESPECÍFICO de producto (con dosis, marca, presentación), usa ese nombre COMPLETO en DRUG
-- Si mencionan síntomas, traduce al medicamento genérico más probable
+- Si mencionan SÍNTOMAS (dolor, acidez, gripe, fiebre, etc.): clasifica como drug_search, pon el medicamento sugerido en DRUG, Y TAMBIÉN incluye una RESPONSE breve que: (1) reconozca el síntoma, (2) sugiera el medicamento que vas a buscar y por qué, (3) recuerde consultar al médico. Ejemplo: "Entiendo que tienes acidez estomacal. Te voy a buscar Omeprazol que es lo más común para eso. Recuerda que si es frecuente, consulta con tu médico."
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
-- Si preguntan sobre salud, responde brevemente y recuérdales que pueden buscar productos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
 - Si no entiendes: ACTION: unknown"""

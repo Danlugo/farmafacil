@@ -12,8 +12,11 @@ POST /webhook
   → handle_incoming_message(sender, text)
       → get_or_create_user(sender)
       → validate_user_profile(user)
+      → send_read_receipt(sender, wa_message_id)  ← fire-and-forget
       → route by onboarding_step or intent
 ```
+
+**Read receipt:** A read receipt (`status: "read"`) is sent as fire-and-forget via `asyncio.create_task()` immediately after user validation. This marks the message with blue check marks and triggers the typing indicator bubble. Uses WhatsApp Cloud API v22.0 messages endpoint. Non-blocking — failures are silently logged.
 
 ---
 
@@ -151,7 +154,8 @@ LLM can also extract profile data mid-conversation:
 When intent is `drug_search`:
 
 1. Check user has location (if not → prompt, set step to `awaiting_location`)
-2. Call `search_drug(query, city_code, lat, lng, zone_name)`
+2. **Symptom acknowledgment:** If the AI included a conversational response (e.g., "Entiendo que tienes acidez. Te busco Omeprazol..."), send it as a text message BEFORE the search results. This happens when users describe symptoms instead of naming a specific product.
+3. Call `search_drug(query, city_code, lat, lng, zone_name)`
 3. Format results as text via `format_search_results()`
 4. Send text message
 5. If results exist, send image based on preference:

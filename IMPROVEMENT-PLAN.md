@@ -120,6 +120,26 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files created:** `tests/test_user_memory.py` (14 tests across 5 test classes)
 - **Files modified:** `services/user_memory.py` (context builder, broadened prompt), `bot/handler.py` (memory calls at 4 exit points), `services/ai_responder.py` (removed duplicate memory call)
 
+### Item 12: Profile Authority Over Memory in AI Prompts
+
+- **Status:** DONE
+- **Added:** 2026-04-08
+- **Completed:** 2026-04-08
+- **Problem:** User memory could store stale profile data (old zone, old name) that contradicts the live user profile in the database. The AI prompt had no mechanism to resolve which data was authoritative.
+- **Solution implemented:** Updated `assemble_prompt()` to inject live user profile (name, zone, city_code, preference) as an authoritative section labeled "User Profile (authoritative — always current)" before client memory (labeled "supplementary — may contain outdated info"). Added `_get_user_profile()` helper in `ai_responder.py`.
+- **Files created:** None
+- **Files modified:** `services/ai_roles.py` (assemble_prompt with user_profile), `services/ai_responder.py` (_get_user_profile, pass profile to assemble_prompt), `tests/test_ai_roles.py` (new profile tests)
+
+### Item 13: Symptom Acknowledgment + Typing Indicator
+
+- **Status:** DONE
+- **Added:** 2026-04-08
+- **Completed:** 2026-04-08
+- **Problem:** When users describe symptoms (e.g., "tengo acidez estomacal"), the bot immediately shows drug search results without acknowledging the symptom or explaining why a particular medicine was chosen. Also, no WhatsApp typing indicator ("...") bubble appears while the bot processes messages, making users unsure if the bot is working.
+- **Solution implemented:** (1) Updated classification instructions in `ai_responder.py` to require AI include a conversational RESPONSE alongside DRUG for symptom-based queries. Updated handler.py to send symptom response text before drug search results in both AI-only and hybrid modes. Updated `symptom_translation` skill in seed.py with acknowledge-then-search flow. (2) Added `send_typing_indicator()` function using WhatsApp Cloud API v22.0 `status: "typing"` payload. Called at the top of `handle_incoming_message()` so the typing bubble appears immediately.
+- **Files created:** `tests/test_symptom_typing.py` (19 tests across 6 test classes)
+- **Files modified:** `bot/handler.py` (typing indicator call, symptom text before search in both modes), `bot/whatsapp.py` (send_typing_indicator function), `services/ai_responder.py` (classification REGLAS for symptoms), `db/seed.py` (symptom_translation skill content)
+
 ---
 
 ## P3 — Low

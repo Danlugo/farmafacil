@@ -4,7 +4,9 @@ import logging
 import os
 
 from farmafacil.bot.formatter import format_search_results
-from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_text_message
+import asyncio
+
+from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import classify_with_ai, generate_response
 from farmafacil.services.user_memory import auto_update_memory
@@ -112,11 +114,18 @@ async def _update_memory_safe(
         logger.error("Memory update failed (non-blocking)", exc_info=True)
 
 
-async def handle_incoming_message(sender: str, message_text: str) -> None:
+async def handle_incoming_message(
+    sender: str, message_text: str, wa_message_id: str = "",
+) -> None:
     """Process an incoming WhatsApp message with smart profile detection.
 
     The bot extracts name, location, and drug queries from ANY message,
     filling in the user profile progressively instead of forcing a rigid wizard.
+
+    Args:
+        sender: The WhatsApp phone number of the sender.
+        message_text: The message text.
+        wa_message_id: The WhatsApp message ID (for read receipts).
     """
     text = message_text.strip()
     if not text:
@@ -126,6 +135,10 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
     user = await validate_user_profile(user)
     step = user.onboarding_step
     text_lower = text.lower()
+
+    # Send read receipt (fire-and-forget) — shows blue checks + typing bubble
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
 
     # ── Rigid onboarding steps (only when explicitly waiting for input) ──
 
@@ -258,6 +271,10 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
                     sender, MSG_NEED_LOCATION.format(name=display_name)
                 )
                 return
+            # If AI included a conversational response (e.g., symptom acknowledgment),
+            # send it before the search results
+            if ai_result.text:
+                await send_text_message(sender, ai_result.text)
             await _handle_drug_search(
                 sender, user, ai_result.drug_query, display_name,
                 debug_on=debug_on, ai_result=ai_result,
@@ -346,6 +363,10 @@ async def handle_incoming_message(sender: str, message_text: str) -> None:
                 sender, MSG_NEED_LOCATION.format(name=display_name)
             )
             return
+
+        # If AI included a conversational response (symptom acknowledgment), send first
+        if intent.response_text:
+            await send_text_message(sender, intent.response_text)
 
         query = intent.drug_query or text
         await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)

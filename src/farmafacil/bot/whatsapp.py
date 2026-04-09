@@ -41,6 +41,38 @@ async def _send_message(to: str, payload: dict, log_text: str) -> dict | None:
         return None
 
 
+async def send_read_receipt(to: str, message_id: str) -> None:
+    """Mark a message as read, which triggers the typing indicator bubble.
+
+    Uses the WhatsApp Cloud API messages endpoint with status=read.
+    This marks the message as read (blue check marks) and shows the
+    typing indicator to the user. Non-blocking — errors are silently logged.
+
+    Args:
+        to: Recipient phone number.
+        message_id: The WhatsApp message ID to mark as read.
+    """
+    if not message_id:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+    except Exception:
+        logger.debug("Read receipt failed for %s (non-critical)", to)
+
+
 async def send_text_message(to: str, text: str) -> dict | None:
     """Send a text message via WhatsApp Business API."""
     payload = {
