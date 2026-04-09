@@ -47,6 +47,8 @@ class UserAdmin(ModelView, model=User):
         User.chat_debug,
         User.total_tokens_in,
         User.total_tokens_out,
+        User.calls_haiku,
+        User.calls_sonnet,
         User.onboarding_step,
         User.created_at,
     ]
@@ -58,6 +60,8 @@ class UserAdmin(ModelView, model=User):
         User.city_code,
         User.total_tokens_in,
         User.total_tokens_out,
+        User.calls_haiku,
+        User.calls_sonnet,
         User.created_at,
     ]
     column_default_sort = ("created_at", True)
@@ -74,6 +78,8 @@ class UserAdmin(ModelView, model=User):
         "chat_debug": "Chat Debug",
         "total_tokens_in": "Tokens In",
         "total_tokens_out": "Tokens Out",
+        "calls_haiku": "Haiku Calls",
+        "calls_sonnet": "Sonnet Calls",
         "onboarding_step": "Onboarding Step",
         "created_at": "Created",
         "updated_at": "Updated",

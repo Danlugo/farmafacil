@@ -206,30 +206,78 @@ async def update_last_search(
         await session.commit()
 
 
+def _classify_model(model: str) -> str:
+    """Classify a model string into a known model family.
+
+    Args:
+        model: Full model name (e.g., "claude-haiku-4-5-20251001").
+
+    Returns:
+        Model family key: "haiku", "sonnet", or "unknown".
+    """
+    model_lower = model.lower()
+    if "haiku" in model_lower:
+        return "haiku"
+    if "sonnet" in model_lower:
+        return "sonnet"
+    return "unknown"
+
+
 async def increment_token_usage(
-    user_id: int, input_tokens: int, output_tokens: int,
+    user_id: int,
+    input_tokens: int,
+    output_tokens: int,
+    model: str = "",
 ) -> None:
-    """Atomically increment cumulative token counters and store last call tokens.
+    """Atomically increment cumulative token counters, per-model counters, and call counts.
 
     Args:
         user_id: The user's database ID.
         input_tokens: Input tokens from the current LLM call.
         output_tokens: Output tokens from the current LLM call.
+        model: LLM model name used for this call (e.g., "claude-haiku-4-5-20251001").
     """
     if input_tokens == 0 and output_tokens == 0:
         return
-    async with async_session() as session:
-        await session.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(
-                total_tokens_in=User.total_tokens_in + input_tokens,
-                total_tokens_out=User.total_tokens_out + output_tokens,
-                last_tokens_in=input_tokens,
-                last_tokens_out=output_tokens,
-            )
+
+    # Always update aggregate + last-call counters
+    values: dict = {
+        "total_tokens_in": User.total_tokens_in + input_tokens,
+        "total_tokens_out": User.total_tokens_out + output_tokens,
+        "last_tokens_in": input_tokens,
+        "last_tokens_out": output_tokens,
+    }
+
+    # Route to per-model counters
+    family = _classify_model(model)
+    if family == "haiku":
+        values["tokens_in_haiku"] = User.tokens_in_haiku + input_tokens
+        values["tokens_out_haiku"] = User.tokens_out_haiku + output_tokens
+        values["calls_haiku"] = User.calls_haiku + 1
+    elif family == "sonnet":
+        values["tokens_in_sonnet"] = User.tokens_in_sonnet + input_tokens
+        values["tokens_out_sonnet"] = User.tokens_out_sonnet + output_tokens
+        values["calls_sonnet"] = User.calls_sonnet + 1
+    else:
+        logger.warning(
+            "Unknown model family for token tracking: '%s' — "
+            "tokens added to aggregate only, not per-model counters",
+            model,
         )
-        await session.commit()
+
+    try:
+        async with async_session() as session:
+            await session.execute(
+                update(User).where(User.id == user_id).values(**values)
+            )
+            await session.commit()
+    except Exception:
+        logger.error(
+            "Failed to persist token usage for user_id=%d "
+            "(in=%d, out=%d, model=%s) — tokens lost",
+            user_id, input_tokens, output_tokens, model,
+            exc_info=True,
+        )
 
 
 async def set_onboarding_step(phone_number: str, step: str | None) -> User:

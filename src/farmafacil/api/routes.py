@@ -196,15 +196,40 @@ async def get_stats(phone: str | None = None) -> dict:
                 select(
                     func.coalesce(func.sum(User.total_tokens_in), 0),
                     func.coalesce(func.sum(User.total_tokens_out), 0),
+                    func.coalesce(func.sum(User.tokens_in_haiku), 0),
+                    func.coalesce(func.sum(User.tokens_out_haiku), 0),
+                    func.coalesce(func.sum(User.calls_haiku), 0),
+                    func.coalesce(func.sum(User.tokens_in_sonnet), 0),
+                    func.coalesce(func.sum(User.tokens_out_sonnet), 0),
+                    func.coalesce(func.sum(User.calls_sonnet), 0),
                 )
             )
         ).one()
+
+        from farmafacil.services.chat_debug import estimate_cost
+
+        cost_haiku = estimate_cost(tokens[2], tokens[3], "haiku")
+        cost_sonnet = estimate_cost(tokens[5], tokens[6], "sonnet")
+
         return {
             "total_users": total_users,
             "total_questions": total_questions,
             "total_success": total_success,
             "total_tokens_in": tokens[0],
             "total_tokens_out": tokens[1],
+            "haiku": {
+                "tokens_in": tokens[2],
+                "tokens_out": tokens[3],
+                "calls": tokens[4],
+                "est_cost_usd": round(cost_haiku, 4),
+            },
+            "sonnet": {
+                "tokens_in": tokens[5],
+                "tokens_out": tokens[6],
+                "calls": tokens[7],
+                "est_cost_usd": round(cost_sonnet, 4),
+            },
+            "est_cost_total_usd": round(cost_haiku + cost_sonnet, 4),
         }
 
 

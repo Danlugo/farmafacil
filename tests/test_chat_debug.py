@@ -2,7 +2,12 @@
 
 import pytest
 
-from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
+from farmafacil.services.chat_debug import (
+    build_debug_footer,
+    estimate_cost,
+    estimate_cost_breakdown,
+    get_user_stats,
+)
 from farmafacil.services.settings import resolve_chat_debug
 
 
@@ -109,6 +114,15 @@ class TestBuildDebugFooter:
         )
         assert "global est cost: _$" in footer
 
+    def test_footer_contains_call_counts(self):
+        footer = build_debug_footer(
+            "test_role", 10, 20, 5, 1,
+            calls_haiku=12, calls_sonnet=3,
+            global_calls_haiku=100, global_calls_sonnet=25,
+        )
+        assert "user calls: _haiku=12 sonnet=3_" in footer
+        assert "global calls: _haiku=100 sonnet=25_" in footer
+
 
 class TestEstimateCost:
     """Test token cost estimation."""
@@ -116,18 +130,18 @@ class TestEstimateCost:
     def test_zero_tokens_zero_cost(self):
         assert estimate_cost(0, 0) == 0.0
 
-    def test_one_million_input_tokens(self):
-        # $1.00 per MTok input
-        cost = estimate_cost(1_000_000, 0)
+    def test_one_million_input_tokens_haiku(self):
+        # Haiku: $1.00 per MTok input
+        cost = estimate_cost(1_000_000, 0, "haiku")
         assert abs(cost - 1.00) < 0.001
 
-    def test_one_million_output_tokens(self):
-        # $5.00 per MTok output
-        cost = estimate_cost(0, 1_000_000)
+    def test_one_million_output_tokens_haiku(self):
+        # Haiku: $5.00 per MTok output
+        cost = estimate_cost(0, 1_000_000, "haiku")
         assert abs(cost - 5.00) < 0.001
 
     def test_mixed_tokens(self):
-        # 500 in ($0.0005) + 100 out ($0.0005) = $0.001
+        # 500 in ($0.0005) + 100 out ($0.0005) = $0.001 at haiku rates
         cost = estimate_cost(500, 100)
         assert abs(cost - 0.001) < 0.0001
 
@@ -136,6 +150,87 @@ class TestEstimateCost:
         # 500/1M * $1 + 200/1M * $5 = $0.0005 + $0.001 = $0.0015
         cost = estimate_cost(500, 200)
         assert abs(cost - 0.0015) < 0.0001
+
+    def test_sonnet_input_pricing(self):
+        # Sonnet: $3.00 per MTok input
+        cost = estimate_cost(1_000_000, 0, "sonnet")
+        assert abs(cost - 3.00) < 0.001
+
+    def test_sonnet_output_pricing(self):
+        # Sonnet: $15.00 per MTok output
+        cost = estimate_cost(0, 1_000_000, "sonnet")
+        assert abs(cost - 15.00) < 0.001
+
+    def test_opus_pricing(self):
+        # Opus: $15.00 in + $75.00 out per MTok
+        cost = estimate_cost(1_000_000, 1_000_000, "opus")
+        assert abs(cost - 90.00) < 0.001
+
+    def test_full_model_name_resolves_to_family(self):
+        # Full model name should resolve to correct pricing
+        cost_full = estimate_cost(1_000_000, 0, "claude-haiku-4-5-20251001")
+        cost_family = estimate_cost(1_000_000, 0, "haiku")
+        assert cost_full == cost_family
+
+    def test_unknown_model_uses_haiku_default(self):
+        cost = estimate_cost(1_000_000, 0, "some-unknown-model")
+        cost_haiku = estimate_cost(1_000_000, 0, "haiku")
+        assert cost == cost_haiku
+
+
+class TestEstimateCostBreakdown:
+    """Test per-model cost breakdown calculation."""
+
+    def test_haiku_only_stats(self):
+        stats = {
+            "tokens_in_haiku": 1_000_000, "tokens_out_haiku": 500_000,
+            "tokens_in_sonnet": 0, "tokens_out_sonnet": 0,
+        }
+        result = estimate_cost_breakdown(stats)
+        assert abs(result["cost_haiku"] - 3.50) < 0.001  # 1*1.0 + 0.5*5.0
+        assert result["cost_sonnet"] == 0.0
+        assert abs(result["cost_total"] - 3.50) < 0.001
+
+    def test_mixed_model_stats(self):
+        stats = {
+            "tokens_in_haiku": 1_000_000, "tokens_out_haiku": 200_000,
+            "tokens_in_sonnet": 500_000, "tokens_out_sonnet": 100_000,
+        }
+        result = estimate_cost_breakdown(stats)
+        # Haiku: 1.0 + 1.0 = 2.0
+        assert abs(result["cost_haiku"] - 2.00) < 0.001
+        # Sonnet: 1.5 + 1.5 = 3.0
+        assert abs(result["cost_sonnet"] - 3.00) < 0.001
+        assert abs(result["cost_total"] - 5.00) < 0.001
+
+    def test_empty_stats_zero_cost(self):
+        result = estimate_cost_breakdown({})
+        assert result["cost_total"] == 0.0
+
+
+class TestClassifyModel:
+    """Test model family classification."""
+
+    def test_haiku_full_name(self):
+        from farmafacil.services.users import _classify_model
+        assert _classify_model("claude-haiku-4-5-20251001") == "haiku"
+
+    def test_sonnet_full_name(self):
+        from farmafacil.services.users import _classify_model
+        assert _classify_model("claude-sonnet-4-20250514") == "sonnet"
+
+    def test_unknown_model(self):
+        from farmafacil.services.users import _classify_model
+        assert _classify_model("gpt-4o") == "unknown"
+
+    def test_case_insensitive(self):
+        from farmafacil.services.users import _classify_model
+        assert _classify_model("Claude-HAIKU-4") == "haiku"
+        assert _classify_model("CLAUDE-SONNET-4") == "sonnet"
+
+    def test_empty_string(self):
+        from farmafacil.services.users import _classify_model
+        assert _classify_model("") == "unknown"
 
 
 class TestGetUserStats:
@@ -160,12 +255,25 @@ class TestGetUserStats:
         assert "global_tokens_out" in stats
 
     @pytest.mark.asyncio
+    async def test_returns_per_model_keys(self):
+        """Stats include per-model token and call count keys."""
+        stats = await get_user_stats("5550000000", 999)
+        for key in [
+            "tokens_in_haiku", "tokens_out_haiku", "calls_haiku",
+            "tokens_in_sonnet", "tokens_out_sonnet", "calls_sonnet",
+            "global_tokens_in_haiku", "global_tokens_out_haiku",
+            "global_calls_haiku", "global_tokens_in_sonnet",
+            "global_tokens_out_sonnet", "global_calls_sonnet",
+        ]:
+            assert key in stats, f"Missing key: {key}"
+
+    @pytest.mark.asyncio
     async def test_counts_inbound_messages(self):
         """Verify total_questions counts inbound conversation_logs."""
         from farmafacil.db.session import async_session
         from farmafacil.models.database import ConversationLog
 
-        phone = "5551112222"
+        phone = "5558812222"
         async with async_session() as session:
             session.add(ConversationLog(
                 phone_number=phone, direction="inbound",

@@ -14,7 +14,7 @@ class TestIncrementTokenUsage:
     async def test_increments_from_zero(self):
         """New user starts at 0 tokens, increment adds correctly."""
         async with async_session() as session:
-            user = User(phone_number="5550001111", onboarding_step="welcome")
+            user = User(phone_number="5559901111", onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -36,7 +36,7 @@ class TestIncrementTokenUsage:
     async def test_accumulates_across_calls(self):
         """Multiple increments accumulate correctly."""
         async with async_session() as session:
-            user = User(phone_number="5550002222", onboarding_step="welcome")
+            user = User(phone_number="5559902222", onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -60,7 +60,7 @@ class TestIncrementTokenUsage:
     async def test_skips_zero_tokens(self):
         """No DB call when both tokens are zero."""
         async with async_session() as session:
-            user = User(phone_number="5550003333", onboarding_step="welcome")
+            user = User(phone_number="5559903333", onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -78,6 +78,107 @@ class TestIncrementTokenUsage:
             user = result.scalar_one()
             assert user.total_tokens_in == 0
             assert user.total_tokens_out == 0
+
+    @pytest.mark.asyncio
+    async def test_haiku_model_increments_haiku_counters(self):
+        """Haiku model name routes tokens to haiku-specific counters."""
+        async with async_session() as session:
+            user = User(phone_number="5559911111", onboarding_step="welcome")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
+        await increment_token_usage(user_id, 200, 80, model="claude-haiku-4-5-20251001")
+
+        async with async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one()
+            assert user.total_tokens_in == 200
+            assert user.total_tokens_out == 80
+            assert user.tokens_in_haiku == 200
+            assert user.tokens_out_haiku == 80
+            assert user.calls_haiku == 1
+            assert user.tokens_in_sonnet == 0
+            assert user.calls_sonnet == 0
+
+    @pytest.mark.asyncio
+    async def test_sonnet_model_increments_sonnet_counters(self):
+        """Sonnet model name routes tokens to sonnet-specific counters."""
+        async with async_session() as session:
+            user = User(phone_number="5559922222", onboarding_step="welcome")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
+        await increment_token_usage(user_id, 300, 150, model="claude-sonnet-4-20250514")
+
+        async with async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one()
+            assert user.total_tokens_in == 300
+            assert user.total_tokens_out == 150
+            assert user.tokens_in_sonnet == 300
+            assert user.tokens_out_sonnet == 150
+            assert user.calls_sonnet == 1
+            assert user.tokens_in_haiku == 0
+            assert user.calls_haiku == 0
+
+    @pytest.mark.asyncio
+    async def test_mixed_model_calls_accumulate_separately(self):
+        """Multiple calls with different models accumulate to correct counters."""
+        async with async_session() as session:
+            user = User(phone_number="5559933333", onboarding_step="welcome")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
+        await increment_token_usage(user_id, 100, 40, model="claude-haiku-4-5-20251001")
+        await increment_token_usage(user_id, 300, 150, model="claude-sonnet-4-20250514")
+        await increment_token_usage(user_id, 200, 60, model="claude-haiku-4-5-20251001")
+
+        async with async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one()
+            # Aggregates
+            assert user.total_tokens_in == 600
+            assert user.total_tokens_out == 250
+            # Haiku
+            assert user.tokens_in_haiku == 300
+            assert user.tokens_out_haiku == 100
+            assert user.calls_haiku == 2
+            # Sonnet
+            assert user.tokens_in_sonnet == 300
+            assert user.tokens_out_sonnet == 150
+            assert user.calls_sonnet == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_only_increments_aggregate(self):
+        """Unknown model increments aggregate but not per-model counters."""
+        async with async_session() as session:
+            user = User(phone_number="5559944444", onboarding_step="welcome")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
+        await increment_token_usage(user_id, 100, 50, model="some-unknown-model")
+
+        async with async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one()
+            assert user.total_tokens_in == 100
+            assert user.total_tokens_out == 50
+            assert user.tokens_in_haiku == 0
+            assert user.tokens_in_sonnet == 0
+            assert user.calls_haiku == 0
+            assert user.calls_sonnet == 0
 
 
 class TestIntentTokenPropagation:
@@ -106,7 +207,7 @@ class TestGetUserStatsWithTokens:
         from farmafacil.services.chat_debug import get_user_stats
 
         async with async_session() as session:
-            user = User(phone_number="5550004444", onboarding_step="welcome")
+            user = User(phone_number="5559904444", onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -114,7 +215,7 @@ class TestGetUserStatsWithTokens:
 
         await increment_token_usage(user_id, 500, 200)
 
-        stats = await get_user_stats("5550004444", user_id)
+        stats = await get_user_stats("5559904444", user_id)
         assert stats["total_tokens_in"] == 500
         assert stats["total_tokens_out"] == 200
 
@@ -123,13 +224,13 @@ class TestGetUserStatsWithTokens:
         from farmafacil.services.chat_debug import get_user_stats
 
         async with async_session() as session:
-            user = User(phone_number="5550005555", onboarding_step="welcome")
+            user = User(phone_number="5559905555", onboarding_step="welcome")
             session.add(user)
             await session.commit()
             await session.refresh(user)
             user_id = user.id
 
-        stats = await get_user_stats("5550005555", user_id)
+        stats = await get_user_stats("5559905555", user_id)
         assert stats["total_tokens_in"] == 0
         assert stats["total_tokens_out"] == 0
 
@@ -182,6 +283,27 @@ class TestStatsEndpoint:
         assert "total_tokens_out" in data
 
     @pytest.mark.asyncio
+    async def test_global_stats_includes_per_model_breakdown(self):
+        """Global stats endpoint includes haiku/sonnet breakdown and costs."""
+        from httpx import ASGITransport, AsyncClient
+
+        from farmafacil.api.app import create_app
+
+        app = create_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/v1/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "haiku" in data
+        assert "sonnet" in data
+        assert "est_cost_total_usd" in data
+        # Verify haiku sub-object keys
+        for key in ("tokens_in", "tokens_out", "calls", "est_cost_usd"):
+            assert key in data["haiku"], f"Missing haiku.{key}"
+            assert key in data["sonnet"], f"Missing sonnet.{key}"
+
+    @pytest.mark.asyncio
     async def test_per_user_stats_not_found(self):
         from httpx import ASGITransport, AsyncClient
 
@@ -201,16 +323,16 @@ class TestStatsEndpoint:
         from farmafacil.api.app import create_app
 
         async with async_session() as session:
-            user = User(phone_number="5550006666", onboarding_step="welcome")
+            user = User(phone_number="5559906666", onboarding_step="welcome")
             session.add(user)
             await session.commit()
 
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/v1/stats?phone=5550006666")
+            resp = await client.get("/api/v1/stats?phone=5559906666")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["phone"] == "5550006666"
+        assert data["phone"] == "5559906666"
         assert "total_questions" in data
         assert "total_tokens_in" in data

@@ -85,6 +85,32 @@ class User(Base):
         Integer, default=0, server_default="0",
         comment="Output tokens from the most recent LLM call",
     )
+    # Per-model token tracking — Haiku
+    tokens_in_haiku: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative input tokens for Claude Haiku calls",
+    )
+    tokens_out_haiku: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative output tokens for Claude Haiku calls",
+    )
+    calls_haiku: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Total number of Claude Haiku API calls",
+    )
+    # Per-model token tracking — Sonnet
+    tokens_in_sonnet: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative input tokens for Claude Sonnet calls",
+    )
+    tokens_out_sonnet: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative output tokens for Claude Sonnet calls",
+    )
+    calls_sonnet: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Total number of Claude Sonnet API calls",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

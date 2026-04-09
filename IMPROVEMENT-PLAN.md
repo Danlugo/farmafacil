@@ -29,6 +29,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files modified:** `src/farmafacil/services/search.py` (register scraper), `src/farmafacil/services/store_backfill.py` (Locatel store backfill + renamed shared constants)
 - **Notes:** Locatel VTEX API is public, no auth needed. Same endpoint pattern as SAAS. Product categories in Locatel are broader (Farmacia > MEDICAMENTOS) vs SAAS (Medicamentos > Cardiovascular > Antihipertensivos).
 
+### Item 16: Per-Model Token Tracking & Call Counts
+
+- **Status:** DONE
+- **Added:** 2026-04-09
+- **Completed:** 2026-04-09
+- **Problem:** All LLM tokens are tracked as flat counters (`total_tokens_in`/`total_tokens_out`) with cost estimated at Haiku rates. When we switch to Sonnet/Opus for complex medical responses, cost estimates become inaccurate and we lose visibility into per-model usage patterns. Need per-model token tracking, call counts, and accurate cost calculation.
+- **Solution implemented:** Added 6 per-model columns to User model (`tokens_in_haiku`, `tokens_out_haiku`, `calls_haiku`, `tokens_in_sonnet`, `tokens_out_sonnet`, `calls_sonnet`). Updated `increment_token_usage()` with `_classify_model()` helper to route tokens to correct per-model counters. Added `MODEL_PRICING` dict with Haiku/Sonnet/Opus rates. `estimate_cost()` now accepts model parameter. Global `/api/v1/stats` returns per-model breakdown with costs. Debug footer shows per-model call counts and accurate per-model global cost. Admin dashboard shows call counts.
+- **Files modified:** `src/farmafacil/models/database.py` (6 columns), `src/farmafacil/services/users.py` (`_classify_model`, `increment_token_usage`), `src/farmafacil/services/chat_debug.py` (`MODEL_PRICING`, `estimate_cost`, `estimate_cost_breakdown`, `get_user_stats`, `build_debug_footer`), `src/farmafacil/bot/handler.py` (6 increment call sites + /stats command), `src/farmafacil/api/routes.py` (per-model stats), `src/farmafacil/api/admin.py` (call count columns), `tests/test_chat_debug.py` (16 new tests), `tests/test_usage_stats.py` (5 new tests)
+- **Migration SQL:** `ALTER TABLE users ADD COLUMN tokens_in_haiku INTEGER DEFAULT 0; ALTER TABLE users ADD COLUMN tokens_out_haiku INTEGER DEFAULT 0; ALTER TABLE users ADD COLUMN calls_haiku INTEGER DEFAULT 0; ALTER TABLE users ADD COLUMN tokens_in_sonnet INTEGER DEFAULT 0; ALTER TABLE users ADD COLUMN tokens_out_sonnet INTEGER DEFAULT 0; ALTER TABLE users ADD COLUMN calls_sonnet INTEGER DEFAULT 0;`
+
 ### Item 4: Farmahorro Scraper
 
 - **Status:** PENDING

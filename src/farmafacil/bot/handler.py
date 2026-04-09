@@ -156,7 +156,7 @@ async def handle_incoming_message(
     if step == "awaiting_name":
         # Always use AI here to distinguish greetings from actual names
         ai_result = await classify_with_ai(text, user.id, user.name or "")
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
 
         # If it's just a greeting (hi, hola), re-ask for name
         if ai_result.action == "greeting" and not ai_result.detected_name:
@@ -267,15 +267,18 @@ async def handle_incoming_message(
         if debug_on:
             stats = await get_user_stats(sender, user.id)
             from farmafacil import __version__
+            from farmafacil.services.chat_debug import estimate_cost_breakdown
             last_cost = estimate_cost(
-                stats["last_tokens_in"], stats["last_tokens_out"]
+                stats["last_tokens_in"], stats["last_tokens_out"], LLM_MODEL
             )
-            user_cost = estimate_cost(
-                stats["total_tokens_in"], stats["total_tokens_out"]
-            )
-            global_cost = estimate_cost(
-                stats["global_tokens_in"], stats["global_tokens_out"]
-            )
+            user_costs = estimate_cost_breakdown(stats)
+            g_stats = {
+                "tokens_in_haiku": stats["global_tokens_in_haiku"],
+                "tokens_out_haiku": stats["global_tokens_out_haiku"],
+                "tokens_in_sonnet": stats["global_tokens_in_sonnet"],
+                "tokens_out_sonnet": stats["global_tokens_out_sonnet"],
+            }
+            global_costs = estimate_cost_breakdown(g_stats)
             msg = (
                 "\U0001f4ca *FarmaFacil Stats*\n\n"
                 f"app version: *{__version__}*\n"
@@ -288,10 +291,14 @@ async def handle_incoming_message(
                 f"  est costo: ${last_cost:.4f}\n\n"
                 f"  _Acumulado:_\n"
                 f"  tokens: {stats['total_tokens_in']} in / {stats['total_tokens_out']} out\n"
-                f"  est costo: ${user_cost:.4f}\n\n"
+                f"  haiku: {stats['calls_haiku']} calls, ${user_costs['cost_haiku']:.4f}\n"
+                f"  sonnet: {stats['calls_sonnet']} calls, ${user_costs['cost_sonnet']:.4f}\n"
+                f"  est costo total: ${user_costs['cost_total']:.4f}\n\n"
                 f"\U0001f30d *Global (todos los usuarios):*\n"
                 f"  tokens: {stats['global_tokens_in']} in / {stats['global_tokens_out']} out\n"
-                f"  est costo: ${global_cost:.4f}"
+                f"  haiku: {stats['global_calls_haiku']} calls, ${global_costs['cost_haiku']:.4f}\n"
+                f"  sonnet: {stats['global_calls_sonnet']} calls, ${global_costs['cost_sonnet']:.4f}\n"
+                f"  est costo total: ${global_costs['cost_total']:.4f}"
             )
             await send_text_message(sender, msg)
         else:
@@ -304,7 +311,7 @@ async def handle_incoming_message(
     if mode == "ai_only":
         logger.info("AI-only mode for %s — routing to AI classifier", sender)
         ai_result = await classify_with_ai(text, user.id, display_name)
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
         logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
 
         # If AI detects a drug search, perform it
@@ -331,7 +338,7 @@ async def handle_incoming_message(
             tokens_ai = ai_result
         else:
             full_result = await generate_response(text, user.id, display_name)
-            await increment_token_usage(user.id, full_result.input_tokens, full_result.output_tokens)
+            await increment_token_usage(user.id, full_result.input_tokens, full_result.output_tokens, model=LLM_MODEL)
             reply = full_result.text
             tokens_ai = full_result
 
@@ -368,7 +375,7 @@ async def handle_incoming_message(
 
     # Classify intent (keywords first, AI fallback)
     intent = await classify_intent(text, user.id, user.name or "")
-    await increment_token_usage(user.id, intent.input_tokens, intent.output_tokens)
+    await increment_token_usage(user.id, intent.input_tokens, intent.output_tokens, model=LLM_MODEL)
 
     # Auto-update profile if LLM detected new info
     if intent.detected_name and intent.detected_name != user.name:
@@ -423,7 +430,7 @@ async def handle_incoming_message(
         else:
             # Use AI responder for complex questions
             ai_result = await generate_response(text, user.id, display_name)
-            await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
+            await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
             logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
             reply = ai_result.text
             if debug_on:
@@ -434,7 +441,7 @@ async def handle_incoming_message(
     else:
         # Unknown intent — try AI responder before giving up
         ai_result = await generate_response(text, user.id, display_name)
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens)
+        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
         logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
         reply = ai_result.text
         if debug_on:
@@ -642,6 +649,15 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
         total_tokens_out=stats["total_tokens_out"],
         global_tokens_in=stats["global_tokens_in"],
         global_tokens_out=stats["global_tokens_out"],
+        model_used=getattr(ai_result, "model", "") if ai_result else "",
+        calls_haiku=stats["calls_haiku"],
+        calls_sonnet=stats["calls_sonnet"],
+        global_calls_haiku=stats["global_calls_haiku"],
+        global_calls_sonnet=stats["global_calls_sonnet"],
+        global_tokens_in_haiku=stats["global_tokens_in_haiku"],
+        global_tokens_out_haiku=stats["global_tokens_out_haiku"],
+        global_tokens_in_sonnet=stats["global_tokens_in_sonnet"],
+        global_tokens_out_sonnet=stats["global_tokens_out_sonnet"],
     )
 
 
