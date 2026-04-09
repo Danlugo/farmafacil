@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy import func, select
 
+from farmafacil import __version__
 from farmafacil.config import LLM_MODEL
 from farmafacil.db.session import async_session
 from farmafacil.models.database import ConversationLog, SearchLog, User
@@ -53,11 +54,24 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
         total_tokens_in = row.total_tokens_in if row else 0
         total_tokens_out = row.total_tokens_out if row else 0
 
+        # Global token totals across all users
+        global_result = await session.execute(
+            select(
+                func.coalesce(func.sum(User.total_tokens_in), 0),
+                func.coalesce(func.sum(User.total_tokens_out), 0),
+            )
+        )
+        global_row = global_result.one()
+        global_tokens_in = global_row[0]
+        global_tokens_out = global_row[1]
+
     return {
         "total_questions": total_questions,
         "total_success": total_success,
         "total_tokens_in": total_tokens_in,
         "total_tokens_out": total_tokens_out,
+        "global_tokens_in": global_tokens_in,
+        "global_tokens_out": global_tokens_out,
     }
 
 
@@ -69,6 +83,8 @@ def build_debug_footer(
     total_success: int,
     total_tokens_in: int = 0,
     total_tokens_out: int = 0,
+    global_tokens_in: int = 0,
+    global_tokens_out: int = 0,
 ) -> str:
     """Build a debug footer string to append to bot responses.
 
@@ -80,6 +96,8 @@ def build_debug_footer(
         total_success: Total positive feedback count.
         total_tokens_in: Cumulative input tokens for this user.
         total_tokens_out: Cumulative output tokens for this user.
+        global_tokens_in: Global cumulative input tokens (all users).
+        global_tokens_out: Global cumulative output tokens (all users).
 
     Returns:
         Formatted debug footer string.
@@ -87,10 +105,12 @@ def build_debug_footer(
     return (
         "\n\n---\n"
         "\U0001f527 *DEBUG*\n"
+        f"app version: _{__version__}_\n"
         f"ai model: _{LLM_MODEL}_\n"
         f"ai role: _{role_used}_\n"
         f"tokens: _{input_tokens} in / {output_tokens} out_\n"
-        f"total tokens: _{total_tokens_in} in / {total_tokens_out} out_\n"
+        f"user tokens: _{total_tokens_in} in / {total_tokens_out} out_\n"
+        f"global tokens: _{global_tokens_in} in / {global_tokens_out} out_\n"
         f"total questions: _{total_questions}_\n"
         f"total success: _{total_success}_"
     )

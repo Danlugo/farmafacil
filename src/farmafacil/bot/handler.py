@@ -580,6 +580,8 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
         total_success=stats["total_success"],
         total_tokens_in=stats["total_tokens_in"],
         total_tokens_out=stats["total_tokens_out"],
+        global_tokens_in=stats["global_tokens_in"],
+        global_tokens_out=stats["global_tokens_out"],
     )
 
 

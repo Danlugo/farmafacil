@@ -130,6 +130,15 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files created:** None
 - **Files modified:** `services/ai_roles.py` (assemble_prompt with user_profile), `services/ai_responder.py` (_get_user_profile, pass profile to assemble_prompt), `tests/test_ai_roles.py` (new profile tests)
 
+### Item 14: Debug Footer — App Version + Global Token Totals
+
+- **Status:** DONE
+- **Added:** 2026-04-08
+- **Completed:** 2026-04-08
+- **Problem:** Debug footer was missing the app version and global token totals (across all users). Only per-user and per-call tokens were shown.
+- **Solution implemented:** Added `app version:` line showing dynamic `__version__` and `global tokens:` line showing sum of all users' cumulative tokens. Renamed "total tokens" to "user tokens" for clarity. Added global token aggregation query in `get_user_stats()`.
+- **Files modified:** `services/chat_debug.py` (version import, global query, footer format), `bot/handler.py` (pass global tokens), `tests/test_chat_debug.py` (3 new tests), `tests/test_usage_stats.py` (updated label assertions)
+
 ### Item 13: Symptom Acknowledgment + Typing Indicator
 
 - **Status:** DONE

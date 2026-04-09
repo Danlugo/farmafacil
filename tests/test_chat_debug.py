@@ -76,6 +76,26 @@ class TestBuildDebugFooter:
         footer = build_debug_footer("fallback", 0, 0, 0, 0)
         assert "0 in / 0 out" in footer
 
+    def test_footer_contains_app_version(self):
+        from farmafacil import __version__
+        footer = build_debug_footer("test_role", 0, 0, 0, 0)
+        assert f"app version: _{__version__}_" in footer
+
+    def test_footer_contains_global_tokens(self):
+        footer = build_debug_footer(
+            "test_role", 10, 20, 5, 1,
+            total_tokens_in=100, total_tokens_out=200,
+            global_tokens_in=5000, global_tokens_out=8000,
+        )
+        assert "global tokens: _5000 in / 8000 out_" in footer
+
+    def test_footer_user_tokens_labeled(self):
+        footer = build_debug_footer(
+            "test_role", 10, 20, 5, 1,
+            total_tokens_in=100, total_tokens_out=200,
+        )
+        assert "user tokens: _100 in / 200 out_" in footer
+
 
 class TestGetUserStats:
     """Test user stats queries."""
@@ -91,6 +111,12 @@ class TestGetUserStats:
         stats = await get_user_stats("5559999999", 999)
         assert stats["total_questions"] == 0
         assert stats["total_success"] == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_global_token_keys(self):
+        stats = await get_user_stats("5550000000", 999)
+        assert "global_tokens_in" in stats
+        assert "global_tokens_out" in stats
 
     @pytest.mark.asyncio
     async def test_counts_inbound_messages(self):

@@ -146,7 +146,7 @@ class TestBuildDebugFooterWithTotals:
             total_questions=10, total_success=3,
             total_tokens_in=1500, total_tokens_out=600,
         )
-        assert "total tokens: _1500 in / 600 out_" in footer
+        assert "user tokens: _1500 in / 600 out_" in footer
 
     def test_footer_shows_both_per_call_and_total(self):
         from farmafacil.services.chat_debug import build_debug_footer
@@ -157,7 +157,7 @@ class TestBuildDebugFooterWithTotals:
             total_tokens_in=1000, total_tokens_out=400,
         )
         assert "tokens: _100 in / 50 out_" in footer
-        assert "total tokens: _1000 in / 400 out_" in footer
+        assert "user tokens: _1000 in / 400 out_" in footer
 
 
 class TestStatsEndpoint:
