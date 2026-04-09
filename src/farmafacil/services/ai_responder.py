@@ -14,8 +14,11 @@ import logging
 from dataclasses import dataclass
 
 import anthropic
+from sqlalchemy import select
 
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+from farmafacil.db.session import async_session
+from farmafacil.models.database import User
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.ai_router import DEFAULT_ROLE, route_to_role
 from farmafacil.services.user_memory import get_memory
@@ -38,6 +41,27 @@ class AiResponse:
 
 
 # ── Hardcoded fallback prompt (safety net if no roles in DB) ──────────
+
+async def _get_user_profile(user_id: int) -> dict | None:
+    """Load live user profile data for prompt injection.
+
+    Returns:
+        Dict with name, zone, city_code, preference — or None if not found.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            return None
+        return {
+            "name": user.name,
+            "zone": user.zone_name,
+            "city_code": user.city_code,
+            "preference": user.display_preference,
+        }
+
 
 _FALLBACK_PROMPT = """Eres FarmaFacil, un asistente de WhatsApp que ayuda a personas en Venezuela a encontrar productos en farmacias cercanas (medicamentos, cuidado personal, belleza, vitaminas, suplementos, productos para bebé, y más).
 
@@ -77,12 +101,13 @@ async def generate_response(
     if not role:
         role = await get_role(DEFAULT_ROLE)
 
-    # 3. Load client memory
+    # 3. Load client memory and live profile
     client_memory = await get_memory(user_id)
+    user_profile = await _get_user_profile(user_id)
 
     # 4. Assemble the full system prompt
     if role:
-        system_prompt = assemble_prompt(role, client_memory)
+        system_prompt = assemble_prompt(role, client_memory, user_profile)
         role_used = role.name
     else:
         # Ultimate fallback — no roles in DB at all
@@ -126,9 +151,10 @@ async def classify_with_ai(message: str, user_id: int, user_name: str) -> AiResp
     # Load the pharmacy_advisor role for classification
     role = await get_role("pharmacy_advisor")
     client_memory = await get_memory(user_id)
+    user_profile = await _get_user_profile(user_id)
 
     if role:
-        base_prompt = assemble_prompt(role, client_memory)
+        base_prompt = assemble_prompt(role, client_memory, user_profile)
     else:
         base_prompt = _FALLBACK_PROMPT
 

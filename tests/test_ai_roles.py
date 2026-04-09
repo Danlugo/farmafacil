@@ -118,8 +118,44 @@ class TestAssemblePrompt:
             skills=[],
         )
         result = assemble_prompt(role, "User takes losartan daily.")
-        assert "## Client Context" in result
+        assert "## Client Memory" in result
         assert "User takes losartan daily." in result
+
+    def test_assembly_with_profile(self):
+        """Includes user profile when provided, before memory."""
+        role = RoleConfig(
+            name="test",
+            display_name="Test",
+            description="Test role",
+            system_prompt="Base prompt.",
+            rules=[],
+            skills=[],
+        )
+        profile = {"name": "Maria", "zone": "Chacao", "city_code": "CCS", "preference": "grid"}
+        result = assemble_prompt(role, "Old memory note", profile)
+        assert "## User Profile" in result
+        assert "Maria" in result
+        assert "Chacao" in result
+        assert "galería" in result
+        # Profile appears before memory
+        profile_pos = result.index("## User Profile")
+        memory_pos = result.index("## Client Memory")
+        assert profile_pos < memory_pos
+
+    def test_assembly_profile_overrides_label(self):
+        """Profile section is labeled as authoritative."""
+        role = RoleConfig(
+            name="test",
+            display_name="Test",
+            description="Test role",
+            system_prompt="Base prompt.",
+            rules=[],
+            skills=[],
+        )
+        profile = {"name": "Jose", "zone": "El Cafetal"}
+        result = assemble_prompt(role, None, profile)
+        assert "authoritative" in result
+        assert "Jose" in result
 
     def test_assembly_no_rules_no_skills(self):
         """No Rules/Skills sections when empty."""

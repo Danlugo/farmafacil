@@ -104,15 +104,25 @@ async def list_active_roles() -> list[RoleConfig]:
     return list(_roles_cache.values())
 
 
-def assemble_prompt(role: RoleConfig, client_memory: str | None = None) -> str:
+def assemble_prompt(
+    role: RoleConfig,
+    client_memory: str | None = None,
+    user_profile: dict | None = None,
+) -> str:
     """Assemble the full system prompt for an AI role.
 
     Combines the role's base system prompt with its rules, skills,
-    and the client's memory into a single system prompt string.
+    live user profile data, and the client's memory into a single
+    system prompt string.
+
+    The user profile section is AUTHORITATIVE (live from DB) and takes
+    precedence over anything in client memory. Memory is supplementary
+    context that captures patterns, preferences, and history.
 
     Args:
         role: The AI role configuration.
         client_memory: Optional per-user memory text.
+        user_profile: Optional dict with live profile data (name, zone, etc.)
 
     Returns:
         Complete system prompt string.
@@ -127,7 +137,29 @@ def assemble_prompt(role: RoleConfig, client_memory: str | None = None) -> str:
         skills_text = "\n\n".join(role.skills)
         parts.append(f"\n\n## Skills\n\n{skills_text}")
 
+    # Profile is authoritative — always inject before memory
+    if user_profile:
+        profile_lines = []
+        if user_profile.get("name"):
+            profile_lines.append(f"- Nombre: {user_profile['name']}")
+        if user_profile.get("zone"):
+            profile_lines.append(f"- Ubicación: {user_profile['zone']}")
+        if user_profile.get("city_code"):
+            profile_lines.append(f"- Ciudad: {user_profile['city_code']}")
+        if user_profile.get("preference"):
+            pref_label = "galería" if user_profile["preference"] == "grid" else "imagen grande"
+            profile_lines.append(f"- Visualización: {pref_label}")
+        if profile_lines:
+            parts.append(
+                "\n\n## User Profile (authoritative — always current)\n\n"
+                + "\n".join(profile_lines)
+            )
+
+    # Memory is supplementary — patterns, preferences, history
     if client_memory and client_memory.strip():
-        parts.append(f"\n\n## Client Context\n\n{client_memory}")
+        parts.append(
+            "\n\n## Client Memory (supplementary — may contain outdated info, "
+            "profile section above takes precedence)\n\n" + client_memory
+        )
 
     return "".join(parts)
