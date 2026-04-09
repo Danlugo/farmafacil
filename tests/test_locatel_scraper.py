@@ -202,6 +202,7 @@ class TestLocatelRegistered:
 class TestLocatelLive:
     """Integration tests that hit the live VTEX API."""
 
+    @pytest.mark.asyncio
     async def test_search_aspirina(self, scraper):
         """Live search for aspirina returns results."""
         results = await scraper.search("aspirina", max_results=3)
@@ -210,6 +211,7 @@ class TestLocatelLive:
         assert results[0].price_bs is not None
         assert results[0].drug_name
 
+    @pytest.mark.asyncio
     async def test_search_no_results(self, scraper):
         """Nonsense query returns empty results."""
         results = await scraper.search("xyznonexistentdrug12345")
