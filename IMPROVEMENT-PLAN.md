@@ -49,6 +49,97 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Notes:** Investigated 2026-04-09: DNS SERVFAIL on farmahorro.com.ve, wxana.com returns 403, xana.com returns 403. Wikipedia confirms dissolution in 2025. No viable API to scrape.
 - **Replacement:** See Item 17 (Farmarebajas Scraper) — discovered during investigation as a viable alternative with a public WooCommerce Store API.
 
+### Item 18: Concurrent Scraper Execution
+
+- **Status:** DONE
+- **Added:** 2026-04-10
+- **Completed:** 2026-04-10
+- **Priority:** P1
+- **Problem:** Scrapers run sequentially in a `for` loop (`search.py:209`). With 3 scrapers at up to 30s timeout each, worst-case response time is ~90 seconds. Users wait unnecessarily long for drug search results.
+- **Solution implemented:** Replaced sequential `for scraper in ACTIVE_SCRAPERS` loop with `asyncio.gather(*tasks, return_exceptions=True)`. All 3 scrapers now execute concurrently — worst-case response time drops from ~90s to ~30s (max of individual scraper times). Per-scraper errors are isolated: one failure doesn't cancel others. Snapshots `ACTIVE_SCRAPERS` into a local `scrapers` variable before gather for safe zip pairing.
+- **Files modified:** `src/farmafacil/services/search.py` (sequential → concurrent with asyncio.gather)
+- **Files created:** `tests/test_search_concurrent.py` (11 tests: concurrent timing, error isolation, cache bypass, empty list, empty scraper list)
+
+### Item 19: Move Algolia Credentials to Env Vars
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P1
+- **Problem:** Farmatodo Algolia API key and app ID are hardcoded in `farmatodo.py:15-16` and committed to Git. Security risk — credentials should be in `.env` and loaded via config.
+- **Suggested solution:** Move `ALGOLIA_APP_ID` and `ALGOLIA_API_KEY` to `.env` / `config.py`. Update `farmatodo.py` to read from config. Add to `.env.example`.
+- **Affected files:** `src/farmafacil/scrapers/farmatodo.py`, `src/farmafacil/config.py`, `.env.example`
+- **Effort:** Low (<1h)
+
+### Item 20: N+1 Query Fix in Product Cache
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P2
+- **Problem:** `product_cache.py` loads products then loops through `product.prices` without eager loading — triggers 100+ individual SQL queries for 100 products. Causes unnecessary DB load and latency on cached searches.
+- **Suggested solution:** Add `joinedload(Product.prices)` to product queries in `find_cached_products()`, `get_cached_results()`, and `find_cross_chain_matches()`.
+- **Affected files:** `src/farmafacil/services/product_cache.py`
+- **Effort:** Low (1-2h)
+
+### Item 21: Differentiate Connection Errors from No Results
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P2
+- **Problem:** When scrapers fail (timeout, HTTP 503, DNS failure), users see "No encontramos resultados" — same message as when the drug genuinely doesn't exist. Users blame the pharmacy, not the network. Bot should distinguish "no results" from "couldn't reach pharmacy".
+- **Suggested solution:** Track scraper failures separately from empty results. Return a `SearchResponse` with error info. Formatter shows "⚠️ No pudimos conectar con [pharmacy]" vs "No encontramos resultados".
+- **Affected files:** `src/farmafacil/services/search.py`, `src/farmafacil/models/schemas.py`, `src/farmafacil/bot/formatter.py`
+- **Effort:** Low (1-2h)
+
+### Item 22: Remove Deprecated ProductCache Table
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P3
+- **Problem:** `ProductCache` model in `database.py:241-246` is marked DEPRECATED (replaced by products/product_prices/search_queries) but still in schema and admin views. Dead code.
+- **Suggested solution:** Remove `ProductCache` class from `database.py`, remove admin view, clean up any remaining references.
+- **Affected files:** `src/farmafacil/models/database.py`, `src/farmafacil/api/admin.py`
+- **Effort:** Low (<1h)
+
+### Item 23: API Input Validation & Rate Limiting
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P2
+- **Problem:** No validation on search query (empty strings, excessive length accepted). No rate limiting on any API endpoint. Could be abused or cause unnecessary scraper load.
+- **Suggested solution:** Add Pydantic validation (min length 2, max length 200) on search query. Add basic rate limiting middleware (e.g., slowapi or custom). Validate phone number format on user-related endpoints.
+- **Affected files:** `src/farmafacil/api/routes.py`, `src/farmafacil/models/schemas.py`, `pyproject.toml`
+- **Effort:** Medium (2-3h)
+
+### Item 24: WhatsApp Location Sharing Support
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P2
+- **Problem:** `webhook.py:99` has a TODO — users who share their GPS location pin during onboarding don't advance. Only text-based city names work. Many users naturally share their WhatsApp location instead of typing a city name.
+- **Suggested solution:** Parse WhatsApp location message payload (latitude, longitude), reverse-geocode to city/zone, and advance onboarding. Reuse existing `geocode.py` service.
+- **Affected files:** `src/farmafacil/bot/webhook.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/services/geocode.py`
+- **Effort:** Medium (2-3h)
+
+### Item 25: Improve Bare Exception Handlers
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P3
+- **Problem:** 12+ `except Exception:` blocks across the codebase catch all errors indiscriminately. Makes debugging hard — timeout vs auth failure vs parsing error all look the same in logs.
+- **Suggested solution:** Replace bare `except Exception:` with specific exceptions (`httpx.TimeoutException`, `httpx.HTTPStatusError`, `anthropic.APIError`, `json.JSONDecodeError`, etc.). Keep a final `except Exception:` only as last resort with full traceback logging.
+- **Affected files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/services/search.py`, `src/farmafacil/scrapers/vtex.py`, `src/farmafacil/bot/handler.py`, and others
+- **Effort:** Medium (2-3h)
+
+### Item 26: Handler.py Test Coverage
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P2
+- **Problem:** Main bot handler (`handler.py`, 710 lines, ~15% of codebase) has zero dedicated tests. It's the most critical untested module — all message routing, onboarding, search, feedback flows go through it.
+- **Suggested solution:** Create `tests/test_handler.py` with mocked dependencies (WhatsApp API, scrapers, AI responder, DB). Test: onboarding flow, drug search routing, feedback flow, error handling, debug footer.
+- **Affected files:** `tests/test_handler.py` (new)
+- **Effort:** High (4-6h)
+
 ### Item 17: 4th Pharmacy Scraper
 
 - **Status:** DEFERRED

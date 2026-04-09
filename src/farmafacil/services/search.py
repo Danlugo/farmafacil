@@ -5,6 +5,7 @@ Supports specific product filtering: when a user searches for an exact product
 products are counted and offered via "ver similares".
 """
 
+import asyncio
 import logging
 import re
 
@@ -204,21 +205,32 @@ async def search_drug(
                     "Serving catalog products for '%s': %d items", query, len(catalog_results)
                 )
 
-        # 3. Cache miss + no catalog hit — hit scrapers
+        # 3. Cache miss + no catalog hit — hit scrapers concurrently
         if not all_results:
-            for scraper in ACTIVE_SCRAPERS:
-                logger.info("Searching %s for '%s'", scraper.pharmacy_name, query)
-                searched.append(scraper.pharmacy_name)
-                try:
-                    results = await scraper.search(query, city=city)
-                    all_results.extend(results)
-                except Exception:
+            scrapers = list(ACTIVE_SCRAPERS)
+            searched = [s.pharmacy_name for s in scrapers]
+            logger.info(
+                "Searching %d scrapers concurrently for '%s'",
+                len(scrapers),
+                query,
+            )
+
+            scraper_results = await asyncio.gather(
+                *(scraper.search(query, city=city) for scraper in scrapers),
+                return_exceptions=True,
+            )
+
+            for scraper, result in zip(scrapers, scraper_results):
+                if isinstance(result, Exception):
                     logger.error(
-                        "Scraper %s failed for query '%s'",
+                        "Scraper %s failed for query '%s': %s",
                         scraper.pharmacy_name,
                         query,
-                        exc_info=True,
+                        result,
+                        exc_info=result,
                     )
+                else:
+                    all_results.extend(result)
 
             # Save to product catalog (upsert — never deletes)
             if all_results:
