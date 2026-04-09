@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 
-from farmafacil.bot.formatter import format_search_results
+from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
 from farmafacil.models.schemas import DrugResult
@@ -29,6 +29,7 @@ from farmafacil.services.drug_interactions import (
 )
 from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
+from farmafacil.services.store_locations import get_all_nearby_stores
 from farmafacil.services.users import (
     get_or_create_user,
     increment_token_usage,
@@ -314,6 +315,21 @@ async def handle_incoming_message(
         await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
         logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
 
+        # If AI detects a nearest_store query, show nearby pharmacies
+        if ai_result.action == "nearest_store":
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            if ai_result.text:
+                await send_text_message(sender, ai_result.text)
+            await _handle_nearest_store(
+                sender, user, display_name, debug_on=debug_on, ai_result=ai_result,
+            )
+            return
+
         # If AI detects a drug search, perform it
         if ai_result.action == "drug_search" and ai_result.drug_query:
             if not user.latitude:
@@ -372,6 +388,15 @@ async def handle_incoming_message(
         if action == "view_similar":
             await _handle_view_similar(sender, user)
             return
+        if action == "nearest_store":
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
+            return
 
     # Classify intent (keywords first, AI fallback)
     intent = await classify_intent(text, user.id, user.name or "")
@@ -421,6 +446,17 @@ async def handle_incoming_message(
 
         query = intent.drug_query or text
         await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)
+
+    elif intent.action == "nearest_store":
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=display_name)
+            )
+            return
+        if intent.response_text:
+            await send_text_message(sender, intent.response_text)
+        await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
 
     elif intent.action == "question":
         # Check if the question is about a pharmacy store
@@ -519,6 +555,51 @@ async def _handle_drug_search(
     # Update user memory with search context
     summary = f"Searched: {query} → {results_count} results"
     await _update_memory_safe(user.id, display_name, query, summary)
+
+
+async def _handle_nearest_store(
+    sender: str,
+    user,
+    display_name: str,
+    debug_on: bool = False,
+    ai_result=None,
+) -> None:
+    """Find and send nearest pharmacy stores to the user.
+
+    Queries all pharmacy chains from the pharmacy_locations DB table
+    and returns them sorted by distance from the user's location.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with location data.
+        display_name: User's display name.
+        debug_on: Whether to append debug footer.
+        ai_result: AiResponse from classification (for token stats).
+    """
+    logger.info(
+        "Nearest store query from %s/%s (%s)",
+        sender, display_name, user.zone_name,
+    )
+
+    stores = await get_all_nearby_stores(
+        latitude=user.latitude,
+        longitude=user.longitude,
+    )
+
+    reply = format_nearby_stores(stores, zone_name=user.zone_name)
+    if debug_on:
+        reply += await _build_debug(sender, user.id, ai_result)
+    await send_text_message(sender, reply)
+
+    # Ask for feedback (same as drug search)
+    await set_onboarding_step(sender, "awaiting_feedback")
+    await send_text_message(sender, MSG_ASK_FEEDBACK)
+
+    await _update_memory_safe(
+        user.id, display_name,
+        "farmacia cercana",
+        f"Showed {len(stores)} nearby stores",
+    )
 
 
 async def _try_store_lookup(text: str) -> object | None:

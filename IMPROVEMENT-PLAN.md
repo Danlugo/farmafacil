@@ -130,6 +130,17 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Affected files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/services/search.py`, `src/farmafacil/scrapers/vtex.py`, `src/farmafacil/bot/handler.py`, and others
 - **Effort:** Medium (2-3h)
 
+### Item 27: Nearest Pharmacy Direct Query
+
+- **Status:** DONE
+- **Added:** 2026-04-10
+- **Completed:** 2026-04-10
+- **Priority:** P2
+- **Problem:** When user asks "cuál es la farmacia más cercana", the AI can't answer — it only knows about stores through drug searches. Store lookups are a side effect of `_enrich_with_nearby_stores()` during product search, with no standalone capability.
+- **Solution implemented:** Added `nearest_store` action across the full stack: (1) `get_all_nearby_stores()` service queries all pharmacy chains from `pharmacy_locations` DB, calculates haversine distances, returns top 5 sorted by proximity. (2) `format_nearby_stores()` formats results for WhatsApp with store name, chain, distance, address. (3) AI classifier recognizes `nearest_store` action for questions about nearby pharmacies. (4) Handler routes `nearest_store` in both AI-only and hybrid modes, with location check and feedback prompt. (5) 8 keyword entries ("farmacia cercana", "donde comprar", etc.) for fast hybrid-mode routing without LLM. (6) `nearest_store` skill added to pharmacy_advisor role. (7) Fixed stale seed prompt to include Locatel (3rd chain).
+- **Files modified:** `src/farmafacil/services/store_locations.py` (new function), `src/farmafacil/bot/formatter.py` (new function), `src/farmafacil/services/ai_responder.py` (action enum + rules), `src/farmafacil/bot/handler.py` (routing + handler), `src/farmafacil/db/seed.py` (keywords + skill + Locatel prompt fix), `src/farmafacil/services/intent.py` (docstring + help msg)
+- **Files created:** `tests/test_nearest_store.py` (15 tests)
+
 ### Item 26: Handler.py Test Coverage
 
 - **Status:** PENDING

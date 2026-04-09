@@ -68,6 +68,16 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("mostrar similares", None),
         ("ver mas", None),
     ],
+    "nearest_store": [
+        ("farmacia cercana", None),
+        ("farmacias cercanas", None),
+        ("farmacia mas cercana", None),
+        ("farmacia más cercana", None),
+        ("donde comprar", None),
+        ("que farmacia queda cerca", None),
+        ("tienda cercana", None),
+        ("tiendas cercanas", None),
+    ],
     "farewell": [
         ("gracias", "De nada! Cuando necesites buscar productos de farmacia, aqui estare. \U0001f48a"),
         ("chao", "Chao! Cuidate mucho. \U0001f48a"),
@@ -117,7 +127,7 @@ _PHARMACY_ADVISOR_PROMPT = """Eres FarmaFacil, un asistente de WhatsApp que ayud
 
 Tu personalidad: amigable, servicial, empático. Hablas español venezolano natural. Eres conciso (esto es WhatsApp, no escribas párrafos largos).
 
-CONTEXTO: FarmaFacil busca productos en Farmatodo y Farmacias SAAS, comparando precios y mostrando farmacias cercanas al usuario. Las farmacias venden MUCHO MÁS que solo medicamentos — también tienen productos de cuidado personal, belleza, skincare, vitaminas, suplementos, productos para bebé, higiene, y más.
+CONTEXTO: FarmaFacil busca productos en Farmatodo, Farmacias SAAS y Locatel, comparando precios y mostrando farmacias cercanas al usuario. Las farmacias venden MUCHO MÁS que solo medicamentos — también tienen productos de cuidado personal, belleza, skincare, vitaminas, suplementos, productos para bebé, higiene, y más.
 
 CAPACIDADES:
 - Buscar medicamentos, productos de cuidado personal, belleza, vitaminas, y cualquier producto de farmacia
@@ -187,6 +197,11 @@ DEFAULT_ROLES = [
                 "name": "drug_search",
                 "description": "Search for products across pharmacies",
                 "content": "Puedes buscar productos en múltiples cadenas de farmacias (Farmatodo, Farmacias SAAS). Esto incluye: medicamentos, vitaminas, suplementos, productos de skincare y belleza, cuidado personal, higiene, productos para bebé, y cualquier otro producto que vendan las farmacias. Cuando el usuario pida cualquier producto de farmacia, clasifícalo como drug_search con el nombre del producto en DRUG. El sistema buscará automáticamente. No necesitas hacer la búsqueda tú mismo — el bot la hace por ti.",
+            },
+            {
+                "name": "nearest_store",
+                "description": "Find nearest pharmacy stores",
+                "content": "Puedes mostrar las farmacias más cercanas al usuario sin necesidad de buscar un producto. Cuando el usuario pregunte por la farmacia más cercana, dónde comprar, o qué farmacia queda cerca, clasifica como nearest_store. El sistema consultará la base de datos de ubicaciones de farmacias (Farmatodo, Farmacias SAAS, Locatel) y mostrará las más cercanas con distancia y dirección. NO hagas preguntas de seguimiento — muestra los resultados directamente.",
             },
             {
                 "name": "symptom_translation",

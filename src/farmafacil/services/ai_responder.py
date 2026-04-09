@@ -164,13 +164,14 @@ async def classify_with_ai(message: str, user_id: int, user_name: str) -> AiResp
 INSTRUCCIONES ADICIONALES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
 
 FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
-ACTION: [greeting|drug_search|question|unknown]
+ACTION: [greeting|drug_search|nearest_store|question|unknown]
 DRUG: [nombre del producto tal como lo escribió el usuario]
 NAME: [nombre de la persona si se presenta]
 LOCATION: [zona/barrio/ciudad si menciona ubicación]
 RESPONSE: [respuesta conversacional si es una pregunta]
 
 REGLAS:
+- Si el usuario pregunta por la farmacia más cercana, farmacias cerca, dónde comprar, o cualquier variación de "qué farmacia queda cerca": clasifica como nearest_store. NO hagas preguntas — el sistema mostrará las farmacias más cercanas automáticamente. Si el usuario tiene historial de búsquedas o menciona una cadena preferida, puedes incluir un RESPONSE breve mencionándolo.
 - Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
 - Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
 - Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, que tal aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, e incluye una RESPONSE breve que: (1) reconozca el síntoma, (2) confirme que el producto es buena opción para eso, (3) mencione 1-2 alternativas que también podrían buscar (ej: "También podrías probar Acetaminofén o Ibuprofeno"), (4) recuerde consultar al médico. Ejemplo: "Entiendo que tienes dolor de cabeza. Aspirina es buena opción para eso. También podrías buscar Acetaminofén o Ibuprofeno. Recuerda consultar con tu médico si es frecuente."
@@ -278,7 +279,7 @@ def _parse_structured_response(reply: str) -> AiResponse:
                 fields[key] = value
 
     action = fields.get("ACTION", "unknown").lower()
-    if action not in ("greeting", "drug_search", "question", "unknown"):
+    if action not in ("greeting", "drug_search", "nearest_store", "question", "unknown"):
         action = "question" if fields.get("RESPONSE") else "unknown"
 
     return AiResponse(

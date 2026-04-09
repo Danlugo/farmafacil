@@ -159,3 +159,43 @@ def format_search_results(response: SearchResponse) -> str:
         "\n_cambiar zona_ \u00b7 _ayuda_"
     )
     return "\n".join(lines)
+
+
+def format_nearby_stores(
+    stores: list[dict],
+    zone_name: str | None = None,
+) -> str:
+    """Format a list of nearby stores for WhatsApp.
+
+    Args:
+        stores: List of store dicts from get_all_nearby_stores().
+        zone_name: User's zone name for display.
+
+    Returns:
+        Formatted WhatsApp message.
+    """
+    if not stores:
+        return (
+            "\U0001f3e5 No encontramos farmacias cercanas a tu ubicacion.\n\n"
+            "Intenta _cambiar zona_ para actualizar tu ubicacion."
+        )
+
+    zone_label = f" cerca de *{zone_name}*" if zone_name else ""
+    lines = [f"\U0001f3e5 *Farmacias cercanas*{zone_label}\n"]
+
+    for i, store in enumerate(stores, 1):
+        chain = store["pharmacy_chain"]
+        name = store["store_name"]
+        dist = store["distance_km"]
+        address = store["address"]
+
+        line = f"*{i}. {name}*\n   \U0001f4cd {chain} — {dist:.1f} km"
+        if address:
+            line += f"\n   {address}"
+        lines.append(line)
+
+    lines.append(
+        "\nEnvia el nombre de un producto para buscar disponibilidad."
+        "\n_cambiar zona_ \u00b7 _ayuda_"
+    )
+    return "\n".join(lines)

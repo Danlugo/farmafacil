@@ -52,7 +52,7 @@ async def _get_keyword_cache() -> dict[str, tuple[str, str | None]]:
 class Intent:
     """Classified user intent with extracted profile data."""
 
-    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, question, unknown
+    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, nearest_store, question, unknown
     drug_query: str | None = None
     response_text: str | None = None
     detected_name: str | None = None
@@ -68,6 +68,8 @@ HELP_MESSAGE = (
     "*Buscar producto:*\n"
     "\u2022 Envia el nombre (ej: _losartan_, _protector solar_)\n"
     "\u2022 O describe lo que necesitas (ej: _algo para el dolor de cabeza_)\n\n"
+    "*Farmacias cercanas:*\n"
+    "\u2022 Pregunta _farmacia cercana_ o _donde comprar_\n\n"
     "*Configuracion:*\n"
     "\u2022 _cambiar zona_ — nueva ubicacion\n"
     "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
