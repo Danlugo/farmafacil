@@ -207,12 +207,33 @@ After every drug search, the bot asks "¿Te sirvió? (sí/no)". The flow uses `o
 
 | Step | User sends | Bot behavior |
 |------|-----------|-------------|
-| `awaiting_feedback` | "sí", "ok", "👍", etc. | Records positive feedback, thanks user |
-| `awaiting_feedback` | "no", "👎", "nada", etc. | Records negative feedback, asks follow-up |
-| `awaiting_feedback` | anything else | Clears step, processes as normal message |
+| `awaiting_feedback` | "sí", "si", "yes", "👍", "1" | Records positive feedback, thanks user |
+| `awaiting_feedback` | "no", "nop", "nope", "👎", "0" | Records negative feedback, asks follow-up |
+| `awaiting_feedback` | anything else (incl. "gracias", "ok", "bien") | Clears step, processes as normal message |
 | `awaiting_feedback_detail` | any text | Records detail, thanks user |
 
+The positive/negative match sets are intentionally tight — ambiguous words like `gracias`, `ok`, `bien`, `perfecto` are common farewells and must NOT auto-record feedback (regression from Item 28: user Jose Lugo got the "thanks for feedback" message immediately after typing "gracias").
+
 Feedback is stored in `search_logs.feedback` (yes/no) and `search_logs.feedback_detail` (free text).
+
+---
+
+## User Feedback Commands (`/bug`, `/comentario`)
+
+Users can submit bug reports or comments at any time via slash commands. The command is intercepted early in `handle_incoming_message()` — before onboarding state handling — so it also functions as an **escape hatch** from stuck states.
+
+| User sends | Bot behavior |
+|-----------|-------------|
+| `/bug <texto>` | Creates `user_feedback` row (type=bug), replies with case ID |
+| `/comentario <texto>` | Creates row (type=comentario), replies with case ID |
+| `/commentario <texto>` | Typo alias, normalized to `comentario` |
+| `/bug` (bare) | Asks user to include the report text after the command |
+
+**Confirmation format:** `✅ ¡Gracias! Tu reporte ha sido registrado. 📋 Caso #{id}. Nuestro equipo lo revisará pronto.`
+
+**Escape hatch behavior:** If the user is in `awaiting_feedback` or `awaiting_feedback_detail` state, the step is cleared BEFORE the `create_feedback()` call. Even if the DB write fails, the user is freed from the stuck state and sees an error message they can act on.
+
+Submissions are reviewed via the SQLAdmin dashboard at `/admin/user-feedback/` — reviewers can only edit `reviewed`, `reviewer_notes`, and `reviewed_at`. Each row links back to the latest inbound `conversation_logs` entry for context.
 
 ---
 

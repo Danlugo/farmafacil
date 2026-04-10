@@ -11,8 +11,13 @@ logger = logging.getLogger(__name__)
 
 # ── Feedback parsing ──────────────────────────────────────────────────────
 
-_POSITIVE = {"sí", "si", "yes", "👍", "1", "ok", "bien", "perfecto", "gracias"}
-_NEGATIVE = {"no", "👎", "0", "nada", "mal", "nope"}
+# Keep these sets tight — any word here short-circuits the `awaiting_feedback`
+# state and auto-records a response. Ambiguous words like "gracias", "ok",
+# "bien", "perfecto" are farewells for many users and must NOT be included,
+# otherwise users who type "gracias" after a search see the feedback-thanks
+# message immediately (see Item 28 regression).
+_POSITIVE = {"sí", "si", "yes", "yep", "👍", "1"}
+_NEGATIVE = {"no", "nop", "nope", "👎", "0"}
 
 
 def parse_feedback(text: str) -> str | None:

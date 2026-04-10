@@ -302,6 +302,35 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files created:** `tests/test_symptom_typing.py` (19 tests across 6 test classes)
 - **Files modified:** `bot/handler.py` (typing indicator call, symptom text before search in both modes), `bot/whatsapp.py` (send_typing_indicator function), `services/ai_responder.py` (classification REGLAS for symptoms), `db/seed.py` (symptom_translation skill content)
 
+### Item 28: User Feedback Collection — /bug and /comentario Commands + Feedback Race Bug Fix
+
+- **Status:** DONE (2026-04-09, v0.12.0)
+- **Added:** 2026-04-09
+- **Priority:** P2
+- **Problem:** (1) No structured way for users to report bugs, issues, or suggestions through the bot. Feedback is lost in conversation logs with no review workflow. (2) Test user Jose Lugo received the "¿Te sirvió?" prompt after a search, but the "gracias por tu respuesta" message fired immediately — he never had time to type anything. Root cause: `_POSITIVE` set in `search_feedback.py` contained ambiguous words like `"gracias"`, `"ok"`, `"bien"`, `"perfecto"` that users send as farewells, which were misinterpreted as positive feedback.
+- **Solution implemented:** (1) New `user_feedback` table linked to `users` and `conversation_logs`. New `/bug` and `/comentario` commands intercepted early in `handle_incoming_message()` (after read receipt, before onboarding state handling), extract the text after the command, store a case, and reply with DB-generated case ID (`Caso #{id}`). State (`awaiting_feedback`, `awaiting_feedback_detail`) is cleared BEFORE the DB call so the `/bug` command works as an escape hatch even if `create_feedback` fails. New `UserFeedbackAdmin` SQLAdmin view exposes only `reviewed`, `reviewer_notes`, `reviewed_at` as editable fields. (2) Tightened `_POSITIVE` to `{"sí", "si", "yes", "yep", "👍", "1"}` and `_NEGATIVE` to `{"no", "nop", "nope", "👎", "0"}` — removed ambiguous farewells.
+- **Files created:** `src/farmafacil/services/user_feedback.py`, `tests/test_user_feedback.py` (21 tests)
+- **Files modified:** `src/farmafacil/models/database.py` (UserFeedback model), `src/farmafacil/bot/handler.py` (command intercept + escape-hatch state clearing), `src/farmafacil/api/admin.py` (UserFeedbackAdmin), `src/farmafacil/services/search_feedback.py` (tightened sets), `tests/test_search_feedback.py` (regression tests for ambiguous words)
+
+### Item 29: Category Quick-Reply Menu on Greeting (Jose's Suggestion)
+
+- **Status:** PENDING
+- **Added:** 2026-04-09
+- **Priority:** P2
+- **Problem:** New or returning users who say "hola" don't know what the bot supports beyond medicines. Freeform classification sometimes misroutes requests for non-medicine categories (personal care, hygiene, beauty, food, home goods, orthopedic equipment). A structured category menu would (a) set expectations, (b) improve classification accuracy by letting users pick a category explicitly, and (c) reduce LLM round trips on common flows.
+- **Suggested by:** Jose Lugo (test user)
+- **Planned solution:** After greeting ("Hola {nombre}, ¿cómo te puedo ayudar?"), send a WhatsApp interactive list or quick-reply buttons with categories:
+  - Medicamentos
+  - Cuidado Personal
+  - Higiene
+  - Belleza
+  - Alimentos
+  - Artículos para el Hogar
+  - Equipos Ortopédicos
+  Each selection either pre-filters subsequent searches to that category or seeds the AI role with context. Consider WhatsApp Interactive Messages (list message, up to 10 rows) via Meta Graph API.
+- **Open questions:** (1) Map categories to Farmatodo/SAAS/Locatel category facets — do their APIs expose category IDs we can filter on? (2) Should categories persist as a per-user preference or reset per session? (3) UX: reply on every greeting, or only for new users?
+- **Files likely to modify:** `src/farmafacil/bot/handler.py` (greeting flow), `src/farmafacil/bot/whatsapp.py` (interactive list sender), `src/farmafacil/services/intent.py` (category routing), `src/farmafacil/scrapers/*.py` (category filter support)
+
 ---
 
 ## P3 — Low

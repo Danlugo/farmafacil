@@ -539,3 +539,49 @@ class SearchLog(Base):
         comment="User explanation when feedback is negative",
     )
     searched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UserFeedback(Base):
+    """User-submitted feedback via /bug or /comentario commands.
+
+    Stores a case record that can be reviewed by the team. Linked to the
+    originating conversation log row so reviewers can read the surrounding
+    context of the conversation.
+    """
+
+    __tablename__ = "user_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    feedback_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True,
+        comment="bug or comentario",
+    )
+    message: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="The user's feedback text (body of the command)",
+    )
+    conversation_log_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("conversation_logs.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Link to the inbound message that triggered this feedback",
+    )
+    reviewed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+        comment="Whether a team member has reviewed this feedback",
+    )
+    reviewer_notes: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Notes from the reviewer",
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, comment="When the feedback was reviewed",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship("User")
+
+    def __repr__(self) -> str:
+        return f"#{self.id} [{self.feedback_type}]"

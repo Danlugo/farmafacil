@@ -26,6 +26,7 @@ from farmafacil.models.database import (
     SearchLog,
     SearchQuery,
     User,
+    UserFeedback,
     UserMemory,
 )
 
@@ -696,6 +697,64 @@ class AiRoleSkillAdmin(ModelView, model=AiRoleSkill):
     page_size = 25
 
 
+class UserFeedbackAdmin(ModelView, model=UserFeedback):
+    """Admin view for /bug and /comentario submissions."""
+
+    name = "User Feedback"
+    name_plural = "User Feedback"
+    icon = "fa-solid fa-comment-dots"
+
+    column_list = [
+        UserFeedback.id,
+        UserFeedback.user_id,
+        UserFeedback.feedback_type,
+        UserFeedback.message,
+        UserFeedback.conversation_log_id,
+        UserFeedback.reviewed,
+        UserFeedback.created_at,
+    ]
+    column_searchable_list = [UserFeedback.message, UserFeedback.feedback_type]
+    column_sortable_list = [
+        UserFeedback.id,
+        UserFeedback.user_id,
+        UserFeedback.feedback_type,
+        UserFeedback.reviewed,
+        UserFeedback.created_at,
+    ]
+    column_default_sort = ("created_at", True)
+
+    column_labels = {
+        "user_id": "User ID",
+        "feedback_type": "Type",
+        "message": "Message",
+        "conversation_log_id": "Conversation Log ID",
+        "reviewed": "Reviewed",
+        "reviewer_notes": "Reviewer Notes",
+        "reviewed_at": "Reviewed At",
+        "created_at": "Submitted At",
+    }
+
+    form_widget_args = {
+        "message": {"rows": 6, "readonly": True},
+        "reviewer_notes": {"rows": 6},
+    }
+    form_excluded_columns = [
+        UserFeedback.user,
+        UserFeedback.user_id,
+        UserFeedback.conversation_log_id,
+        UserFeedback.feedback_type,
+        UserFeedback.message,
+        UserFeedback.created_at,
+    ]
+
+    can_create = False
+    can_edit = True
+    can_delete = True
+    form_include_pk = False
+    page_size = 50
+    page_size_options = [25, 50, 100, 200]
+
+
 class UserMemoryAdmin(ModelView, model=UserMemory):
     """Admin view for per-user AI memory."""
 
@@ -737,6 +796,7 @@ class UserMemoryAdmin(ModelView, model=UserMemory):
 # All admin views to register — order determines sidebar order
 ADMIN_VIEWS = [
     UserAdmin,
+    UserFeedbackAdmin,
     ConversationLogAdmin,
     SearchLogAdmin,
     IntentKeywordAdmin,

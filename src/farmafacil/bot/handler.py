@@ -12,7 +12,7 @@ from farmafacil.services.ai_responder import classify_with_ai, generate_response
 from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
-from farmafacil.services.intent import HELP_MESSAGE, classify_intent
+from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
 from farmafacil.services.search import search_drug
 from farmafacil.services.search_feedback import (
     log_search,
@@ -30,6 +30,7 @@ from farmafacil.services.drug_interactions import (
 from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.store_locations import get_all_nearby_stores
+from farmafacil.services.user_feedback import create_feedback, parse_feedback_command
 from farmafacil.services.users import (
     get_or_create_user,
     increment_token_usage,
@@ -101,15 +102,24 @@ MSG_FEEDBACK_THANKS = "\u00a1Gracias por tu respuesta! \U0001f44d"
 MSG_FEEDBACK_SORRY = "Lamento eso. \u00bfQu\u00e9 buscabas exactamente o qu\u00e9 estuvo mal?"
 MSG_FEEDBACK_DETAIL_THANKS = "Gracias por explicarnos. Vamos a mejorar. \U0001f4aa"
 
+MSG_FEEDBACK_EMPTY = (
+    "Por favor incluye tu {label} despu\u00e9s del comando.\n\n"
+    "Ejemplo: _/{cmd} la b\u00fasqueda de losartan no me devolvi\u00f3 resultados_"
+)
+MSG_FEEDBACK_REGISTERED = (
+    "\u2705 \u00a1Gracias! Tu {label} ha sido registrado.\n\n"
+    "\U0001f4cb *Caso #{case_id}*\n\n"
+    "Nuestro equipo lo revisar\u00e1 pronto."
+)
+MSG_FEEDBACK_ERROR = (
+    "Lo siento, no pude registrar tu comentario en este momento. "
+    "Por favor int\u00e9ntalo de nuevo en unos minutos."
+)
+
 MSG_NEED_LOCATION = (
     "{name}, necesito saber tu ubicacion para buscarte farmacias cercanas.\n\n"
     "*En que zona o barrio estas?*\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
 )
-
-# ── Change command keywords ─────────────────────────────────────────────
-
-from farmafacil.services.intent import _get_keyword_cache
-
 
 async def _update_memory_safe(
     user_id: int, user_name: str, user_message: str, bot_response: str,
@@ -146,6 +156,48 @@ async def handle_incoming_message(
     # Send read receipt (fire-and-forget) — shows blue checks + typing bubble
     if wa_message_id:
         asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    # ── Feedback commands (/bug, /comentario) — intercept before anything ──
+    # Intercepted here so users can report issues even if they're stuck in
+    # an onboarding state (e.g., awaiting_feedback with a confused prompt).
+    feedback_cmd = parse_feedback_command(text)
+    if feedback_cmd is not None:
+        feedback_type, body = feedback_cmd
+        label = "reporte" if feedback_type == "bug" else "comentario"
+
+        # If the user is stuck in a feedback-related onboarding state, clear
+        # it BEFORE we do anything else — the `/bug` command is an escape
+        # hatch and must release the state even if the feedback save fails
+        # or the body is empty.
+        if step in ("awaiting_feedback", "awaiting_feedback_detail"):
+            await set_onboarding_step(sender, None)
+
+        if not body:
+            await send_text_message(
+                sender,
+                MSG_FEEDBACK_EMPTY.format(label=label, cmd=feedback_type),
+            )
+            return
+        try:
+            case_id = await create_feedback(
+                user_id=user.id,
+                feedback_type=feedback_type,
+                message=body,
+                phone_number=sender,
+            )
+        except ValueError as exc:
+            logger.warning("Invalid feedback submission from %s: %s", sender, exc)
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        except Exception:
+            logger.error("Failed to create feedback case", exc_info=True)
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        await send_text_message(
+            sender,
+            MSG_FEEDBACK_REGISTERED.format(label=label, case_id=case_id),
+        )
+        return
 
     # ── Rigid onboarding steps (only when explicitly waiting for input) ──
 
@@ -315,6 +367,24 @@ async def handle_incoming_message(
         await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
         logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
 
+        # If AI detects a medical emergency, send response immediately — no search
+        if ai_result.action == "emergency":
+            reply = ai_result.text or (
+                "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
+                "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
+                "2. Línea de emergencias nacional: *171*\n\n"
+                "NO busques medicamentos para emergencias — ve al médico de inmediato."
+            )
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
+            return
+
+        # If AI detects a view_similar request, re-run last search
+        if ai_result.action == "view_similar":
+            await _handle_view_similar(sender, user)
+            return
+
         # If AI detects a nearest_store query, show nearby pharmacies
         if ai_result.action == "nearest_store":
             if not user.latitude:
@@ -457,6 +527,17 @@ async def handle_incoming_message(
         if intent.response_text:
             await send_text_message(sender, intent.response_text)
         await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
+
+    elif intent.action == "emergency":
+        reply = intent.response_text or (
+            "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
+            "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
+            "2. Línea de emergencias nacional: *171*\n\n"
+            "NO busques medicamentos para emergencias — ve al médico de inmediato."
+        )
+        if debug_on:
+            reply += await _build_debug(sender, user.id)
+        await send_text_message(sender, reply)
 
     elif intent.action == "question":
         # Check if the question is about a pharmacy store

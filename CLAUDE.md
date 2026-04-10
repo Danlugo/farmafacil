@@ -82,6 +82,7 @@ docker compose logs -f app
 | `ai_role_rules` | Behavioral rules per AI role (like rules/*.md) |
 | `ai_role_skills` | Skill definitions per AI role (capabilities) |
 | `user_memories` | Per-user AI memory (conversation context, preferences) |
+| `user_feedback` | `/bug` and `/comentario` submissions — type, message, linked conversation log, reviewed flag |
 
 ## API Endpoints
 

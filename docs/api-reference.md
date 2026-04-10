@@ -336,6 +336,7 @@ Built with SQLAdmin. Provides a web UI to browse and edit all database tables:
 - App settings (cache TTL, etc.)
 - Conversation logs
 - Products and prices
+- User feedback (`/bug` and `/comentario` submissions — review-only workflow)
 
 See [deployment.md](deployment.md) for default credentials.
 

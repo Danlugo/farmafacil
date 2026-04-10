@@ -25,11 +25,25 @@ class TestParseFeedback:
     def test_positive_thumbs_up(self):
         assert parse_feedback("👍") == "yes"
 
-    def test_positive_ok(self):
-        assert parse_feedback("ok") == "yes"
+    def test_ambiguous_gracias_not_positive(self):
+        """'gracias' is a farewell for many users — must NOT auto-record as yes.
 
-    def test_positive_gracias(self):
-        assert parse_feedback("gracias") == "yes"
+        Regression for Item 28: user Jose Lugo got the feedback-thanks message
+        immediately because 'gracias' was being parsed as positive feedback.
+        """
+        assert parse_feedback("gracias") is None
+
+    def test_ambiguous_ok_not_positive(self):
+        """'ok' is too ambiguous — must NOT auto-record as yes."""
+        assert parse_feedback("ok") is None
+
+    def test_ambiguous_bien_not_positive(self):
+        """'bien' is ambiguous — must NOT auto-record as yes."""
+        assert parse_feedback("bien") is None
+
+    def test_ambiguous_perfecto_not_positive(self):
+        """'perfecto' is ambiguous — must NOT auto-record as yes."""
+        assert parse_feedback("perfecto") is None
 
     def test_negative_no(self):
         assert parse_feedback("no") == "no"
@@ -37,8 +51,9 @@ class TestParseFeedback:
     def test_negative_thumbs_down(self):
         assert parse_feedback("👎") == "no"
 
-    def test_negative_nada(self):
-        assert parse_feedback("nada") == "no"
+    def test_ambiguous_nada_not_negative(self):
+        """'nada' is ambiguous ('nada' in 'nada más') — no longer auto-record."""
+        assert parse_feedback("nada") is None
 
     def test_unrecognized_returns_none(self):
         assert parse_feedback("losartan") is None
