@@ -186,6 +186,7 @@ async def search_drug(
     """
     all_results: list[DrugResult] = []
     searched: list[str] = []
+    failed: list[str] = []
     specific = is_specific_query(query) and not show_all
 
     # 1. Check search_queries cache (exact query string match)
@@ -222,6 +223,7 @@ async def search_drug(
 
             for scraper, result in zip(scrapers, scraper_results):
                 if isinstance(result, Exception):
+                    failed.append(scraper.pharmacy_name)
                     logger.error(
                         "Scraper %s failed for query '%s': %s",
                         scraper.pharmacy_name,
@@ -270,6 +272,7 @@ async def search_drug(
         total=len(all_results),
         searched_pharmacies=searched,
         similar_count=similar_count,
+        failed_pharmacies=failed,
     )
 
 

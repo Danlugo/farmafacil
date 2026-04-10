@@ -75,9 +75,12 @@ GET /api/v1/search?q=losartan&city=caracas
     }
   ],
   "total": 8,
-  "searched_pharmacies": ["Farmatodo"]
+  "searched_pharmacies": ["Farmatodo"],
+  "failed_pharmacies": []
 }
 ```
+
+**`failed_pharmacies`** — names of scrapers that raised exceptions during this search (timeout, HTTP 5xx, DNS failure, etc.). Empty list on cache/catalog hits or full success. Used by the WhatsApp formatter to differentiate "drug not found" from "couldn't reach pharmacy".
 
 ### POST /api/v1/search
 

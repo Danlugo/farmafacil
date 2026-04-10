@@ -95,6 +95,31 @@ def format_search_results(response: SearchResponse) -> str:
         Formatted text message in Spanish.
     """
     if response.total == 0:
+        failed = response.failed_pharmacies
+        # Strip "(cache)" / "(catalogo)" suffixes — they are observability
+        # labels added by the cache/catalog paths, not real scraper calls.
+        # Use endswith so pharmacy names containing these substrings aren't
+        # accidentally filtered out.
+        queried = [
+            p for p in response.searched_pharmacies
+            if not (p.endswith(" (cache)") or p.endswith(" (catalogo)"))
+        ]
+
+        if failed and queried and len(failed) >= len(queried):
+            # All queried pharmacies failed — no data at all
+            failed_list = ", ".join(failed)
+            return (
+                f"\u26a0\ufe0f No pudimos conectar con {failed_list} ahora mismo.\n\n"
+                "Intenta de nuevo en unos minutos."
+            )
+        if failed:
+            # Partial failure — some returned empty, some errored
+            failed_list = ", ".join(failed)
+            return (
+                f"No encontramos *{response.query}*.\n\n"
+                f"\u26a0\ufe0f Ademas, no pudimos conectar con {failed_list}. "
+                "Intenta de nuevo en unos minutos."
+            )
         return (
             f"No encontramos resultados para *{response.query}*.\n\n"
             "Intenta con otro nombre o revisa la ortografia."
@@ -104,11 +129,18 @@ def format_search_results(response: SearchResponse) -> str:
     pharmacies = ", ".join(response.searched_pharmacies)
     zone_label = f" cerca de *{response.zone}*" if response.zone else ""
 
-    lines = [
+    header = (
         f"*{response.query}*{zone_label} — "
         f"{len(product_groups)} producto(s)\n"
         f"Farmacias: _{pharmacies}_\n"
-    ]
+    )
+    if response.failed_pharmacies:
+        failed_list = ", ".join(response.failed_pharmacies)
+        header += (
+            f"\u26a0\ufe0f No pudimos conectar con {failed_list} — "
+            "resultados parciales.\n"
+        )
+    lines = [header]
 
     for i, (product_name, pharmacy_results) in enumerate(product_groups[:MAX_PRODUCTS], 1):
         # Check if any result in this group requires prescription

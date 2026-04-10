@@ -172,6 +172,20 @@ Product image captions include:
 - Number of stores in stock
 - Nearest store name and distance
 
+### Scraper Failure vs No Results
+
+`search_drug()` tracks which scrapers raise exceptions during concurrent execution (`asyncio.gather`) and populates `SearchResponse.failed_pharmacies`. The formatter then differentiates three zero-result scenarios:
+
+| State | Message |
+|-------|---------|
+| All queried scrapers failed | `⚠️ No pudimos conectar con {names} ahora mismo. Intenta de nuevo en unos minutos.` |
+| Partial failure (some empty, some errored) | `No encontramos *{query}*. ⚠️ Ademas, no pudimos conectar con {names}. Intenta de nuevo en unos minutos.` |
+| All succeeded, zero results | `No encontramos resultados para *{query}*. Intenta con otro nombre o revisa la ortografia.` |
+
+When results DO exist but some scrapers failed, the header shows `⚠️ No pudimos conectar con {names} — resultados parciales.` so users know the view is partial.
+
+`(cache)` and `(catalogo)` suffixes on `searched_pharmacies` are observability labels added by the cache/catalog paths — they are stripped when deciding whether "all queried" scrapers failed, so cache hits never trigger a connection-error message.
+
 ---
 
 ## Store Lookup

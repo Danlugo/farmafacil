@@ -69,6 +69,10 @@ class SearchResponse(BaseModel):
     total: int
     searched_pharmacies: list[str]
     similar_count: int = 0
+    failed_pharmacies: list[str] = Field(
+        default_factory=list,
+        description="Pharmacies whose scrapers raised exceptions during this search",
+    )
 
 
 class HealthResponse(BaseModel):

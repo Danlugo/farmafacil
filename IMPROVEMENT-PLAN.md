@@ -72,23 +72,28 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 20: N+1 Query Fix in Product Cache
 
-- **Status:** PENDING
+- **Status:** DONE (2026-04-10, no code change — already solved)
 - **Added:** 2026-04-10
 - **Priority:** P2
 - **Problem:** `product_cache.py` loads products then loops through `product.prices` without eager loading — triggers 100+ individual SQL queries for 100 products. Causes unnecessary DB load and latency on cached searches.
-- **Suggested solution:** Add `joinedload(Product.prices)` to product queries in `find_cached_products()`, `get_cached_results()`, and `find_cross_chain_matches()`.
-- **Affected files:** `src/farmafacil/services/product_cache.py`
-- **Effort:** Low (1-2h)
+- **Finding (2026-04-10):** The premise was wrong. `Product.prices` already has `lazy="selectin"` configured at `src/farmafacil/models/database.py:294-296`, which makes SQLAlchemy batch-load all prices in one `WHERE product_id IN (...)` query regardless of how many products were fetched. Verified with SQL echo against 20 products × 2 cities: `get_cached_results` emits 4 queries total (settings + search_query + products + selectin prices), `find_cached_products` emits 3, `find_cross_chain_matches` emits 2. None of these scale with product count. No code change needed.
+- **Related issue discovered (logged separately as Item 30):** `find_cross_chain_matches()` pulls every product with non-null keywords into memory and filters in Python — not an N+1, but an unindexed scan that will become a problem as the catalog grows.
 
 ### Item 21: Differentiate Connection Errors from No Results
 
-- **Status:** PENDING
+- **Status:** DONE
 - **Added:** 2026-04-10
+- **Completed:** 2026-04-09 (v0.12.1)
 - **Priority:** P2
-- **Problem:** When scrapers fail (timeout, HTTP 503, DNS failure), users see "No encontramos resultados" — same message as when the drug genuinely doesn't exist. Users blame the pharmacy, not the network. Bot should distinguish "no results" from "couldn't reach pharmacy".
-- **Suggested solution:** Track scraper failures separately from empty results. Return a `SearchResponse` with error info. Formatter shows "⚠️ No pudimos conectar con [pharmacy]" vs "No encontramos resultados".
-- **Affected files:** `src/farmafacil/services/search.py`, `src/farmafacil/models/schemas.py`, `src/farmafacil/bot/formatter.py`
-- **Effort:** Low (1-2h)
+- **Problem:** When scrapers fail (timeout, HTTP 503, DNS failure), users see "No encontramos resultados" — same message as when the drug genuinely doesn't exist. Users blame the pharmacy, not the network.
+- **Solution implemented:** Added `failed_pharmacies: list[str]` field to `SearchResponse`. `search_drug()` now captures the names of scrapers that raised exceptions in the `asyncio.gather` result loop and propagates them through the response. The formatter (`format_search_results`) branches on `response.total == 0`:
+  - All queried scrapers failed → `⚠️ No pudimos conectar con {names} ahora mismo. Intenta de nuevo en unos minutos.`
+  - Partial failure (some empty, some errored) → `No encontramos *{query}*. ⚠️ Ademas, no pudimos conectar con {names}.`
+  - All succeeded, no results → original `No encontramos resultados... revisa la ortografia.`
+  When results exist but some scrapers failed, the header shows a `⚠️ resultados parciales` warning line. Cache/catalog suffixes (`(cache)`, `(catalogo)`) are stripped via `endswith` when counting "real" queried pharmacies — immune to pharmacy names containing those substrings mid-string.
+- **Files modified:** `src/farmafacil/models/schemas.py`, `src/farmafacil/services/search.py`, `src/farmafacil/bot/formatter.py`
+- **Files created (tests):** 5 new tests in `tests/test_bot.py` (all-failed, partial-failed, results+partial, cache-hit no-failure, degenerate edge case), 4 new tests in `tests/test_search_concurrent.py` (`TestFailedPharmaciesTracking`)
+- **Test count:** 447 → 456 (+9)
 
 ### Item 22: Remove Deprecated ProductCache Table
 
@@ -312,24 +317,33 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Files created:** `src/farmafacil/services/user_feedback.py`, `tests/test_user_feedback.py` (21 tests)
 - **Files modified:** `src/farmafacil/models/database.py` (UserFeedback model), `src/farmafacil/bot/handler.py` (command intercept + escape-hatch state clearing), `src/farmafacil/api/admin.py` (UserFeedbackAdmin), `src/farmafacil/services/search_feedback.py` (tightened sets), `tests/test_search_feedback.py` (regression tests for ambiguous words)
 
-### Item 29: Category Quick-Reply Menu on Greeting (Jose's Suggestion)
+### Item 29: Category Quick-Reply Menu on Greeting
 
 - **Status:** PENDING
 - **Added:** 2026-04-09
 - **Priority:** P2
-- **Problem:** New or returning users who say "hola" don't know what the bot supports beyond medicines. Freeform classification sometimes misroutes requests for non-medicine categories (personal care, hygiene, beauty, food, home goods, orthopedic equipment). A structured category menu would (a) set expectations, (b) improve classification accuracy by letting users pick a category explicitly, and (c) reduce LLM round trips on common flows.
-- **Suggested by:** Jose Lugo (test user)
-- **Planned solution:** After greeting ("Hola {nombre}, ¿cómo te puedo ayudar?"), send a WhatsApp interactive list or quick-reply buttons with categories:
-  - Medicamentos
-  - Cuidado Personal
-  - Higiene
-  - Belleza
-  - Alimentos
-  - Artículos para el Hogar
-  - Equipos Ortopédicos
-  Each selection either pre-filters subsequent searches to that category or seeds the AI role with context. Consider WhatsApp Interactive Messages (list message, up to 10 rows) via Meta Graph API.
-- **Open questions:** (1) Map categories to Farmatodo/SAAS/Locatel category facets — do their APIs expose category IDs we can filter on? (2) Should categories persist as a per-user preference or reset per session? (3) UX: reply on every greeting, or only for new users?
+- **Problem:** New or returning users who say "hola" don't know what the bot supports beyond medicines. Freeform classification sometimes misroutes requests for non-medicine categories. A structured category menu would (a) set expectations, (b) improve classification accuracy by letting users pick a category explicitly, and (c) reduce LLM round trips on common flows.
+- **Origin:** Suggested by Jose Lugo (test user).
+- **Planned solution:** After greeting ("Hola {nombre}, ¿cómo te puedo ayudar?"), send a WhatsApp interactive list or quick-reply buttons with a **small set of top categories** (WhatsApp interactive lists cap at 10 rows, and 4-6 is more usable). Each selection either pre-filters subsequent searches to that category or seeds the AI role with context.
+- **Category set — NOT finalized:** Jose's original suggestion (Medicamentos / Cuidado Personal / Higiene / Belleza / Alimentos / Artículos Hogar / Equipos Ortopédicos) is one hypothesis. **Do NOT derive categories from our `search_logs` — the test dataset is too small to be representative.** Better sources:
+  1. **Scraper top-level category taxonomies** (Farmatodo / SAAS / Locatel). These are the primary source — the pharmacies have already segmented their full catalog based on millions of real customer sessions. Pull the top-level category tree from each scraper and take the intersection (or union) of the most populated categories.
+  2. **Industry benchmarks** — published pharmacy retail segmentation (IQVIA, Euromonitor, or local VE pharmacy associations if available).
+  3. **Competitor app menus** — what categories do FarmaTodo's own app, Locatel's app, and regional pharmacy apps surface at the top level? This is how end-users already think about pharmacy shopping.
+  4. **Generic pharmacy retail knowledge** — standard top-level buckets are: OTC medicine, prescription/Rx, personal care, baby, beauty, vitamins/supplements, first aid, home health / ortopedia. Use this as the baseline hypothesis.
+  5. Pick 4-6 categories that (a) map cleanly to scraper category filters we can actually query and (b) match how users already think about pharmacy shopping. Revisit and adjust once the user base grows enough for real usage data to be significant.
+- **Open questions:** (1) Which scraper APIs expose category facets we can filter on? (Farmatodo Algolia has `facetFilters` — confirm category field; VTEX has `categoryId` paths.) (2) Per-session vs persistent preference? (3) Show on every greeting or only for new users? (4) Fallback if user types freeform instead of selecting?
 - **Files likely to modify:** `src/farmafacil/bot/handler.py` (greeting flow), `src/farmafacil/bot/whatsapp.py` (interactive list sender), `src/farmafacil/services/intent.py` (category routing), `src/farmafacil/scrapers/*.py` (category filter support)
+
+### Item 30: `find_cross_chain_matches` Unindexed Full-Scan
+
+- **Status:** PENDING
+- **Added:** 2026-04-10
+- **Priority:** P3
+- **Problem:** `src/farmafacil/services/product_cache.py:258-272` pulls **every** product with non-null `keywords` into memory and filters in Python with `all(kw in product_kw_set for kw in query_keywords)`. This is fine today (small catalog) but will become expensive once the catalog grows to thousands of products — each cross-chain search walks the full table plus all prices via `lazy="selectin"`.
+- **Suggested solution:** Either (a) move keyword matching into SQL via a `JSON_CONTAINS`/`@>` operator with a GIN index on `products.keywords` (Postgres-only — not portable to SQLite dev), or (b) add a separate `product_keywords` table (product_id, keyword) with an index on `keyword`, and query it with an `INTERSECT` / multi-join to find products that have all query keywords. Option (b) works on both SQLite and Postgres.
+- **Discovered during:** Item 20 investigation (2026-04-10) — not an N+1, but a real efficiency issue worth tracking.
+- **Affected files:** `src/farmafacil/models/database.py` (new table or JSON index), `src/farmafacil/services/product_cache.py` (find_cross_chain_matches rewrite), a backfill migration
+- **Effort:** Medium (2-4h, option b)
 
 ---
 

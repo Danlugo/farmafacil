@@ -261,6 +261,81 @@ class TestCacheBypass:
         save_mock.assert_not_called()
 
 
+class TestFailedPharmaciesTracking:
+    """Verify failed_pharmacies is populated for scraper exceptions."""
+
+    @pytest.mark.asyncio
+    async def test_failed_pharmacies_empty_when_all_succeed(self):
+        """No exceptions → failed_pharmacies is empty."""
+        scrapers = [
+            _make_scraper_mock("PharmA", [_make_result("Drug1", "PharmA")]),
+            _make_scraper_mock("PharmB", [_make_result("Drug2", "PharmB")]),
+        ]
+
+        with (
+            patch("farmafacil.services.search.ACTIVE_SCRAPERS", scrapers),
+            patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
+            patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
+            patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+        ):
+            response = await search_drug("test")
+
+        assert response.failed_pharmacies == []
+
+    @pytest.mark.asyncio
+    async def test_failed_pharmacies_lists_only_failed(self):
+        """Only scrapers that raised are listed in failed_pharmacies."""
+        scrapers = [
+            _make_scraper_mock("PharmA", [_make_result("Drug1", "PharmA")]),
+            _make_scraper_mock("PharmB", RuntimeError("network down")),
+            _make_scraper_mock("PharmC", [_make_result("Drug3", "PharmC")]),
+        ]
+
+        with (
+            patch("farmafacil.services.search.ACTIVE_SCRAPERS", scrapers),
+            patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
+            patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
+            patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+        ):
+            response = await search_drug("test")
+
+        assert response.failed_pharmacies == ["PharmB"]
+        assert response.total == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_pharmacies_lists_all_when_all_fail(self):
+        """When every scraper fails, failed_pharmacies matches searched_pharmacies."""
+        scrapers = [
+            _make_scraper_mock("PharmA", TimeoutError("timeout")),
+            _make_scraper_mock("PharmB", RuntimeError("503")),
+        ]
+
+        with (
+            patch("farmafacil.services.search.ACTIVE_SCRAPERS", scrapers),
+            patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
+            patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
+            patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+        ):
+            response = await search_drug("test")
+
+        assert set(response.failed_pharmacies) == {"PharmA", "PharmB"}
+        assert response.total == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_pharmacies_empty_on_cache_hit(self):
+        """Cache hit path does not populate failed_pharmacies."""
+        cached = [_make_result("CachedDrug", "Farmatodo")]
+        scraper = _make_scraper_mock("PharmA", RuntimeError("should not run"))
+
+        with (
+            patch("farmafacil.services.search.ACTIVE_SCRAPERS", [scraper]),
+            patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=cached)),
+        ):
+            response = await search_drug("test")
+
+        assert response.failed_pharmacies == []
+
+
 class TestEmptyScraperList:
     """Edge case: no active scrapers configured."""
 

@@ -43,6 +43,100 @@ class TestFormatter:
         text = format_search_results(response)
         assert "xyznonexistent" in text
         assert "No encontramos" in text
+        # No failures means no warning emoji
+        assert "\u26a0\ufe0f" not in text
+
+    def test_format_no_results_all_scrapers_failed(self):
+        """When every queried scraper errored, show a connection-error message."""
+        response = SearchResponse(
+            query="losartan",
+            results=[],
+            total=0,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
+            failed_pharmacies=["Farmatodo", "Farmacias SAAS"],
+        )
+        text = format_search_results(response)
+        assert "\u26a0\ufe0f" in text
+        assert "No pudimos conectar" in text
+        assert "Farmatodo" in text
+        assert "Farmacias SAAS" in text
+        assert "unos minutos" in text
+        # Must NOT say the drug doesn't exist
+        assert "revisa la ortografia" not in text
+
+    def test_format_no_results_some_scrapers_failed(self):
+        """Partial failure: some returned empty, some errored."""
+        response = SearchResponse(
+            query="losartan",
+            results=[],
+            total=0,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS", "Locatel"],
+            failed_pharmacies=["Locatel"],
+        )
+        text = format_search_results(response)
+        assert "No encontramos" in text
+        assert "losartan" in text
+        assert "\u26a0\ufe0f" in text
+        assert "Locatel" in text
+        assert "unos minutos" in text
+
+    def test_format_results_with_partial_failure_shows_warning(self):
+        """When results exist but some scrapers failed, header shows warning."""
+        response = SearchResponse(
+            query="losartan",
+            results=[
+                DrugResult(
+                    drug_name="Losartan 50mg Genven",
+                    pharmacy_name="Farmatodo",
+                    price_bs=Decimal("920"),
+                    available=True,
+                ),
+            ],
+            total=1,
+            searched_pharmacies=["Farmatodo", "Farmacias SAAS"],
+            failed_pharmacies=["Farmacias SAAS"],
+        )
+        text = format_search_results(response)
+        assert "Losartan 50mg Genven" in text
+        assert "\u26a0\ufe0f" in text
+        assert "Farmacias SAAS" in text
+        assert "parciales" in text
+
+    def test_format_no_results_cache_hit_no_failure_message(self):
+        """Cache-suffixed pharmacy names with no failures → normal 'no results'."""
+        response = SearchResponse(
+            query="xyznonexistent",
+            results=[],
+            total=0,
+            searched_pharmacies=["Farmatodo (cache)", "Farmacias SAAS (cache)"],
+            failed_pharmacies=[],
+        )
+        text = format_search_results(response)
+        assert "No encontramos resultados" in text
+        assert "\u26a0\ufe0f" not in text
+
+    def test_format_degenerate_cache_only_with_failed_falls_through(self):
+        """Defensive: if all searched names are cache-suffixed but failed is
+        non-empty (impossible via search_drug today, but SearchResponse is
+        public), the 'queried' list is empty so the all-failed branch must
+        NOT fire. Should fall through to the 'partial failure' message.
+        """
+        response = SearchResponse(
+            query="losartan",
+            results=[],
+            total=0,
+            searched_pharmacies=["Farmatodo (cache)"],
+            failed_pharmacies=["Farmatodo"],
+        )
+        text = format_search_results(response)
+        # queried == [], so len(failed) >= len(queried) evaluates 1 >= 0 = True,
+        # BUT the guard "failed and queried" requires queried to be truthy —
+        # so we fall through to the partial-failure branch.
+        assert "No encontramos" in text
+        assert "losartan" in text
+        assert "Farmatodo" in text
+        # Must NOT be the "all failed" full-outage message
+        assert "ahora mismo" not in text
 
     def test_format_single_result(self):
         """Single result is formatted with pharmacy name and price."""
