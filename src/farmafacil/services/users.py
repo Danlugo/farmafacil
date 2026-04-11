@@ -3,6 +3,7 @@
 import logging
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
@@ -271,7 +272,7 @@ async def increment_token_usage(
                 update(User).where(User.id == user_id).values(**values)
             )
             await session.commit()
-    except Exception:
+    except SQLAlchemyError:
         logger.error(
             "Failed to persist token usage for user_id=%d "
             "(in=%d, out=%d, model=%s) — tokens lost",

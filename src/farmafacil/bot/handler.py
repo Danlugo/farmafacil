@@ -4,6 +4,8 @@ import asyncio
 import logging
 import os
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
@@ -147,6 +149,10 @@ async def _update_memory_safe(
     try:
         await auto_update_memory(user_id, user_name, user_message, bot_response)
     except Exception:
+        # Last-resort catch: memory update is a background enhancement and
+        # must NEVER propagate errors to the WhatsApp reply path. Specific
+        # error types are already logged one layer down in
+        # ``user_memory.auto_update_memory`` itself.
         logger.error("Memory update failed (non-blocking)", exc_info=True)
 
 
@@ -208,8 +214,21 @@ async def handle_incoming_message(
             logger.warning("Invalid feedback submission from %s: %s", sender, exc)
             await send_text_message(sender, MSG_FEEDBACK_ERROR)
             return
+        except SQLAlchemyError:
+            logger.error(
+                "Failed to create feedback case (DB error)", exc_info=True,
+            )
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
         except Exception:
-            logger.error("Failed to create feedback case", exc_info=True)
+            # Last-resort: /bug is an escape-hatch command — we already
+            # cleared the user's stuck state above, so even an unexpected
+            # error must reply with the error message (not leave the user
+            # hanging).
+            logger.error(
+                "Failed to create feedback case (unexpected error)",
+                exc_info=True,
+            )
             await send_text_message(sender, MSG_FEEDBACK_ERROR)
             return
         await send_text_message(

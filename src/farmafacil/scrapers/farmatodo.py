@@ -2,7 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -128,7 +128,7 @@ class FarmatodoScraper(BaseScraper):
             try:
                 unit_count_dec = Decimal(str(unit_count_raw))
                 unit_count_int = int(unit_count_dec)
-            except Exception:
+            except (InvalidOperation, ValueError, TypeError):
                 unit_count_dec = None
                 unit_count_int = None
         if unit_count_dec is not None and unit_count_dec > 0 and best_price:

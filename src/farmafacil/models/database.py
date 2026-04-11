@@ -242,25 +242,6 @@ class PharmacyLocation(Base):
     )
 
 
-class ProductCache(Base):
-    """Cached Algolia product search results with TTL.
-
-    DEPRECATED: Replaced by Product + ProductPrice + SearchQuery tables.
-    Kept for backward compatibility during migration.
-    """
-
-    __tablename__ = "product_cache"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    query: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    city_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    results_json: Mapped[str] = mapped_column(Text, nullable=False,
-        comment="JSON-serialized list of DrugResult dicts",
-    )
-    result_count: Mapped[int] = mapped_column(Integer, default=0)
-    cached_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-
 class Product(Base):
     """Permanent product catalog — never deleted, only updated."""
 
@@ -301,6 +282,38 @@ class Product(Base):
 
     __table_args__ = (
         UniqueConstraint("external_id", "pharmacy_chain", name="uq_product_external"),
+    )
+
+
+class ProductKeyword(Base):
+    """Inverted index of product keywords for fast cross-chain keyword matching.
+
+    Added in v0.12.6 (Item 30). ``Product.keywords`` stores a denormalized
+    JSON list for backwards compatibility; this table mirrors those tokens as
+    one row per (product_id, keyword) so ``find_cross_chain_matches`` can do
+    a single indexed ``WHERE keyword IN (...) GROUP BY product_id HAVING
+    COUNT(DISTINCT keyword) = N`` query instead of loading every product with
+    keywords into memory and filtering in Python.
+
+    Both columns are indexed; ``keyword`` is the most important index for
+    the lookup path. The table is fully derivable from ``Product.keywords``
+    and is backfilled idempotently on startup.
+    """
+
+    __tablename__ = "product_keywords"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    keyword: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True,
+        comment="Lowercase token from Product.drug_name",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "keyword", name="uq_product_keyword"),
     )
 
 

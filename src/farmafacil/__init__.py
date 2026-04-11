@@ -1,3 +1,3 @@
 """FarmaFacil — Venezuela pharmacy drug finder."""
 
-__version__ = "0.12.5"
+__version__ = "0.12.6"

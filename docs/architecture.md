@@ -207,7 +207,7 @@ Physical store locations, backfilled from Farmatodo API on startup.
 | conversation_logs | Every inbound/outbound WhatsApp message (direction, type, wa_message_id) |
 | search_logs | Analytics — query, result count, source (whatsapp/api) |
 | app_settings | Admin-editable key/value config (cache TTL, etc.) |
-| product_cache | DEPRECATED — replaced by products/product_prices/search_queries |
+| product_keywords | Inverted index of keyword tokens per product (FK → products CASCADE). Added in v0.12.6 (Item 30) so `find_cross_chain_matches` can run a single indexed SQL query (`WHERE keyword IN (...) GROUP BY product_id HAVING COUNT(DISTINCT keyword) = N`) instead of loading every product with keywords into memory. Populated automatically by `_upsert_product → _sync_product_keywords`; idempotent backfill in `init_db()` for existing deployments. |
 
 ## Product Catalog Design
 

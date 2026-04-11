@@ -69,8 +69,10 @@ async def send_read_receipt(to: str, message_id: str) -> None:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
-    except Exception:
-        logger.debug("Read receipt failed for %s (non-critical)", to)
+    except httpx.HTTPError as exc:
+        logger.debug(
+            "Read receipt failed for %s (non-critical): %s", to, exc,
+        )
 
 
 async def send_text_message(to: str, text: str) -> dict | None:
@@ -130,8 +132,11 @@ async def _upload_media(file_path: str, mime_type: str = "image/png") -> str | N
     except httpx.HTTPStatusError as exc:
         logger.error("Media upload error %s: %s", exc.response.status_code, exc.response.text)
         return None
-    except Exception as exc:
-        logger.error("Media upload failed: %s", exc)
+    except httpx.HTTPError as exc:
+        logger.error("Media upload network error: %s", exc)
+        return None
+    except OSError as exc:
+        logger.error("Media upload file error (%s): %s", file_path, exc)
         return None
 
 

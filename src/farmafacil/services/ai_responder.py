@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 
 import anthropic
+from anthropic import APIConnectionError, APIError
 from sqlalchemy import select
 
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
@@ -224,8 +225,18 @@ REGLAS:
         parsed.output_tokens = response.usage.output_tokens
         return parsed
 
+    except (APIError, APIConnectionError) as exc:
+        logger.error("AI classification — Anthropic API error: %s", exc)
+        return AiResponse(
+            text="",
+            role_used="fallback",
+            action="drug_search",
+            drug_query=message.strip(),
+        )
     except Exception:
-        logger.error("AI classification failed", exc_info=True)
+        # Last-resort: parser / response shape bugs should not take the bot
+        # down. Fall back to treating the message as a drug search.
+        logger.error("AI classification — unexpected error", exc_info=True)
         return AiResponse(
             text="",
             role_used="fallback",
@@ -270,8 +281,13 @@ async def _call_llm(
             response.usage.output_tokens,
         )
 
+    except (APIError, APIConnectionError) as exc:
+        logger.error("LLM call — Anthropic API error: %s", exc)
+        return ("Lo siento, tuve un error. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
     except Exception:
-        logger.error("LLM call failed", exc_info=True)
+        # Last-resort: unexpected response shape / parsing issue. Still
+        # return a safe fallback rather than crashing the caller.
+        logger.error("LLM call — unexpected error", exc_info=True)
         return ("Lo siento, tuve un error. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
 
 
@@ -356,8 +372,19 @@ async def refine_clarified_query(
             response.usage.input_tokens,
             response.usage.output_tokens,
         )
+    except (APIError, APIConnectionError) as exc:
+        logger.error(
+            "refine_clarified_query — Anthropic API error: %s "
+            "(falling back to raw answer)", exc,
+        )
+        return (user_answer.strip(), 0, 0)
     except Exception:
-        logger.error("refine_clarified_query LLM call failed", exc_info=True)
+        # Last-resort: unexpected error should still fall back so the user
+        # always gets a search dispatched.
+        logger.error(
+            "refine_clarified_query — unexpected error, "
+            "falling back to raw answer", exc_info=True,
+        )
         return (user_answer.strip(), 0, 0)
 
 

@@ -69,8 +69,16 @@ async def _backfill_farmatodo_stores() -> int:
                 data = resp.json()
                 for store in data.get("nearbyStores", []):
                     all_stores[store["id"]] = store
-            except Exception:
-                logger.warning("Failed to fetch Farmatodo stores for %s", city_code)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Failed to fetch Farmatodo stores for %s: %s",
+                    city_code, exc,
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning(
+                    "Invalid JSON from Farmatodo stores API for %s: %s",
+                    city_code, exc,
+                )
 
     logger.info("Fetched %d Farmatodo stores from API", len(all_stores))
 
@@ -136,9 +144,15 @@ async def _backfill_saas_stores() -> int:
                     pp_id = pp.get("id")
                     if pp_id:
                         all_stores[pp_id] = pp
-            except Exception:
+            except httpx.HTTPError as exc:
                 logger.warning(
-                    "Failed to fetch SAAS pickup points for geo %s,%s", lat, lng
+                    "Failed to fetch SAAS pickup points for geo %s,%s: %s",
+                    lat, lng, exc,
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning(
+                    "Invalid JSON from SAAS pickup API for geo %s,%s: %s",
+                    lat, lng, exc,
                 )
 
     logger.info("Fetched %d Farmacias SAAS stores from API", len(all_stores))
@@ -220,9 +234,15 @@ async def _backfill_locatel_stores() -> int:
                     pp_id = pp.get("id")
                     if pp_id:
                         all_stores[pp_id] = pp
-            except Exception:
+            except httpx.HTTPError as exc:
                 logger.warning(
-                    "Failed to fetch Locatel pickup points for geo %s,%s", lat, lng
+                    "Failed to fetch Locatel pickup points for geo %s,%s: %s",
+                    lat, lng, exc,
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning(
+                    "Invalid JSON from Locatel pickup API for geo %s,%s: %s",
+                    lat, lng, exc,
                 )
 
     logger.info("Fetched %d Locatel stores from API", len(all_stores))

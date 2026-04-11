@@ -5,7 +5,7 @@ import logging
 import tempfile
 
 import httpx
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from farmafacil.bot.formatter import _group_by_product
 from farmafacil.models.schemas import DrugResult
@@ -31,8 +31,13 @@ async def _download_image(url: str) -> Image.Image | None:
             resp = await client.get(url, follow_redirects=True)
             resp.raise_for_status()
             return Image.open(io.BytesIO(resp.content)).convert("RGBA")
-    except Exception:
-        logger.warning("Failed to download image: %s", url[:80], exc_info=True)
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to download image %s: %s", url[:80], exc)
+        return None
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        logger.warning(
+            "Failed to decode image %s: %s", url[:80], exc, exc_info=True,
+        )
         return None
 
 

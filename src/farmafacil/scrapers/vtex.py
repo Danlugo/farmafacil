@@ -106,12 +106,12 @@ class VTEXScraper(BaseScraper):
         for product in products:
             try:
                 results.append(self._product_to_result(product))
-            except Exception:
+            except (KeyError, ValueError, TypeError, IndexError) as exc:
                 logger.warning(
-                    "%s: failed to parse product %s",
+                    "%s: failed to parse product %s: %s",
                     self.pharmacy_name,
                     product.get("productId", "?"),
-                    exc_info=True,
+                    exc,
                 )
         return results
 

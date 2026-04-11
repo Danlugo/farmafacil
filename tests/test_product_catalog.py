@@ -16,11 +16,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from farmafacil.db.session import async_session
-from farmafacil.models.database import Product, ProductPrice, SearchQuery
+from farmafacil.models.database import Product, ProductKeyword, ProductPrice, SearchQuery
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.product_cache import (
     _extract_external_id,
     _product_to_drug_result,
+    find_cross_chain_matches,
     get_cached_results,
     save_search_results,
 )
@@ -58,6 +59,7 @@ async def _clean_catalog_tables():
     async with async_session() as session:
         await session.execute(delete(ProductPrice))
         await session.execute(delete(SearchQuery))
+        await session.execute(delete(ProductKeyword))
         await session.execute(delete(Product))
         await session.commit()
     yield
@@ -321,3 +323,162 @@ class TestProductToDrugResult:
         assert result.price_bs is None
         assert result.available is False
         assert result.stores_in_stock == 0
+
+
+class TestProductKeywordSync:
+    """Tests for the inverted product_keywords index (Item 30, v0.12.6).
+
+    ``save_search_results`` must mirror every token from ``Product.drug_name``
+    into one row per (product_id, keyword) in the ``product_keywords`` table
+    so ``find_cross_chain_matches`` can do an indexed lookup instead of a
+    full Python scan.
+    """
+
+    @pytest.mark.asyncio
+    async def test_save_populates_product_keywords(self) -> None:
+        """Saving a product inserts one row per unique token."""
+        drug = _make_drug_result(
+            drug_name="RESVERATROL NAD+VID CAP 125MG X60 HERB",
+            url="https://www.farmatodo.com.ve/resveratrol-nad-vid-125mg",
+        )
+        await save_search_results("resveratrol", "CCS", [drug])
+
+        async with async_session() as session:
+            rows = (
+                await session.execute(select(ProductKeyword))
+            ).scalars().all()
+
+        keywords = {r.keyword for r in rows}
+        assert keywords == {
+            "resveratrol", "nad+vid", "cap", "125mg", "x60", "herb",
+        }
+
+    @pytest.mark.asyncio
+    async def test_upsert_replaces_stale_keywords(self) -> None:
+        """Updating a product's drug_name replaces its keyword rows."""
+        drug_old = _make_drug_result(
+            drug_name="Losartan 50mg",
+            url="https://www.farmatodo.com.ve/losartan-50",
+        )
+        await save_search_results("losartan", "CCS", [drug_old])
+
+        drug_new = _make_drug_result(
+            drug_name="Losartan Potasico 100mg",
+            url="https://www.farmatodo.com.ve/losartan-50",  # same external_id
+        )
+        await save_search_results("losartan", "CCS", [drug_new])
+
+        async with async_session() as session:
+            rows = (
+                await session.execute(select(ProductKeyword))
+            ).scalars().all()
+
+        keywords = {r.keyword for r in rows}
+        # Old tokens "50mg" must be gone; new tokens must be present.
+        assert keywords == {"losartan", "potasico", "100mg"}
+
+    @pytest.mark.asyncio
+    async def test_dedupes_repeated_tokens(self) -> None:
+        """Repeated tokens in drug_name create only one row per unique keyword."""
+        drug = _make_drug_result(
+            drug_name="Vitamina C C C 500mg",
+            url="https://www.farmatodo.com.ve/vitc",
+        )
+        await save_search_results("vitamina c", "CCS", [drug])
+
+        async with async_session() as session:
+            rows = (
+                await session.execute(select(ProductKeyword))
+            ).scalars().all()
+
+        keywords = sorted(r.keyword for r in rows)
+        # "c" should appear exactly once, not three times
+        assert keywords.count("c") == 1
+        assert "vitamina" in keywords
+        assert "500mg" in keywords
+
+
+class TestFindCrossChainMatchesIndexed:
+    """Integration tests for the indexed find_cross_chain_matches (Item 30)."""
+
+    @pytest.mark.asyncio
+    async def test_finds_product_when_all_keywords_present(self) -> None:
+        """Returns products that contain every query keyword."""
+        drug = _make_drug_result(
+            drug_name="Losartan Potasico 50mg",
+            pharmacy_name="Farmacias SAAS",
+            url="https://www.saas.com.ve/losartan-potasico-50",
+        )
+        await save_search_results("losartan", "CCS", [drug])
+
+        matches = await find_cross_chain_matches(
+            query_keywords=["losartan", "50mg"],
+            city_code="CCS",
+            exclude_names=set(),
+        )
+        assert len(matches) == 1
+        assert matches[0].drug_name == "Losartan Potasico 50mg"
+        assert matches[0].pharmacy_name == "Farmacias SAAS"
+
+    @pytest.mark.asyncio
+    async def test_skips_product_missing_any_keyword(self) -> None:
+        """A product missing even one query keyword is excluded."""
+        drug = _make_drug_result(
+            drug_name="Losartan 50mg",
+            url="https://www.farmatodo.com.ve/losartan-50",
+        )
+        await save_search_results("losartan", "CCS", [drug])
+
+        # Product has "losartan" + "50mg" but not "100mg" — should not match.
+        matches = await find_cross_chain_matches(
+            query_keywords=["losartan", "100mg"],
+            city_code="CCS",
+            exclude_names=set(),
+        )
+        assert matches == []
+
+    @pytest.mark.asyncio
+    async def test_exclude_names_filters_out_duplicates(self) -> None:
+        """Products whose drug_name is in exclude_names are filtered."""
+        drug = _make_drug_result(
+            drug_name="Losartan 50mg",
+            url="https://www.farmatodo.com.ve/losartan-50",
+        )
+        await save_search_results("losartan", "CCS", [drug])
+
+        matches = await find_cross_chain_matches(
+            query_keywords=["losartan", "50mg"],
+            city_code="CCS",
+            exclude_names={"losartan 50mg"},
+        )
+        assert matches == []
+
+    @pytest.mark.asyncio
+    async def test_empty_query_returns_empty(self) -> None:
+        """Empty or all-blank query keywords return an empty list."""
+        assert await find_cross_chain_matches([], "CCS", set()) == []
+        assert await find_cross_chain_matches([""], "CCS", set()) == []
+
+    @pytest.mark.asyncio
+    async def test_returns_multiple_matches(self) -> None:
+        """Multiple products sharing all keywords are all returned."""
+        drug1 = _make_drug_result(
+            drug_name="Ibuprofeno 400mg GenVen",
+            pharmacy_name="Farmatodo",
+            url="https://www.farmatodo.com.ve/ibu-400-genven",
+        )
+        drug2 = _make_drug_result(
+            drug_name="Ibuprofeno 400mg Calox",
+            pharmacy_name="Farmacias SAAS",
+            url="https://www.saas.com.ve/ibu-400-calox",
+        )
+        await save_search_results("ibuprofeno", "CCS", [drug1, drug2])
+
+        matches = await find_cross_chain_matches(
+            query_keywords=["ibuprofeno", "400mg"],
+            city_code="CCS",
+            exclude_names=set(),
+        )
+        assert len(matches) == 2
+        pharmacies = {m.pharmacy_name for m in matches}
+        assert pharmacies == {"Farmatodo", "Farmacias SAAS"}

@@ -10,10 +10,15 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select
 
 from farmafacil.db.session import async_session
-from farmafacil.models.database import Product, ProductPrice, SearchQuery
+from farmafacil.models.database import (
+    Product,
+    ProductKeyword,
+    ProductPrice,
+    SearchQuery,
+)
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.settings import get_setting_int
 
@@ -235,10 +240,12 @@ async def find_cross_chain_matches(
 ) -> list["DrugResult"]:
     """Find products in other chains where ALL query keywords appear in product keywords.
 
-    Searches the products table for products whose stored keywords list contains
-    every keyword from query_keywords. Only returns products whose drug_name
-    (lowercased, stripped) is not in exclude_names. Checks that prices are
-    available for the given city.
+    Uses the indexed ``product_keywords`` table (added in v0.12.6, Item 30):
+    a single SQL query selects product ids whose keyword rows cover every
+    token in ``query_keywords`` (``WHERE keyword IN (...) GROUP BY product_id
+    HAVING COUNT(DISTINCT keyword) = N``). This replaces the earlier
+    full-table-scan that loaded every product with non-null ``keywords``
+    into Python and filtered client-side, which did not scale.
 
     Args:
         query_keywords: Lowercase tokens to match against (ALL must be present).
@@ -251,27 +258,44 @@ async def find_cross_chain_matches(
     if not query_keywords:
         return []
 
+    # Deduplicate in case the caller passed repeated tokens — the HAVING
+    # clause counts DISTINCT keywords, so duplicates would not break the
+    # query, but we want a clean N that matches the IN (...) cardinality.
+    unique_keywords = list({kw for kw in query_keywords if kw})
+    if not unique_keywords:
+        return []
+
     effective_city = city_code or "ALL"
 
     async with async_session() as session:
-        # Load all products that have keywords stored
-        result = await session.execute(
-            select(Product).where(Product.keywords.is_not(None))
+        # Step 1: indexed lookup on product_keywords — find product_ids
+        # that match EVERY query keyword.
+        matching_ids_stmt = (
+            select(ProductKeyword.product_id)
+            .where(ProductKeyword.keyword.in_(unique_keywords))
+            .group_by(ProductKeyword.product_id)
+            .having(
+                func.count(func.distinct(ProductKeyword.keyword))
+                == len(unique_keywords)
+            )
         )
-        products = result.scalars().all()
+        id_result = await session.execute(matching_ids_stmt)
+        product_ids = [row[0] for row in id_result.all()]
+
+        if not product_ids:
+            return []
+
+        # Step 2: load the matched products (with prices via selectin).
+        product_result = await session.execute(
+            select(Product).where(Product.id.in_(product_ids))
+        )
+        products = product_result.scalars().all()
 
     matches: list[DrugResult] = []
     for product in products:
-        # Skip products already in exact results
         if product.drug_name.lower().strip() in exclude_names:
             continue
 
-        product_kw_set = set(product.keywords or [])
-        # ALL query keywords must appear in the product's keyword set
-        if not all(kw in product_kw_set for kw in query_keywords):
-            continue
-
-        # Find a price for this city
         price_row = None
         for p in product.prices:
             if p.city_code == effective_city:
@@ -283,7 +307,7 @@ async def find_cross_chain_matches(
     if matches:
         logger.info(
             "Cross-chain keyword match: %d products for keywords=%s (city=%s)",
-            len(matches), query_keywords, city_code,
+            len(matches), unique_keywords, city_code,
         )
 
     return matches
@@ -364,7 +388,35 @@ async def _upsert_product(
         product.keywords = keywords
         product.updated_at = now.replace(tzinfo=None)
 
+    # Mirror the keyword tokens into the indexed product_keywords table so
+    # find_cross_chain_matches can do a fast lookup (Item 30, v0.12.6).
+    # Delete existing rows for this product and insert the fresh set — this
+    # is idempotent and handles token churn from drug_name edits.
+    await _sync_product_keywords(session, product.id, keywords)
+
     return product
+
+
+async def _sync_product_keywords(
+    session, product_id: int, keywords: list[str],
+) -> None:
+    """Replace the ``product_keywords`` rows for a product.
+
+    Deletes all existing keyword rows for ``product_id`` and inserts one
+    row per unique token in ``keywords``. Called from ``_upsert_product``
+    inside the same transaction so it rolls back together on error.
+
+    Args:
+        session: Active database session.
+        product_id: Product FK.
+        keywords: Lowercase tokens from the product's drug_name.
+    """
+    await session.execute(
+        delete(ProductKeyword).where(ProductKeyword.product_id == product_id)
+    )
+    unique = sorted({kw for kw in keywords if kw})
+    for kw in unique:
+        session.add(ProductKeyword(product_id=product_id, keyword=kw))
 
 
 async def _upsert_price(

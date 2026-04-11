@@ -13,7 +13,9 @@ preferred products, and behavioral patterns. It can reference profile data
 import logging
 
 import anthropic
+from anthropic import APIConnectionError, APIError
 from sqlalchemy import select, func
+from sqlalchemy.exc import SQLAlchemyError
 
 from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
 from farmafacil.db.session import async_session
@@ -190,5 +192,19 @@ async def auto_update_memory(
         else:
             logger.debug("No memory update needed for user %d", user_id)
 
+    except (APIError, APIConnectionError) as exc:
+        logger.error(
+            "Auto-update memory — Anthropic API error for user %d: %s",
+            user_id, exc,
+        )
+    except SQLAlchemyError:
+        logger.error(
+            "Auto-update memory — DB error for user %d", user_id, exc_info=True,
+        )
     except Exception:
-        logger.error("Auto-update memory failed for user %d", user_id, exc_info=True)
+        # Last-resort: memory update is non-critical (never raises to the
+        # handler), so unexpected parsing/shape bugs should not crash the bot.
+        logger.error(
+            "Auto-update memory — unexpected error for user %d",
+            user_id, exc_info=True,
+        )

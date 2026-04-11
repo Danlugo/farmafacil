@@ -97,13 +97,12 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 22: Remove Deprecated ProductCache Table
 
-- **Status:** PENDING
+- **Status:** DONE (v0.12.6, 2026-04-11)
 - **Added:** 2026-04-10
 - **Priority:** P3
-- **Problem:** `ProductCache` model in `database.py:241-246` is marked DEPRECATED (replaced by products/product_prices/search_queries) but still in schema and admin views. Dead code.
-- **Suggested solution:** Remove `ProductCache` class from `database.py`, remove admin view, clean up any remaining references.
-- **Affected files:** `src/farmafacil/models/database.py`, `src/farmafacil/api/admin.py`
-- **Effort:** Low (<1h)
+- **Problem:** `ProductCache` model in `database.py:241-246` was marked DEPRECATED (replaced by products/product_prices/search_queries) but still in schema and admin views. Dead code.
+- **Solution shipped:** Removed `ProductCache` ORM class from `database.py`, removed `ProductCacheAdmin` view + import + registration from `api/admin.py`. Confirmed no other references in the codebase (the similarly-named `services/product_cache.py` module is unrelated — it is the product catalog service). The underlying `product_cache` SQL table still exists on production but is now orphaned — safe to drop manually on the next maintenance window.
+- **Files modified:** `src/farmafacil/models/database.py`, `src/farmafacil/api/admin.py`
 
 ### Item 23: API Input Validation & Rate Limiting
 
@@ -133,13 +132,22 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 25: Improve Bare Exception Handlers
 
-- **Status:** PENDING
+- **Status:** DONE (v0.12.6, 2026-04-11)
 - **Added:** 2026-04-10
 - **Priority:** P3
-- **Problem:** 12+ `except Exception:` blocks across the codebase catch all errors indiscriminately. Makes debugging hard — timeout vs auth failure vs parsing error all look the same in logs.
-- **Suggested solution:** Replace bare `except Exception:` with specific exceptions (`httpx.TimeoutException`, `httpx.HTTPStatusError`, `anthropic.APIError`, `json.JSONDecodeError`, etc.). Keep a final `except Exception:` only as last resort with full traceback logging.
-- **Affected files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/services/search.py`, `src/farmafacil/scrapers/vtex.py`, `src/farmafacil/bot/handler.py`, and others
-- **Effort:** Medium (2-3h)
+- **Problem:** 12+ `except Exception:` blocks across the codebase caught all errors indiscriminately. Made debugging hard — timeout vs auth failure vs parsing error all looked the same in logs.
+- **Solution shipped:** Replaced bare `except Exception:` with specific exception classes across 11 handlers:
+  - `services/ai_responder.py` — direct imports `from anthropic import APIError, APIConnectionError`; 3 handlers now catch `(APIError, APIConnectionError)` with last-resort `Exception` for defensive logging. Direct imports (not `anthropic.APIError` via module) are immune to test MagicMock patching.
+  - `services/user_memory.py` — same direct-import pattern; `auto_update_memory` catches `(APIError, APIConnectionError)` + `SQLAlchemyError` + last-resort `Exception` (non-blocking background task).
+  - `services/store_backfill.py` — 3 handlers (Farmatodo, SAAS, Locatel) catch `httpx.HTTPError` + `(ValueError, KeyError, TypeError)` with specific error messages.
+  - `services/users.py` — token-persist handler catches `SQLAlchemyError`.
+  - `services/store_locations.py` — DB query handler catches `SQLAlchemyError`.
+  - `services/image_grid.py` — `httpx.HTTPError` + `(UnidentifiedImageError, OSError, ValueError)`.
+  - `bot/whatsapp.py` — read receipt handler catches `httpx.HTTPError`; media upload handler catches `httpx.HTTPError` + `OSError`.
+  - `bot/handler.py` — `_update_memory_safe` keeps last-resort `Exception` (documented); feedback create handler catches `ValueError` + `SQLAlchemyError` + last-resort `Exception` (required for the `/bug` escape-hatch test `test_bug_clears_state_even_when_create_fails` which raises `RuntimeError`).
+  - `scrapers/vtex.py` — VTEX product parse handler catches `(KeyError, ValueError, TypeError, IndexError)`.
+  - `scrapers/farmatodo.py` — Decimal parse handler catches `(InvalidOperation, ValueError, TypeError)` (leverages the v0.12.4 hotfix that coerces `measurePum` to Decimal).
+- **Files modified:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/services/user_memory.py`, `src/farmafacil/services/store_backfill.py`, `src/farmafacil/services/users.py`, `src/farmafacil/services/store_locations.py`, `src/farmafacil/services/image_grid.py`, `src/farmafacil/bot/whatsapp.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/scrapers/vtex.py`, `src/farmafacil/scrapers/farmatodo.py`
 
 ### Item 27: Nearest Pharmacy Direct Query
 
@@ -457,14 +465,19 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 30: `find_cross_chain_matches` Unindexed Full-Scan
 
-- **Status:** PENDING
+- **Status:** DONE (v0.12.6, 2026-04-11)
 - **Added:** 2026-04-10
 - **Priority:** P3
-- **Problem:** `src/farmafacil/services/product_cache.py:258-272` pulls **every** product with non-null `keywords` into memory and filters in Python with `all(kw in product_kw_set for kw in query_keywords)`. This is fine today (small catalog) but will become expensive once the catalog grows to thousands of products — each cross-chain search walks the full table plus all prices via `lazy="selectin"`.
-- **Suggested solution:** Either (a) move keyword matching into SQL via a `JSON_CONTAINS`/`@>` operator with a GIN index on `products.keywords` (Postgres-only — not portable to SQLite dev), or (b) add a separate `product_keywords` table (product_id, keyword) with an index on `keyword`, and query it with an `INTERSECT` / multi-join to find products that have all query keywords. Option (b) works on both SQLite and Postgres.
-- **Discovered during:** Item 20 investigation (2026-04-10) — not an N+1, but a real efficiency issue worth tracking.
-- **Affected files:** `src/farmafacil/models/database.py` (new table or JSON index), `src/farmafacil/services/product_cache.py` (find_cross_chain_matches rewrite), a backfill migration
-- **Effort:** Medium (2-4h, option b)
+- **Problem:** `src/farmafacil/services/product_cache.py:258-272` pulled **every** product with non-null `keywords` into memory and filtered in Python with `all(kw in product_kw_set for kw in query_keywords)`. Fine at the current catalog size but would become expensive at thousands of products — each cross-chain search walked the full table plus all prices via `lazy="selectin"`.
+- **Solution shipped (option b — portable across SQLite + Postgres):**
+  - New `product_keywords` inverted-index table: `(id PK, product_id FK CASCADE, keyword VARCHAR(100))` with indexes on both `product_id` and `keyword`, plus `UniqueConstraint(product_id, keyword)`. `Product.keywords` JSON column retained as the denormalized cache; the new table is strictly an index for `find_cross_chain_matches`.
+  - `find_cross_chain_matches` rewritten to do a single indexed SQL query: `SELECT product_id FROM product_keywords WHERE keyword IN (...) GROUP BY product_id HAVING COUNT(DISTINCT keyword) = N`, then `SELECT products WHERE id IN (matching_ids)`. No more full-table-scan + in-memory filter.
+  - New `_sync_product_keywords(session, product_id, keywords)` helper: deletes existing rows for the product and inserts one row per unique lowercase token. Called from `_upsert_product` at the end of both create and update branches so token churn from drug_name edits is handled idempotently in the same transaction.
+  - Idempotent backfill via new `_backfill_product_keywords()` in `db/session.py::init_db()` — follows the additive-migration pattern from Item 31 (v0.12.3). No-op if `product_keywords` already has rows or if no products have keyword JSON data; otherwise walks every product with non-null `keywords` and populates one row per unique token inside a single transaction so a mid-backfill crash leaves the table empty for the next startup to retry. Handles existing production deployments at container startup with no manual DDL.
+  - Inside the handler clarification flow the new table is populated automatically via the save_search_results → _upsert_product path; no handler changes needed.
+- **Files modified:** `src/farmafacil/models/database.py` (new `ProductKeyword` class), `src/farmafacil/services/product_cache.py` (rewrite of `find_cross_chain_matches` + new `_sync_product_keywords` + wiring from `_upsert_product`), `src/farmafacil/db/session.py` (new `_backfill_product_keywords` called from `init_db`), `tests/test_product_catalog.py` (new `TestProductKeywordSync` class with 3 tests + new `TestFindCrossChainMatchesIndexed` class with 5 tests + cleanup fixture updated to delete `ProductKeyword` defensively).
+- **Tests added (8 new):** `test_save_populates_product_keywords`, `test_upsert_replaces_stale_keywords`, `test_dedupes_repeated_tokens`, `test_finds_product_when_all_keywords_present`, `test_skips_product_missing_any_keyword`, `test_exclude_names_filters_out_duplicates`, `test_empty_query_returns_empty`, `test_returns_multiple_matches`.
+- **Test suite:** **528 passed** (was 520, +8 new). Verified with `rm farmafacil.db && pytest -m "not integration" -q`.
 
 ---
 

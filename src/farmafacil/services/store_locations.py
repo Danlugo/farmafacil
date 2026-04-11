@@ -11,6 +11,7 @@ import logging
 import math
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import PharmacyLocation
@@ -129,7 +130,7 @@ async def get_all_nearby_stores(
                 )
             )
             locations = result.scalars().all()
-    except Exception:
+    except SQLAlchemyError:
         logger.error("Failed to query pharmacy locations", exc_info=True)
         return []
 

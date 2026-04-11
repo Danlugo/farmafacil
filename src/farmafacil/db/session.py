@@ -73,6 +73,58 @@ async def init_db() -> None:
                     )
                 )
 
+    # One-shot backfill for product_keywords (Item 30, v0.12.6).
+    # If the table is empty but products already have keyword JSON rows,
+    # populate product_keywords from Product.keywords so find_cross_chain_matches
+    # works on existing deployments without requiring a full re-scrape.
+    await _backfill_product_keywords()
+
+
+async def _backfill_product_keywords() -> None:
+    """Populate ``product_keywords`` from legacy ``Product.keywords`` JSON.
+
+    Idempotent: no-op if the table already has rows or if no products have
+    keyword data. Runs inside a single transaction so a crash mid-backfill
+    leaves the table empty for the next startup to retry.
+    """
+    from sqlalchemy import func as sql_func, select
+
+    from farmafacil.models.database import Product, ProductKeyword
+
+    async with async_session() as session:
+        kw_count = await session.scalar(
+            select(sql_func.count()).select_from(ProductKeyword)
+        )
+        if kw_count and kw_count > 0:
+            return  # Already backfilled or being written by live traffic
+
+        product_count = await session.scalar(
+            select(sql_func.count()).select_from(Product).where(
+                Product.keywords.is_not(None)
+            )
+        )
+        if not product_count:
+            return  # Fresh DB — nothing to backfill
+
+        result = await session.execute(
+            select(Product.id, Product.keywords).where(
+                Product.keywords.is_not(None)
+            )
+        )
+        rows_added = 0
+        for product_id, keywords in result.all():
+            if not keywords:
+                continue
+            unique = sorted({str(kw).lower() for kw in keywords if kw})
+            for kw in unique:
+                session.add(
+                    ProductKeyword(product_id=product_id, keyword=kw)
+                )
+                rows_added += 1
+
+        if rows_added:
+            await session.commit()
+
 
 async def close_db() -> None:
     """Dispose of the engine connection pool."""

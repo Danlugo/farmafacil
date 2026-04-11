@@ -21,7 +21,6 @@ from farmafacil.models.database import (
     Pharmacy,
     PharmacyLocation,
     Product,
-    ProductCache,
     ProductPrice,
     SearchLog,
     SearchQuery,
@@ -325,48 +324,6 @@ class SearchQueryAdmin(ModelView, model=SearchQuery):
         "product_ids": "Product IDs (JSON)",
         "total_results": "Total Results",
         "searched_at": "Searched At",
-    }
-
-    can_create = False
-    can_edit = False
-    can_delete = True
-    form_include_pk = False
-    page_size = 25
-    page_size_options = [10, 25, 50, 100]
-
-
-class ProductCacheAdmin(ModelView, model=ProductCache):
-    """Admin view for legacy cached product search results.
-
-    DEPRECATED: Replaced by Product + ProductPrice + SearchQuery.
-    """
-
-    name = "Product Cache (Legacy)"
-    name_plural = "Product Cache (Legacy)"
-    icon = "fa-solid fa-database"
-
-    column_list = [
-        ProductCache.id,
-        ProductCache.query,
-        ProductCache.city_code,
-        ProductCache.result_count,
-        ProductCache.cached_at,
-    ]
-    column_searchable_list = [ProductCache.query, ProductCache.city_code]
-    column_sortable_list = [
-        ProductCache.id,
-        ProductCache.query,
-        ProductCache.result_count,
-        ProductCache.cached_at,
-    ]
-    column_default_sort = ("cached_at", True)
-
-    column_labels = {
-        "query": "Search Query",
-        "city_code": "City Code",
-        "results_json": "Results (JSON)",
-        "result_count": "Result Count",
-        "cached_at": "Cached At",
     }
 
     can_create = False
@@ -810,7 +767,6 @@ ADMIN_VIEWS = [
     ProductAdmin,
     ProductPriceAdmin,
     SearchQueryAdmin,
-    ProductCacheAdmin,
     AppSettingAdmin,
 ]
 
