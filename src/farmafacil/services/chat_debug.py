@@ -57,11 +57,15 @@ def estimate_cost(
 def estimate_cost_breakdown(stats: dict) -> dict[str, float]:
     """Calculate per-model and total costs from stats dict.
 
+    Admin chat tokens are priced at Opus rates — the admin AI always uses
+    Opus regardless of the ``default_model`` app_setting — and are summed
+    into the total alongside haiku + sonnet.
+
     Args:
         stats: Stats dict from get_user_stats() containing per-model token counts.
 
     Returns:
-        Dict with cost_haiku, cost_sonnet, cost_total.
+        Dict with cost_haiku, cost_sonnet, cost_admin, cost_total.
     """
     cost_haiku = estimate_cost(
         stats.get("tokens_in_haiku", 0),
@@ -73,10 +77,16 @@ def estimate_cost_breakdown(stats: dict) -> dict[str, float]:
         stats.get("tokens_out_sonnet", 0),
         "sonnet",
     )
+    cost_admin = estimate_cost(
+        stats.get("tokens_in_admin", 0),
+        stats.get("tokens_out_admin", 0),
+        "opus",
+    )
     return {
         "cost_haiku": cost_haiku,
         "cost_sonnet": cost_sonnet,
-        "cost_total": cost_haiku + cost_sonnet,
+        "cost_admin": cost_admin,
+        "cost_total": cost_haiku + cost_sonnet + cost_admin,
     }
 
 
@@ -119,6 +129,7 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
                 User.last_tokens_in, User.last_tokens_out,
                 User.tokens_in_haiku, User.tokens_out_haiku, User.calls_haiku,
                 User.tokens_in_sonnet, User.tokens_out_sonnet, User.calls_sonnet,
+                User.tokens_in_admin, User.tokens_out_admin, User.calls_admin,
             ).where(User.id == user_id)
         )
         row = user_result.one_or_none()
@@ -134,6 +145,9 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
                 func.coalesce(func.sum(User.tokens_in_sonnet), 0),
                 func.coalesce(func.sum(User.tokens_out_sonnet), 0),
                 func.coalesce(func.sum(User.calls_sonnet), 0),
+                func.coalesce(func.sum(User.tokens_in_admin), 0),
+                func.coalesce(func.sum(User.tokens_out_admin), 0),
+                func.coalesce(func.sum(User.calls_admin), 0),
             )
         )
         g = global_result.one()
@@ -153,6 +167,9 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
         "tokens_in_sonnet": row.tokens_in_sonnet if row else 0,
         "tokens_out_sonnet": row.tokens_out_sonnet if row else 0,
         "calls_sonnet": row.calls_sonnet if row else 0,
+        "tokens_in_admin": row.tokens_in_admin if row else 0,
+        "tokens_out_admin": row.tokens_out_admin if row else 0,
+        "calls_admin": row.calls_admin if row else 0,
         # Global totals
         "global_tokens_in": g[0],
         "global_tokens_out": g[1],
@@ -162,6 +179,9 @@ async def get_user_stats(phone_number: str, user_id: int) -> dict[str, int]:
         "global_tokens_in_sonnet": g[5],
         "global_tokens_out_sonnet": g[6],
         "global_calls_sonnet": g[7],
+        "global_tokens_in_admin": g[8],
+        "global_tokens_out_admin": g[9],
+        "global_calls_admin": g[10],
     }
 
 
@@ -178,12 +198,18 @@ def build_debug_footer(
     model_used: str = "",
     calls_haiku: int = 0,
     calls_sonnet: int = 0,
+    calls_admin: int = 0,
     global_calls_haiku: int = 0,
     global_calls_sonnet: int = 0,
+    global_calls_admin: int = 0,
     global_tokens_in_haiku: int = 0,
     global_tokens_out_haiku: int = 0,
     global_tokens_in_sonnet: int = 0,
     global_tokens_out_sonnet: int = 0,
+    global_tokens_in_admin: int = 0,
+    global_tokens_out_admin: int = 0,
+    *,
+    is_admin_turn: bool = False,
 ) -> str:
     """Build a debug footer string to append to bot responses.
 
@@ -200,25 +226,38 @@ def build_debug_footer(
         model_used: Model name used for this call.
         calls_haiku: User's Haiku API call count.
         calls_sonnet: User's Sonnet API call count.
+        calls_admin: User's Admin (Opus) API call count.
         global_calls_haiku: Global Haiku API call count.
         global_calls_sonnet: Global Sonnet API call count.
+        global_calls_admin: Global Admin (Opus) API call count.
         global_tokens_in_haiku: Global Haiku input tokens.
         global_tokens_out_haiku: Global Haiku output tokens.
         global_tokens_in_sonnet: Global Sonnet input tokens.
         global_tokens_out_sonnet: Global Sonnet output tokens.
+        global_tokens_in_admin: Global Admin (Opus) input tokens.
+        global_tokens_out_admin: Global Admin (Opus) output tokens.
+        is_admin_turn: True when rendering the footer for an admin chat turn.
+            Admin turns are priced at Opus rates regardless of ``model_used``.
 
     Returns:
         Formatted debug footer string.
     """
     # Estimate costs using actual model for this call
-    call_cost = estimate_cost(input_tokens, output_tokens, model_used or "haiku")
+    # Admin turns always price at opus rates (admin AI is hardcoded to Opus).
+    call_cost = estimate_cost(
+        input_tokens,
+        output_tokens,
+        "opus" if is_admin_turn else (model_used or "haiku"),
+    )
 
-    # Global cost uses per-model breakdown for accuracy
+    # Global cost uses per-model breakdown for accuracy — includes the admin bucket.
     global_cost_breakdown = estimate_cost_breakdown({
         "tokens_in_haiku": global_tokens_in_haiku,
         "tokens_out_haiku": global_tokens_out_haiku,
         "tokens_in_sonnet": global_tokens_in_sonnet,
         "tokens_out_sonnet": global_tokens_out_sonnet,
+        "tokens_in_admin": global_tokens_in_admin,
+        "tokens_out_admin": global_tokens_out_admin,
     })
     global_cost = global_cost_breakdown["cost_total"]
 
@@ -231,9 +270,9 @@ def build_debug_footer(
         f"tokens: _{input_tokens} in / {output_tokens} out_\n"
         f"est cost: _${call_cost:.4f}_\n"
         f"user tokens: _{total_tokens_in} in / {total_tokens_out} out_\n"
-        f"user calls: _haiku={calls_haiku} sonnet={calls_sonnet}_\n"
+        f"user calls: _haiku={calls_haiku} sonnet={calls_sonnet} admin={calls_admin}_\n"
         f"global tokens: _{global_tokens_in} in / {global_tokens_out} out_\n"
-        f"global calls: _haiku={global_calls_haiku} sonnet={global_calls_sonnet}_\n"
+        f"global calls: _haiku={global_calls_haiku} sonnet={global_calls_sonnet} admin={global_calls_admin}_\n"
         f"global est cost: _${global_cost:.4f}_\n"
         f"total questions: _{total_questions}_\n"
         f"total success: _{total_success}_"

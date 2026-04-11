@@ -59,19 +59,27 @@ async def log_inbound(
         await session.commit()
 
 
-async def log_outbound(phone_number: str, message_text: str) -> None:
+async def log_outbound(
+    phone_number: str,
+    message_text: str,
+    message_type: str = "text",
+) -> None:
     """Log an outgoing message from the bot.
 
     Args:
         phone_number: Recipient's WhatsApp number.
         message_text: The message content sent.
+        message_type: Message classification — ``"text"`` for standard replies
+            or ``"admin_out"`` when the reply comes from the admin chat role.
+            Admin classification keeps admin conversations filterable in the
+            dashboard without mixing them into user-facing conversation stats.
     """
     async with async_session() as session:
         entry = ConversationLog(
             phone_number=phone_number,
             direction="outbound",
             message_text=message_text,
-            message_type="text",
+            message_type=message_type,
         )
         session.add(entry)
         await session.commit()

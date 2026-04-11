@@ -229,6 +229,8 @@ async def increment_token_usage(
     input_tokens: int,
     output_tokens: int,
     model: str = "",
+    *,
+    is_admin: bool = False,
 ) -> None:
     """Atomically increment cumulative token counters, per-model counters, and call counts.
 
@@ -237,6 +239,11 @@ async def increment_token_usage(
         input_tokens: Input tokens from the current LLM call.
         output_tokens: Output tokens from the current LLM call.
         model: LLM model name used for this call (e.g., "claude-haiku-4-5-20251001").
+        is_admin: When True, route tokens to the admin bucket
+            (``tokens_in_admin`` / ``tokens_out_admin`` / ``calls_admin``)
+            instead of the user-facing per-model buckets. Admin chat turns
+            are priced at Opus rates and tracked separately so they don't
+            contaminate user-facing cost metrics.
     """
     if input_tokens == 0 and output_tokens == 0:
         return
@@ -249,22 +256,29 @@ async def increment_token_usage(
         "last_tokens_out": output_tokens,
     }
 
-    # Route to per-model counters
-    family = _classify_model(model)
-    if family == "haiku":
-        values["tokens_in_haiku"] = User.tokens_in_haiku + input_tokens
-        values["tokens_out_haiku"] = User.tokens_out_haiku + output_tokens
-        values["calls_haiku"] = User.calls_haiku + 1
-    elif family == "sonnet":
-        values["tokens_in_sonnet"] = User.tokens_in_sonnet + input_tokens
-        values["tokens_out_sonnet"] = User.tokens_out_sonnet + output_tokens
-        values["calls_sonnet"] = User.calls_sonnet + 1
+    # Route to per-model counters. Admin chat turns go to their own bucket,
+    # regardless of which model the admin AI actually used, so admin token
+    # stats stay isolated from user-facing stats.
+    if is_admin:
+        values["tokens_in_admin"] = User.tokens_in_admin + input_tokens
+        values["tokens_out_admin"] = User.tokens_out_admin + output_tokens
+        values["calls_admin"] = User.calls_admin + 1
     else:
-        logger.warning(
-            "Unknown model family for token tracking: '%s' — "
-            "tokens added to aggregate only, not per-model counters",
-            model,
-        )
+        family = _classify_model(model)
+        if family == "haiku":
+            values["tokens_in_haiku"] = User.tokens_in_haiku + input_tokens
+            values["tokens_out_haiku"] = User.tokens_out_haiku + output_tokens
+            values["calls_haiku"] = User.calls_haiku + 1
+        elif family == "sonnet":
+            values["tokens_in_sonnet"] = User.tokens_in_sonnet + input_tokens
+            values["tokens_out_sonnet"] = User.tokens_out_sonnet + output_tokens
+            values["calls_sonnet"] = User.calls_sonnet + 1
+        else:
+            logger.warning(
+                "Unknown model family for token tracking: '%s' — "
+                "tokens added to aggregate only, not per-model counters",
+                model,
+            )
 
     try:
         async with async_session() as session:
@@ -323,6 +337,39 @@ async def set_awaiting_category_search(
             update(User)
             .where(User.phone_number == phone_number)
             .values(awaiting_category_search=category)
+        )
+        await session.commit()
+
+
+async def is_chat_admin(phone_number: str) -> bool:
+    """Return True if the user has the ``chat_admin`` flag set.
+
+    This flag is EDITABLE ONLY via the SQLAdmin dashboard — never from chat.
+    It gates access to the ``/admin`` chat command and the App Admin role.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(User.chat_admin).where(User.phone_number == phone_number)
+        )
+        value = result.scalar_one_or_none()
+        return bool(value)
+
+
+async def set_admin_mode(phone_number: str, active: bool) -> None:
+    """Atomically toggle a user's ``admin_mode_active`` runtime flag.
+
+    Used by the ``/admin`` / ``/admin off`` chat commands. Caller is
+    responsible for enforcing the ``chat_admin`` gate before enabling.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        active: True to enter admin mode, False to exit.
+    """
+    async with async_session() as session:
+        await session.execute(
+            update(User)
+            .where(User.phone_number == phone_number)
+            .values(admin_mode_active=bool(active))
         )
         await session.commit()
 

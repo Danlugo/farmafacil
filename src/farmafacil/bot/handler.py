@@ -16,7 +16,14 @@ from farmafacil.bot.whatsapp import (
     send_text_message,
 )
 from farmafacil.models.schemas import DrugResult
-from farmafacil.services.ai_responder import classify_with_ai, generate_response, refine_clarified_query
+from farmafacil.services.ai_responder import (
+    classify_with_ai,
+    generate_response,
+    refine_clarified_query,
+    run_admin_turn,
+)
+from farmafacil.services.admin_chat import build_tools_manifest
+from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone, reverse_geocode
 from farmafacil.services.image_grid import generate_product_grid
@@ -28,20 +35,29 @@ from farmafacil.services.search_feedback import (
     record_feedback,
     record_feedback_detail,
 )
-from farmafacil.config import LLM_MODEL
+from farmafacil.config import LLM_MODEL, LLM_MODEL_OPUS, MODEL_ALIASES
 from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
+from farmafacil.services.conversation_log import log_outbound as log_outbound_conv
 from farmafacil.services.drug_interactions import (
     check_interactions,
     extract_medications_from_memory,
     format_interaction_warning,
 )
-from farmafacil.services.settings import get_setting, resolve_chat_debug, resolve_response_mode
+from farmafacil.services.settings import (
+    get_default_model,
+    get_setting,
+    resolve_chat_debug,
+    resolve_response_mode,
+    set_default_model,
+)
 from farmafacil.services.store_backfill import format_store_info, lookup_store
 from farmafacil.services.store_locations import get_all_nearby_stores
 from farmafacil.services.user_feedback import create_feedback, parse_feedback_command
 from farmafacil.services.users import (
     get_or_create_user,
     increment_token_usage,
+    is_chat_admin,
+    set_admin_mode,
     set_awaiting_category_search,
     set_awaiting_clarification,
     set_onboarding_step,
@@ -194,6 +210,243 @@ MSG_CATEGORY_PROMPT = (
 MSG_CATEGORY_CANCELED = (
     "Listo, cancele la busqueda por categoria. Dime que necesitas \U0001f64c"
 )
+
+# ── Admin chat messages (Item 35, v0.14.0) ─────────────────────────────
+MSG_ADMIN_DENIED = (
+    "\U0001f512 No tienes permisos de admin. "
+    "Solo usuarios con *chat_admin* activado desde el dashboard pueden "
+    "usar este modo."
+)
+
+MSG_ADMIN_WELCOME = (
+    "\U0001f6e0\ufe0f *Modo Admin ACTIVADO* — usando Claude Opus.\n\n"
+    "Puedes pedirme cosas en lenguaje natural y yo llamo las "
+    "herramientas necesarias para responderte.\n\n"
+    "*Comandos disponibles:*\n"
+    "\u2022 */admin* — activar/desactivar este modo\n"
+    "\u2022 */admin off* — salir del modo admin\n"
+    "\u2022 */models* — ver modelo default + alternativas\n"
+    "\u2022 */model haiku|sonnet|opus* — cambiar modelo default "
+    "de usuarios\n"
+    "\u2022 */stats* — estadisticas de uso + costos\n"
+    "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n\n"
+    "*Ejemplos de lo que puedo hacer:*\n"
+    "\u2022 _Mostrame los ultimos 10 feedbacks pendientes_\n"
+    "\u2022 _Ver caso #12_ / _Marcar caso #12 revisado_\n"
+    "\u2022 _Ver el rol pharmacy_advisor con sus reglas_\n"
+    "\u2022 _Agregar una regla al rol X diciendo Y_\n"
+    "\u2022 _Ver usuarios recientes_\n"
+    "\u2022 _Ver la memoria del usuario 5491112345678_\n"
+    "\u2022 _Listar farmacias de Locatel en CCS_\n"
+    "\u2022 _Desactivar la farmacia #42_\n"
+    "\u2022 _Cuantos productos tenemos?_\n"
+    "\u2022 _Top 10 busquedas_\n"
+    "\u2022 _Leer el archivo src/farmafacil/bot/handler.py_\n"
+    "\u2022 _Cambiar el default_model a sonnet_\n"
+    "\u2022 _Registrar un bug: el scraper de Farmatodo esta lento_"
+)
+
+MSG_ADMIN_OFF = (
+    "\u2705 *Modo Admin DESACTIVADO*.\n"
+    "Volves al flujo normal de busqueda de productos."
+)
+
+MSG_ADMIN_NOT_ACTIVE = (
+    "El modo admin no esta activo. Usa */admin* para activarlo."
+)
+
+# Natural-language phrases that also turn off admin mode (redundant UX
+# sugar in case the user forgets the slash command).
+_ADMIN_OFF_PHRASES: frozenset[str] = frozenset({
+    "/admin off", "admin off", "salir admin", "desactivar admin",
+    "turn off admin", "apagar admin", "cerrar admin",
+})
+
+# ── Admin chat helpers (Item 35, v0.14.0) ─────────────────────────────
+
+async def _handle_admin_toggle(sender: str, user) -> None:
+    """Handle the ``/admin`` command — toggle admin mode on/off.
+
+    Enforces the ``chat_admin`` gate: only users explicitly flagged in the
+    SQLAdmin dashboard can enable admin mode. The flag itself is NEVER
+    editable from chat — see the docstring on ``users.chat_admin``.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: The already-loaded User ORM row for ``sender``.
+    """
+    allowed = await is_chat_admin(sender)
+    if not allowed:
+        logger.warning(
+            "Admin toggle DENIED for %s (chat_admin=False)", sender,
+        )
+        await send_text_message(sender, MSG_ADMIN_DENIED)
+        return
+
+    if user.admin_mode_active:
+        await set_admin_mode(sender, False)
+        await send_text_message(sender, MSG_ADMIN_OFF)
+        await log_outbound_conv(sender, MSG_ADMIN_OFF, message_type="admin_out")
+        logger.info("Admin mode OFF for %s", sender)
+        return
+
+    await set_admin_mode(sender, True)
+    await send_text_message(sender, MSG_ADMIN_WELCOME)
+    await log_outbound_conv(
+        sender, MSG_ADMIN_WELCOME, message_type="admin_out",
+    )
+    logger.info("Admin mode ON for %s (opus)", sender)
+
+
+async def _handle_admin_off(sender: str, user) -> None:
+    """Turn off admin mode if currently active, else send gentle hint."""
+    if not user.admin_mode_active:
+        await send_text_message(sender, MSG_ADMIN_NOT_ACTIVE)
+        return
+    await set_admin_mode(sender, False)
+    await send_text_message(sender, MSG_ADMIN_OFF)
+    await log_outbound_conv(sender, MSG_ADMIN_OFF, message_type="admin_out")
+    logger.info("Admin mode OFF (phrase) for %s", sender)
+
+
+async def _handle_model_commands(sender: str, text: str) -> bool:
+    """Handle ``/models`` and ``/model <alias>`` — default user model control.
+
+    Only callable while admin mode is active (the handler gates this).
+
+    Args:
+        sender: WhatsApp phone number.
+        text: Raw message text (already stripped, not lower-cased).
+
+    Returns:
+        True if the message matched a model command and was handled;
+        False if the caller should keep processing the message.
+    """
+    lower = text.lower().strip()
+
+    if lower == "/models":
+        try:
+            current = await get_default_model()
+        except Exception:  # noqa: BLE001 — defensive, settings is DB-backed
+            logger.error("get_default_model failed", exc_info=True)
+            current = "haiku"
+        aliases = ", ".join(sorted(MODEL_ALIASES.keys()))
+        msg = (
+            "\U0001f916 *Modelos disponibles*\n\n"
+            f"Default actual: *{current}*\n"
+            f"Alias validos: {aliases}\n\n"
+            "Usa */model haiku|sonnet|opus* para cambiar el default "
+            "de usuarios. (El admin AI usa Opus siempre.)"
+        )
+        await send_text_message(sender, msg)
+        await log_outbound_conv(sender, msg, message_type="admin_out")
+        return True
+
+    if lower.startswith("/model "):
+        alias = lower.removeprefix("/model ").strip()
+        try:
+            new_alias = await set_default_model(alias)
+        except ValueError as exc:
+            err = f"\u274c {exc}"
+            await send_text_message(sender, err)
+            await log_outbound_conv(sender, err, message_type="admin_out")
+            return True
+        except Exception:  # noqa: BLE001 — last-resort, never crash webhook
+            logger.error("set_default_model failed", exc_info=True)
+            err = "Error interno guardando el default_model."
+            await send_text_message(sender, err)
+            await log_outbound_conv(sender, err, message_type="admin_out")
+            return True
+        msg = (
+            f"\u2705 Default model actualizado a *{new_alias}*. "
+            "Afecta clasificacion de intent y respuestas de usuarios — "
+            "el admin AI sigue usando Opus."
+        )
+        await send_text_message(sender, msg)
+        await log_outbound_conv(sender, msg, message_type="admin_out")
+        return True
+
+    return False
+
+
+async def _handle_admin_turn(
+    sender: str, user, text: str, debug_on: bool,
+) -> None:
+    """Dispatch a free-text admin message through the Opus tool loop.
+
+    Assembles the ``app_admin`` role prompt + live tool manifest, calls
+    ``run_admin_turn``, increments admin-bucket token counters, sends the
+    final text to WhatsApp, and classifies the outbound log row as
+    ``admin_out`` so admin conversations can be filtered separately in
+    the dashboard without mixing them into user-facing conversation stats.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: Already-loaded User ORM row.
+        text: The free-text admin message (not /admin, not /models).
+        debug_on: True when chat debug is enabled — appends a compact
+            admin debug footer showing tools + tokens + steps.
+    """
+    role = await get_role("app_admin")
+    if role is None:
+        logger.error("app_admin role missing — admin turn aborted")
+        err = (
+            "El rol *app_admin* no esta configurado en la base. "
+            "Re-ejecuta el seed de roles o crealo desde el dashboard."
+        )
+        await send_text_message(sender, err)
+        await log_outbound_conv(sender, err, message_type="admin_out")
+        return
+
+    profile = {
+        "name": user.name,
+        "zone": user.zone_name,
+        "city_code": user.city_code,
+        "preference": user.display_preference,
+    }
+    memory_text = await get_memory(user.id)
+    base_prompt = assemble_prompt(role, memory_text, profile)
+    tool_manifest = build_tools_manifest()
+    system_prompt = (
+        f"{base_prompt}\n\n## Available Tools\n\n{tool_manifest}"
+    )
+
+    result = await run_admin_turn(
+        user_message=text,
+        system_prompt=system_prompt,
+        history=None,
+        admin_user_id=user.id,
+    )
+
+    # Route tokens to the admin bucket regardless of the underlying
+    # model (run_admin_turn is hardcoded to Opus but the bucket split
+    # happens inside increment_token_usage via is_admin=True).
+    if result.input_tokens or result.output_tokens:
+        await increment_token_usage(
+            user.id,
+            result.input_tokens,
+            result.output_tokens,
+            model=LLM_MODEL_OPUS,
+            is_admin=True,
+        )
+
+    reply = result.text or "(sin respuesta)"
+    if debug_on:
+        tools_label = ", ".join(result.tools_used) or "none"
+        reply += (
+            f"\n\n_[admin] opus steps={result.steps} "
+            f"tools={tools_label} "
+            f"tok={result.input_tokens}/{result.output_tokens}_"
+        )
+
+    await send_text_message(sender, reply)
+    await log_outbound_conv(sender, reply, message_type="admin_out")
+    logger.info(
+        "Admin turn for %s: tools=%s steps=%d tok=%d/%d",
+        sender, result.tools_used, result.steps,
+        result.input_tokens, result.output_tokens,
+    )
+
 
 async def _update_memory_safe(
     user_id: int, user_name: str, user_message: str, bot_response: str,
@@ -448,6 +701,34 @@ async def handle_incoming_message(
             sender,
             MSG_FEEDBACK_REGISTERED.format(label=label, case_id=case_id),
         )
+        return
+
+    # ── Admin chat commands + admin-mode dispatch (Item 35, v0.14.0) ───
+    # Runs AFTER /bug so admins can still escape a stuck state, and
+    # BEFORE clarification/category/onboarding so admin mode shadows
+    # everything else. The /admin command is ALWAYS checked (it's the
+    # only way to enter the mode), but admin-mode free-text routing
+    # only fires when the user's admin_mode_active flag is True.
+    if text_lower in _ADMIN_OFF_PHRASES:
+        if user.admin_mode_active:
+            await _handle_admin_off(sender, user)
+            return
+        # User typed "admin off" without being in admin mode — fall
+        # through to normal processing (NOT a command).
+    if text_lower == "/admin":
+        await _handle_admin_toggle(sender, user)
+        return
+    if user.admin_mode_active:
+        # Model commands are only valid while admin mode is active so
+        # regular users can never change the default model by accident.
+        if await _handle_model_commands(sender, text):
+            return
+        # Any other message goes through the Opus tool loop. Resolve
+        # debug flag up-front so the admin helper can append a footer.
+        debug_on = resolve_chat_debug(
+            user.chat_debug, await get_setting("chat_debug"),
+        )
+        await _handle_admin_turn(sender, user, text, debug_on)
         return
 
     # ── Clarification reply handling ────────────────────────────────────

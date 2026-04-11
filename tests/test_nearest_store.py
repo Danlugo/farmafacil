@@ -240,6 +240,8 @@ class TestNearestStoreHandler:
             last_search_log_id = None
             awaiting_clarification_context = None
             awaiting_category_search = None
+            chat_admin = False
+            admin_mode_active = False
 
         with (
             patch("farmafacil.bot.handler.get_or_create_user", new=AsyncMock(return_value=MockUser())),

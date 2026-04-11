@@ -11,13 +11,13 @@ name, location, and drug queries from user messages.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import anthropic
 from anthropic import APIConnectionError, APIError
 from sqlalchemy import select
 
-from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL, LLM_MODEL_OPUS
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
 from farmafacil.services.ai_roles import assemble_prompt, get_role
@@ -44,6 +44,21 @@ class AiResponse:
     clarify_context: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+@dataclass
+class AdminTurnResult:
+    """Result of a full ``run_admin_turn`` loop (Item 35, v0.14.0).
+
+    A single admin "turn" can make multiple LLM calls (one per tool step),
+    so ``input_tokens`` / ``output_tokens`` are summed across ALL iterations.
+    """
+
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    steps: int = 0
+    tools_used: list[str] = field(default_factory=list)
 
 
 # ── Hardcoded fallback prompt (safety net if no roles in DB) ──────────
@@ -386,6 +401,233 @@ async def refine_clarified_query(
             "falling back to raw answer", exc_info=True,
         )
         return (user_answer.strip(), 0, 0)
+
+
+# ── App Admin chat turn runner ────────────────────────────────────────
+
+# Maximum tool-call steps per admin turn. Each step is one LLM roundtrip.
+# A cap prevents a confused LLM from looping forever on a malformed tool.
+MAX_ADMIN_STEPS = 5
+
+
+def _parse_admin_action(reply: str) -> tuple[str, dict[str, str]]:
+    """Parse an App Admin LLM reply into (action, fields).
+
+    The admin LLM is instructed to emit either::
+
+        ACTION: TOOL_CALL
+        TOOL: <tool_name>
+        ARGS: <json_object>
+
+    OR::
+
+        ACTION: FINAL
+        RESPONSE: <text shown to the user>
+
+    We parse loosely to be robust to minor format drift — the RESPONSE /
+    ARGS values can span multiple lines, so everything after the key marker
+    is consumed until the next recognised key OR end of string.
+    """
+    fields: dict[str, str] = {}
+    current_key: str | None = None
+    buffer: list[str] = []
+    keys = ("ACTION", "TOOL", "ARGS", "RESPONSE")
+    for line in reply.splitlines():
+        stripped = line.strip()
+        matched_key = None
+        for key in keys:
+            prefix = f"{key}:"
+            if stripped.upper().startswith(prefix):
+                matched_key = key
+                break
+        if matched_key:
+            if current_key is not None:
+                fields[current_key] = "\n".join(buffer).strip()
+            current_key = matched_key
+            # Take whatever is after the "KEY:" marker on the same line
+            buffer = [stripped[len(matched_key) + 1 :].strip()]
+        else:
+            if current_key is not None:
+                buffer.append(line)
+    if current_key is not None:
+        fields[current_key] = "\n".join(buffer).strip()
+    action = fields.pop("ACTION", "").upper() or "FINAL"
+    return action, fields
+
+
+async def run_admin_turn(
+    user_message: str,
+    system_prompt: str,
+    history: list[dict[str, str]] | None = None,
+    *,
+    admin_user_id: int | None = None,
+) -> AdminTurnResult:
+    """Run a single admin chat turn with tool-call loop.
+
+    The admin AI is HARDCODED to Claude Opus regardless of the
+    ``default_model`` app_setting — admin work benefits from Opus's
+    superior reasoning, and admin calls are a tiny fraction of traffic
+    so the cost difference is negligible. Admin cost is also tracked in
+    its own bucket (``tokens_*_admin`` / ``calls_admin``) so it never
+    pollutes user-facing cost metrics.
+
+    The loop:
+      1. Calls Opus with the assembled admin prompt + user message.
+      2. Parses the reply — if it's a TOOL_CALL, executes the tool via
+         ``admin_chat.execute_tool`` and appends the result as a user
+         turn, then loops.
+      3. If it's a FINAL response OR the tool-step budget is exhausted,
+         returns the accumulated text + tokens.
+
+    Args:
+        user_message: The admin's raw chat message (already stripped of
+            the ``/admin`` prefix).
+        system_prompt: Fully-assembled system prompt (admin role + rules
+            + skills + memory + live tool manifest).
+        history: Optional prior turns in Anthropic message format to
+            preserve short-term context across the same admin session.
+            Must contain ONLY valid ``{"role", "content"}`` dicts — the
+            list is forwarded to the Anthropic messages API as-is.
+        admin_user_id: The database ID of the admin user making the
+            request. Forwarded to ``execute_tool`` so audit-trail tools
+            (``report_issue``) can attribute rows to the right admin.
+
+    Returns:
+        AdminTurnResult with final text, summed token counts, step count,
+        and a flat list of tool names that were invoked.
+    """
+    # Local import to avoid a cycle (admin_chat imports settings, which
+    # imports nothing from here, but the tool registry is only needed when
+    # this coroutine actually runs).
+    from farmafacil.services.admin_chat import execute_tool, parse_tool_args
+
+    if not ANTHROPIC_API_KEY:
+        return AdminTurnResult(
+            text=(
+                "No puedo ejecutar acciones de admin ahora mismo (falta "
+                "ANTHROPIC_API_KEY)."
+            ),
+        )
+
+    # Defensive-copy history with element-level validation so we never forward
+    # malformed dicts (missing role/content, or a stray sentinel) to the
+    # Anthropic API — a malformed entry would produce an opaque 400.
+    messages: list[dict[str, str]] = []
+    dropped = 0
+    for m in (history or []):
+        if (
+            isinstance(m, dict)
+            and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+        ):
+            messages.append({"role": m["role"], "content": m["content"]})
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "run_admin_turn: dropped %d malformed history element(s)", dropped,
+        )
+    messages.append({"role": "user", "content": user_message})
+
+    total_in = 0
+    total_out = 0
+    tools_used: list[str] = []
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    except Exception:  # noqa: BLE001 — client init failure must not kill handler
+        logger.error("run_admin_turn: failed to init Anthropic client", exc_info=True)
+        return AdminTurnResult(
+            text="Error interno inicializando el cliente de IA.",
+        )
+
+    for step in range(1, MAX_ADMIN_STEPS + 1):
+        try:
+            response = client.messages.create(
+                model=LLM_MODEL_OPUS,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+            )
+        except (APIError, APIConnectionError) as exc:
+            logger.error("run_admin_turn step %d — API error: %s", step, exc)
+            return AdminTurnResult(
+                text=f"Error llamando al modelo: {exc}",
+                input_tokens=total_in,
+                output_tokens=total_out,
+                steps=step - 1,
+                tools_used=tools_used,
+            )
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "run_admin_turn step %d — unexpected error", step, exc_info=True,
+            )
+            return AdminTurnResult(
+                text="Error inesperado en el loop de admin.",
+                input_tokens=total_in,
+                output_tokens=total_out,
+                steps=step - 1,
+                tools_used=tools_used,
+            )
+
+        total_in += response.usage.input_tokens
+        total_out += response.usage.output_tokens
+        reply_text = response.content[0].text.strip() if response.content else ""
+        logger.info(
+            "admin turn step=%d in=%d out=%d reply=%r",
+            step, response.usage.input_tokens, response.usage.output_tokens,
+            reply_text[:200],
+        )
+
+        action, fields = _parse_admin_action(reply_text)
+
+        if action == "TOOL_CALL":
+            tool_name = fields.get("TOOL", "").strip()
+            tool_args = parse_tool_args(fields.get("ARGS", ""))
+            if not tool_name:
+                # Malformed tool call — surface back to the LLM so it
+                # can retry with a correct shape.
+                messages.append({"role": "assistant", "content": reply_text})
+                messages.append({
+                    "role": "user",
+                    "content": "Tool call sin TOOL. Repite con TOOL + ARGS.",
+                })
+                continue
+            tools_used.append(tool_name)
+            tool_result = await execute_tool(
+                tool_name, tool_args, admin_user_id=admin_user_id,
+            )
+            # Append both sides so the LLM sees its own request and the
+            # observation, then let it decide what to do next.
+            messages.append({"role": "assistant", "content": reply_text})
+            messages.append({
+                "role": "user",
+                "content": f"TOOL_RESULT {tool_name}:\n{tool_result}",
+            })
+            continue
+
+        # ACTION: FINAL (or anything else — treat as final so a malformed
+        # reply still gets surfaced to the user instead of looping).
+        final_text = fields.get("RESPONSE", "").strip() or reply_text
+        return AdminTurnResult(
+            text=final_text,
+            input_tokens=total_in,
+            output_tokens=total_out,
+            steps=step,
+            tools_used=tools_used,
+        )
+
+    # Step budget exhausted — return whatever we have with a cap notice.
+    return AdminTurnResult(
+        text=(
+            "Se alcanzó el límite de pasos del admin. Intenta dividir la "
+            "tarea en pasos más chicos."
+        ),
+        input_tokens=total_in,
+        output_tokens=total_out,
+        steps=MAX_ADMIN_STEPS,
+        tools_used=tools_used,
+    )
 
 
 def _parse_structured_response(reply: str) -> AiResponse:

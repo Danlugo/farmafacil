@@ -372,3 +372,102 @@ Controlled via `app_settings.chat_debug` (global) and `users.chat_debug` (per-us
 | Per-user | `enabled` / `disabled` / NULL (NULL = use global) |
 
 Resolution: user override → global setting → fallback to `disabled`.
+
+---
+
+## Admin Chat Mode (v0.14.0, Item 35)
+
+A secondary chat interface for users who also operate the app. Unlike the pharmacy advisor, the admin AI is hardcoded to Claude Opus and has tool-call access to the application's database and a sandboxed slice of its source tree.
+
+### Security invariant
+
+`users.chat_admin` is editable ONLY from the SQLAdmin dashboard. No chat command, tool call, or AI prompt can flip this flag — the `set_user_setting` tool's whitelist explicitly excludes it. If an admin loses dashboard access, chat admin is gone.
+
+### Activation flow
+
+```
+User sends: /admin
+  ↓
+handler.py::_handle_admin_toggle
+  ↓
+is_chat_admin(sender)?
+  ├─ False → MSG_ADMIN_DENIED ("no tienes permiso...")
+  └─ True  → set_admin_mode(sender, True) + send MSG_ADMIN_WELCOME
+             (commands list + sample prompts)
+```
+
+From that moment, every free-text message routes through `_handle_admin_turn` → `run_admin_turn` (Opus tool loop) → `execute_tool` dispatch.
+
+### Slash commands
+
+| Command | Handler | Effect |
+|---------|---------|--------|
+| `/admin` | `_handle_admin_toggle` | Toggle admin mode (gated by `chat_admin`) |
+| `/admin off`, `turn off admin`, `apagar admin`, `admin off` | `_handle_admin_off` | Leave admin mode |
+| `/models` | `_handle_model_commands` | Show current default model + aliases |
+| `/model <alias>` | `_handle_model_commands` | Set `default_model` app_setting (haiku / sonnet / opus) |
+| `/bug <text>` | `_handle_bug_command` | Escape hatch — works even inside admin mode |
+| `/stats` | `_handle_stats_command` | Personal usage stats |
+
+### Dispatch order
+
+Inside `handle_incoming_message`:
+
+1. `/bug` + `/comentario` intercepts (always first — escape hatch)
+2. `/admin off` phrases
+3. `/admin` toggle
+4. If `user.admin_mode_active` → `_handle_model_commands` → `_handle_admin_turn`
+5. Normal onboarding / intent / drug search pipeline
+
+The `/bug` escape hatch is deliberately placed BEFORE the admin dispatch so an admin who ends up in a broken admin state can always self-report the issue from chat.
+
+### Tool registry (services/admin_chat.py)
+
+Each tool is an async function returning a short text string. The LLM emits `ACTION: TOOL_CALL / TOOL: <name> / ARGS: {...json...}`, the tool result is fed back as a user turn, and the loop continues (max `MAX_ADMIN_STEPS`) until the LLM returns `ACTION: FINAL / RESPONSE: ...`.
+
+| Domain | Tools |
+|--------|-------|
+| Feedback | `list_feedback`, `get_feedback`, `update_feedback`, `report_issue` |
+| Conversation logs | `list_conversation_logs`, `get_conversation_log` |
+| AI roles | `list_ai_roles`, `get_ai_role`, `update_ai_role`, `add_ai_rule`, `update_ai_rule`, `delete_ai_rule`, `add_ai_skill`, `update_ai_skill`, `delete_ai_skill` |
+| Users | `list_users`, `get_user`, `get_user_memory`, `set_user_memory`, `clear_user_memory`, `set_user_setting` (whitelisted fields only) |
+| Pharmacies / Products | `list_pharmacies`, `get_pharmacy`, `set_pharmacy_active`, `list_products`, `get_product` |
+| Analytics | `recent_searches`, `counts` |
+| App settings | `list_app_settings`, `get_app_setting`, `set_app_setting`, `get_default_model`, `set_default_model` |
+| Code introspection | `read_code`, `list_code` (sandboxed allowlist) |
+
+### `report_issue` — admin-to-backlog bridge
+
+When the admin flags a bug, idea, or issue during a session, `report_issue` writes a row into `user_feedback` with `feedback_type=f"admin_{bug|idea|issue}"`. The dev-side `/farmafacil-review` skill (and related triage skills) can filter the backlog with `WHERE feedback_type LIKE 'admin_%'` to distinguish admin-flagged items from end-user submissions. The caller's `admin_user_id` is injected by `execute_tool` (stripping any LLM-supplied value first — security hardening) so the audit trail always points to the right admin.
+
+### Code introspection sandbox
+
+The `read_code` and `list_code` tools let the admin AI explain its own source when asked "cómo funciona X" type questions. Paths must pass `_is_allowed_path`:
+
+- Absolute paths rejected (`/`, `~`)
+- Post-`resolve()` must be inside `PROJECT_ROOT`
+- Hidden files (`.env`, `.git`, etc.) rejected
+- Forbidden suffixes: `.db`, `.sqlite`, `.pyc`, `.pyo`, `.so`
+- Forbidden names: `.env*`, `credentials.json`, `farmafacil.db`
+- Must be either inside `src/farmafacil/`, `tests/`, or `docs/`, OR one of: `CLAUDE.md`, `IMPROVEMENT-PLAN.md`, `README.md`, `pyproject.toml`, `MEMORY.md`
+- Reads capped at 64 KiB; listings capped at 100 entries
+
+### Logging & token tracking
+
+Admin replies are logged with `conversation_logs.message_type="admin_out"` so they're easy to filter from regular user traffic. Token usage flows into a dedicated bucket:
+
+| Column | Price |
+|--------|-------|
+| `tokens_in_admin` / `tokens_out_admin` | $15 / $75 per MTok (Opus) |
+| `calls_admin` | Count of admin turns |
+
+Plus matching `global_*_admin` aggregates. The `/admin/user-stats/{id}` dashboard and `/api/v1/stats` endpoint render an Admin card separately so admin cost never pollutes user-facing cost metrics.
+
+### Kill switch
+
+If an admin ends up in a stuck admin-mode state, any of these work:
+
+1. Send `/bug <text>` — escape hatch routes around admin dispatch
+2. Send `/admin` (the toggle — second tap turns it off)
+3. Send `turn off admin`, `apagar admin`, or `admin off`
+4. An operator with dashboard access flips `admin_mode_active` to `False` in the UserAdmin view

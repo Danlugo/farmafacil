@@ -23,9 +23,21 @@ class TestAiRolesService:
 
     @pytest.mark.asyncio
     async def test_seed_creates_default_roles(self):
-        """Seeding creates pharmacy_advisor and app_support roles."""
+        """Seeding creates pharmacy_advisor, app_admin, and app_support roles."""
+        # Earlier tests (e.g. test_admin_chat) may have already seeded roles.
+        # Wipe the tables first so this test is self-contained.
+        from sqlalchemy import delete
+
+        from farmafacil.db.session import async_session
+        from farmafacil.models.database import AiRole, AiRoleRule, AiRoleSkill
+
+        async with async_session() as session:
+            await session.execute(delete(AiRoleRule))
+            await session.execute(delete(AiRoleSkill))
+            await session.execute(delete(AiRole))
+            await session.commit()
         count = await seed_ai_roles()
-        assert count == 2
+        assert count == 3
 
     @pytest.mark.asyncio
     async def test_seed_is_idempotent(self):

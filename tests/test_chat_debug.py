@@ -120,8 +120,9 @@ class TestBuildDebugFooter:
             calls_haiku=12, calls_sonnet=3,
             global_calls_haiku=100, global_calls_sonnet=25,
         )
-        assert "user calls: _haiku=12 sonnet=3_" in footer
-        assert "global calls: _haiku=100 sonnet=25_" in footer
+        # v0.14.0 added admin bucket — footer now renders three call types.
+        assert "user calls: _haiku=12 sonnet=3 admin=0_" in footer
+        assert "global calls: _haiku=100 sonnet=25 admin=0_" in footer
 
 
 class TestEstimateCost:

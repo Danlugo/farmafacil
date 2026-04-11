@@ -77,6 +77,14 @@ class User(Base):
         String(50), nullable=True,
         comment="Category the user picked from the greeting menu while bot waits for a product name (Item 29, v0.13.2)",
     )
+    chat_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False,
+        comment="Gate for admin chat role — editable ONLY from SQLAdmin (v0.14.0, Item 35)",
+    )
+    admin_mode_active: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False,
+        comment="Runtime flag — True while a chat_admin user has activated admin mode via /admin",
+    )
     total_tokens_in: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0",
         comment="Cumulative input tokens across all LLM calls",
@@ -118,6 +126,21 @@ class User(Base):
     calls_sonnet: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0",
         comment="Total number of Claude Sonnet API calls",
+    )
+    # Per-model token tracking — Admin (Opus-priced; tracks ALL admin chat
+    # turns separately from user-facing token usage so admin ops don't
+    # contaminate user cost metrics). v0.14.0, Item 35.
+    tokens_in_admin: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative input tokens spent in admin chat turns",
+    )
+    tokens_out_admin: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Cumulative output tokens spent in admin chat turns",
+    )
+    calls_admin: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0",
+        comment="Total number of admin chat LLM calls",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

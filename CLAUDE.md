@@ -61,14 +61,14 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (572 tests) |
+| `tests/` | pytest test suite (625 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Phone, name, location, display preference, response mode override, chat debug override, last search log ID, cumulative token counters, per-model token/call counters (haiku, sonnet), onboarding step, awaiting_clarification_context, awaiting_category_search |
+| `users` | Phone, name, location, display preference, response mode override, chat debug override, last search log ID, cumulative token counters, per-model token/call counters (haiku, sonnet, admin), `chat_admin` (UI-only flag), `admin_mode_active` (per-session toggle via `/admin`), onboarding step, awaiting_clarification_context, awaiting_category_search |
 | `intent_keywords` | Bot keyword→action mappings (admin-editable) |
 | `pharmacy_locations` | Physical store locations (generic, multi-chain) |
 | `products` | Permanent product catalog (never deleted, only upserted) |
@@ -120,3 +120,19 @@ See `docs/adding-pharmacies.md` for the full guide. Summary:
 4. Add tests in `tests/test_new_pharmacy_scraper.py`
 
 **For VTEX pharmacies** (e.g., Locatel): subclass `VTEXScraper`, set `base_url`, and override `pharmacy_name`. See `src/farmafacil/scrapers/saas.py` as a minimal example.
+
+## Admin Chat Mode (v0.14.0, Item 35)
+
+Users with `chat_admin=True` (UI-editable ONLY via SQLAdmin — never from chat, security invariant) can enter admin mode from WhatsApp:
+
+| Command | Purpose |
+|---------|---------|
+| `/admin` | Toggle admin mode on/off (requires `chat_admin=True`) |
+| `/admin off` / `turn off admin` / `apagar admin` | Leave admin mode |
+| `/models` | Show current default model + available aliases (haiku / sonnet / opus) |
+| `/model <alias>` | Change default user-facing model (global setting, effective immediately) |
+| `/bug <text>` | Escape hatch — still works inside admin mode |
+
+Once active, any free-text message is routed to the seeded `app_admin` AI role (hardcoded Claude Opus) which has access to ~30 tool calls covering feedback CRUD, conversation logs, AI role/rule/skill management, user memory, user settings (whitelisted fields only — `chat_admin` is never settable from chat), pharmacy/product inspection, app settings, code introspection (sandboxed to `src/farmafacil/`, `tests/`, `docs/` + a short root allowlist — never `.env`, `.db`, or hidden files), and `report_issue` which writes `user_feedback.feedback_type="admin_{bug|idea|issue}"` so the `/farmafacil-review` dev-side skill can filter admin submissions.
+
+Admin token usage is tracked in a dedicated bucket (`tokens_in_admin`, `tokens_out_admin`, `calls_admin`) priced at Opus rates ($15/$75 per MTok) — never mixed with user-facing haiku/sonnet metrics. Admin replies are logged with `message_type="admin_out"` so they're distinguishable from user conversations.

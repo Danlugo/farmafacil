@@ -227,6 +227,9 @@ async def get_stats(
                     func.coalesce(func.sum(User.tokens_in_sonnet), 0),
                     func.coalesce(func.sum(User.tokens_out_sonnet), 0),
                     func.coalesce(func.sum(User.calls_sonnet), 0),
+                    func.coalesce(func.sum(User.tokens_in_admin), 0),
+                    func.coalesce(func.sum(User.tokens_out_admin), 0),
+                    func.coalesce(func.sum(User.calls_admin), 0),
                 )
             )
         ).one()
@@ -235,6 +238,7 @@ async def get_stats(
 
         cost_haiku = estimate_cost(tokens[2], tokens[3], "haiku")
         cost_sonnet = estimate_cost(tokens[5], tokens[6], "sonnet")
+        cost_admin = estimate_cost(tokens[8], tokens[9], "opus")
 
         return {
             "total_users": total_users,
@@ -254,7 +258,15 @@ async def get_stats(
                 "calls": tokens[7],
                 "est_cost_usd": round(cost_sonnet, 4),
             },
-            "est_cost_total_usd": round(cost_haiku + cost_sonnet, 4),
+            "admin": {
+                "tokens_in": tokens[8],
+                "tokens_out": tokens[9],
+                "calls": tokens[10],
+                "est_cost_usd": round(cost_admin, 4),
+            },
+            "est_cost_total_usd": round(
+                cost_haiku + cost_sonnet + cost_admin, 4
+            ),
         }
 
 
@@ -408,6 +420,11 @@ async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
                 <div class="value">{stats['calls_sonnet']}</div>
                 <div class="sub">{stats['tokens_in_sonnet']:,} in / {stats['tokens_out_sonnet']:,} out</div>
             </div>
+            <div class="card">
+                <div class="label">Admin (Opus)</div>
+                <div class="value">{stats.get('calls_admin', 0)}</div>
+                <div class="sub">{stats.get('tokens_in_admin', 0):,} in / {stats.get('tokens_out_admin', 0):,} out</div>
+            </div>
         </div>
     </div>
 
@@ -428,6 +445,11 @@ async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
                 <div class="label">Sonnet Cost</div>
                 <div class="value cost">${costs['cost_sonnet']:.4f}</div>
                 <div class="sub">$3.00 / $15.00 per MTok</div>
+            </div>
+            <div class="card">
+                <div class="label">Admin Cost</div>
+                <div class="value cost">${costs.get('cost_admin', 0.0):.4f}</div>
+                <div class="sub">$15.00 / $75.00 per MTok (Opus)</div>
             </div>
         </div>
     </div>

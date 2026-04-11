@@ -38,6 +38,15 @@ WHATSAPP_API_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
 LLM_MODEL_ELEVATED = os.getenv("LLM_MODEL_ELEVATED", "claude-sonnet-4-20250514")
+LLM_MODEL_OPUS = os.getenv("LLM_MODEL_OPUS", "claude-opus-4-1-20250805")
+
+# Aliases used by admin chat `/model <alias>` and the default_model app_setting.
+# Keys must match `services.settings.VALID_MODEL_ALIASES`.
+MODEL_ALIASES: dict[str, str] = {
+    "haiku": LLM_MODEL,
+    "sonnet": LLM_MODEL_ELEVATED,
+    "opus": LLM_MODEL_OPUS,
+}
 
 # Admin dashboard
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")

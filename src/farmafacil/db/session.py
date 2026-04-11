@@ -50,27 +50,72 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Additive column migrations (idempotent)
-    # Format: (table, column, type_sql)
-    additive_migrations: list[tuple[str, str, str]] = [
-        ("users", "awaiting_clarification_context", "VARCHAR(300)"),
-        ("users", "awaiting_category_search", "VARCHAR(50)"),
+    # Additive column migrations (idempotent).
+    # Format: (table, column, sqlite_type, postgres_type) — boolean defaults
+    # differ between dialects (SQLite uses 0/1 integers, Postgres requires the
+    # literal FALSE), so each migration carries both.
+    additive_migrations: list[tuple[str, str, str, str]] = [
+        (
+            "users",
+            "awaiting_clarification_context",
+            "VARCHAR(300)",
+            "VARCHAR(300)",
+        ),
+        (
+            "users",
+            "awaiting_category_search",
+            "VARCHAR(50)",
+            "VARCHAR(50)",
+        ),
+        (
+            "users",
+            "chat_admin",
+            "BOOLEAN NOT NULL DEFAULT 0",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        (
+            "users",
+            "admin_mode_active",
+            "BOOLEAN NOT NULL DEFAULT 0",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        (
+            "users",
+            "tokens_in_admin",
+            "INTEGER NOT NULL DEFAULT 0",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "users",
+            "tokens_out_admin",
+            "INTEGER NOT NULL DEFAULT 0",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "users",
+            "calls_admin",
+            "INTEGER NOT NULL DEFAULT 0",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
     ]
 
     async with engine.begin() as conn:
-        for table, column, type_sql in additive_migrations:
+        for table, column, sqlite_type, postgres_type in additive_migrations:
             if _is_sqlite:
                 result = await conn.execute(text(f"PRAGMA table_info({table})"))
                 existing = {row[1] for row in result.fetchall()}
                 if column not in existing:
                     await conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {column} {type_sql}")
+                        text(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {sqlite_type}"
+                        )
                     )
             else:
                 # Postgres supports IF NOT EXISTS on ADD COLUMN since 9.6
                 await conn.execute(
                     text(
-                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {type_sql}"
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                        f"{column} {postgres_type}"
                     )
                 )
 
