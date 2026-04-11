@@ -122,13 +122,22 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 24: WhatsApp Location Sharing Support
 
-- **Status:** PENDING
+- **Status:** DONE (v0.13.0, 2026-04-11)
 - **Added:** 2026-04-10
+- **Completed:** 2026-04-11
 - **Priority:** P2
-- **Problem:** `webhook.py:99` has a TODO — users who share their GPS location pin during onboarding don't advance. Only text-based city names work. Many users naturally share their WhatsApp location instead of typing a city name.
-- **Suggested solution:** Parse WhatsApp location message payload (latitude, longitude), reverse-geocode to city/zone, and advance onboarding. Reuse existing `geocode.py` service.
-- **Affected files:** `src/farmafacil/bot/webhook.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/services/geocode.py`
+- **Problem:** `webhook.py:99` had a TODO — users who shared their GPS location pin during onboarding didn't advance. Only text-based city names worked. Many users naturally share their WhatsApp location instead of typing a city name.
+- **Solution implemented:**
+  - New `reverse_geocode(lat, lng)` service in `services/geocode.py` — calls Nominatim's `/reverse` endpoint at zoom=14 (neighbourhood level), guards against non-Venezuelan coordinates via `country_code != "ve"`, falls back through `suburb → neighbourhood → village → town → city → county → state` for a human-readable zone name, and reuses `_extract_city_code()` for the Farmatodo city code. Returns the same dict shape as `geocode_zone()` so both code paths share `update_user_location()`.
+  - New `handle_location_message(sender, latitude, longitude, wa_message_id)` in `bot/handler.py` — calls `get_or_create_user` + `validate_user_profile`, snapshots the prior `onboarding_step` (before `update_user_location` clobbers it to `awaiting_preference`), reverse-geocodes, updates the user, then routes on state: no name → set `awaiting_name` and re-ask; still onboarding (prior step != None) → send `MSG_ASK_PREFERENCE`; already onboarded (prior step was None) → clear step + send "zona actualizada" acknowledgement. `prior_step` is the correct onboarding signal because `display_preference` has a non-nullable default of `"grid"`, so it cannot distinguish "explicitly picked" from "never asked".
+  - `webhook.py` location-message branch: replaced TODO with float coercion (`try: lat = float(lat_raw); lng = float(lng_raw)` guarded by `TypeError, ValueError`). Malformed coords send `"No pude leer las coordenadas que compartiste"` and `continue`. Successful parse dispatches to `handle_location_message(sender, lat, lng, wa_message_id=wa_id)`.
+- **Files modified:** `src/farmafacil/services/geocode.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/bot/webhook.py`
+- **Files added:** `tests/test_location_sharing.py` (11 tests):
+  - `TestReverseGeocodeUnit` (5): happy path → CCS + "La Boyera"; non-VE rejection (Bogotá); `httpx.RequestError` → `None`; missing `address` key → `None`; suburb/city missing → state fallback (Zulia → MCBO).
+  - `TestHandleLocationMessage` (4): `awaiting_location` → `awaiting_preference` with preference prompt; no name → `awaiting_name` with "Cómo te llamas"; fully onboarded → zone updated + confirmation preserves `display_preference`; reverse_geocode `None` → error message sent + state untouched.
+  - `TestWebhookLocationPayload` (2): POST `/webhook` with `type=location` dispatches to `handle_location_message` with (phone, lat, lng, wa_message_id=...); malformed `latitude=None` / `longitude=None` → error sent, handler NOT called.
 - **Effort:** Medium (2-3h)
+- **Notes:** Found + fixed a latent handler bug during test authoring: the original version checked `if user.display_preference is None` to decide between "continue onboarding" vs "acknowledge zone update", but the User ORM column is non-nullable with default `"grid"`, so every fresh user already looked "already picked a preference". Switched to checking the *prior* `onboarding_step` snapshot taken before `update_user_location`. Without this, a real user sharing their location during onboarding would have had their onboarding step cleared to None with no preference prompt sent.
 
 ### Item 25: Improve Bare Exception Handlers
 

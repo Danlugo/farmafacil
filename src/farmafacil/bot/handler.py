@@ -12,7 +12,7 @@ from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_r
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import classify_with_ai, generate_response, refine_clarified_query
 from farmafacil.services.user_memory import auto_update_memory, get_memory
-from farmafacil.services.geocode import geocode_zone
+from farmafacil.services.geocode import geocode_zone, reverse_geocode
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
 from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
@@ -78,6 +78,15 @@ MSG_READY = (
 MSG_LOCATION_NOT_FOUND = (
     "No logre ubicar esa zona en Venezuela.\n"
     "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
+    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
+)
+
+# Shown when a user shares a GPS location pin that cannot be reverse-geocoded
+# (unreachable Nominatim, coordinates outside Venezuela, malformed response).
+# Added in v0.13.0 (Item 24) — users can fall back to typing a city name.
+MSG_LOCATION_PIN_NOT_FOUND = (
+    "No pude ubicar las coordenadas que compartiste.\n"
+    "Por favor, envia el *nombre de tu zona o barrio* por texto.\n\n"
     "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
 )
 
@@ -154,6 +163,98 @@ async def _update_memory_safe(
         # error types are already logged one layer down in
         # ``user_memory.auto_update_memory`` itself.
         logger.error("Memory update failed (non-blocking)", exc_info=True)
+
+
+async def handle_location_message(
+    sender: str,
+    latitude: float,
+    longitude: float,
+    wa_message_id: str = "",
+) -> None:
+    """Handle an inbound WhatsApp location pin share.
+
+    Users can share their GPS location instead of typing a zone name.
+    Added in v0.13.0 (Item 24). Behaviour:
+
+    - If the user is onboarding (awaiting_name / awaiting_location / welcome
+      / no profile yet), reverse-geocode the coordinates and advance
+      onboarding to the preference step. Name may still be missing — in
+      that case we update location first and then re-ask for the name.
+    - If the user is already onboarded, treat this as a "cambiar zona"
+      — persist the new location and acknowledge the change without
+      resetting any other profile fields.
+    - If reverse-geocoding fails or the coordinates are outside
+      Venezuela, send ``MSG_LOCATION_PIN_NOT_FOUND`` and leave the user's
+      current state untouched so they can recover by typing a city.
+
+    Args:
+        sender: The WhatsApp phone number of the sender.
+        latitude: Latitude from the WhatsApp location payload.
+        longitude: Longitude from the WhatsApp location payload.
+        wa_message_id: The WhatsApp message ID (for read receipts).
+    """
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+
+    # Blue checks + typing bubble (fire-and-forget)
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    # Snapshot the prior onboarding step BEFORE we update the location —
+    # ``update_user_location`` unconditionally sets step to
+    # ``awaiting_preference``, so we use the pre-update value to decide
+    # whether this user is still onboarding or already fully onboarded.
+    # ``display_preference`` has a non-nullable default of ``"grid"`` so
+    # it cannot be used as an "already onboarded" signal.
+    prior_step = user.onboarding_step
+
+    location = await reverse_geocode(latitude, longitude)
+    if not location:
+        await send_text_message(sender, MSG_LOCATION_PIN_NOT_FOUND)
+        return
+
+    user = await update_user_location(
+        sender,
+        location["lat"],
+        location["lng"],
+        location["zone_name"],
+        location["city"],
+    )
+
+    logger.info(
+        "Location pin accepted from %s: %s (%s) — prior step=%s",
+        sender, user.zone_name, user.city_code, prior_step,
+    )
+
+    # If the user hasn't told us their name yet, location came before
+    # name — save location, then loop back to asking for the name so
+    # onboarding doesn't skip that step.
+    if not user.name:
+        await set_onboarding_step(sender, "awaiting_name")
+        await send_text_message(
+            sender,
+            f"\u2705 *{user.zone_name}* guardado!\n\n*Como te llamas?*",
+        )
+        return
+
+    # Still onboarding? (prior step was welcome / awaiting_name /
+    # awaiting_location). Continue onboarding by asking for a display
+    # preference — ``update_user_location`` already advanced the step.
+    if prior_step is not None:
+        await send_text_message(
+            sender, MSG_ASK_PREFERENCE.format(zone=user.zone_name),
+        )
+        return
+
+    # Already fully onboarded (prior step was None) — this is a
+    # "cambiar zona" — acknowledge the updated zone and clear the step
+    # that ``update_user_location`` set.
+    await set_onboarding_step(sender, None)
+    await send_text_message(
+        sender,
+        f"\u2705 Zona actualizada a *{user.zone_name}*. "
+        "Ahora buscare farmacias cerca de ti.",
+    )
 
 
 async def handle_incoming_message(

@@ -62,15 +62,23 @@ Name validation (`_is_valid_name`):
 > Mucho gusto Maria! En que zona o barrio estas?
 > Ejemplo: La Boyera, Chacao, Maracaibo
 
-The bot calls `geocode_zone()` via OpenStreetMap Nominatim. On success, the city code is derived and stored.
+The bot accepts location in **two forms**:
+
+1. **Typed zone name** — calls `geocode_zone()` against OpenStreetMap Nominatim (`/search`). On success, the city code is derived and stored.
+2. **WhatsApp location pin** (Item 24, v0.13.0) — the user taps the paperclip → *Location* → *Send your current location*. The webhook dispatches the `location` message type to `handle_location_message()`, which calls `reverse_geocode()` against Nominatim's `/reverse` endpoint at zoom=14 (neighbourhood level). Falls back through `suburb → neighbourhood → village → town → city → county → state` for the zone name, and validates `country_code == "ve"` to reject coordinates outside Venezuela.
 
 | User sends | Bot behavior |
 |-----------|-------------|
-| "La Boyera" | Geocodes → saves lat/lng/zone_name/city_code, advances |
-| "Chacao" | Geocodes → saves, advances |
-| "xyz123" | Geocoding fails → re-asks with examples |
+| "La Boyera" | Forward geocode → saves lat/lng/zone_name/city_code, advances |
+| "Chacao" | Forward geocode → saves, advances |
+| "xyz123" | Forward geocode fails → re-asks with examples |
+| 📍 location pin (Venezuela) | Reverse geocode → saves lat/lng/zone_name/city_code, advances |
+| 📍 location pin (outside VE) | Reverse geocode rejects → "no pude ubicar tu zona" + re-asks |
+| 📍 malformed coordinates | Webhook sends "no pude leer las coordenadas" + re-asks |
 
 On success, step advances to `awaiting_preference`.
+
+**Location pin also works post-onboarding.** A fully-onboarded user who shares their location pin triggers a "cambiar zona" — the new coordinates replace the old ones and the bot replies "✅ Zona actualizada a *X*" without touching `display_preference`. `handle_location_message` snapshots the prior `onboarding_step` before calling `update_user_location` (which unconditionally sets it to `awaiting_preference`) to decide between "still onboarding → ask for preference" and "already onboarded → acknowledge zone update".
 
 ---
 

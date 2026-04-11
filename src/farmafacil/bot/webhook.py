@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, Query, Request, Response
 
-from farmafacil.bot.handler import handle_incoming_message
+from farmafacil.bot.handler import handle_incoming_message, handle_location_message
 from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
 from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
@@ -85,18 +85,40 @@ async def receive_webhook(request: Request) -> dict:
 
                 elif msg_type == "location":
                     loc = message.get("location", {})
-                    lat = loc.get("latitude", "")
-                    lng = loc.get("longitude", "")
-                    logger.info("Received location from %s: %s, %s", sender, lat, lng)
+                    lat_raw = loc.get("latitude")
+                    lng_raw = loc.get("longitude")
+                    logger.info(
+                        "Received location from %s: %s, %s",
+                        sender, lat_raw, lng_raw,
+                    )
 
                     await log_inbound(
                         phone_number=sender,
-                        message_text=f"location:{lat},{lng}",
+                        message_text=f"location:{lat_raw},{lng_raw}",
                         message_type="location",
                         wa_message_id=wa_id,
                     )
 
-                    # TODO: handle location shares for onboarding
+                    # Coerce to float — WhatsApp sends numbers, but guard
+                    # against strings / missing values just in case.
+                    try:
+                        lat = float(lat_raw)
+                        lng = float(lng_raw)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Malformed location payload from %s: %r, %r",
+                            sender, lat_raw, lng_raw,
+                        )
+                        await send_text_message(
+                            sender,
+                            "No pude leer las coordenadas que compartiste. "
+                            "Por favor envia tu zona por texto.",
+                        )
+                        continue
+
+                    await handle_location_message(
+                        sender, lat, lng, wa_message_id=wa_id,
+                    )
 
                 elif msg_type == "image":
                     logger.info("Received image from %s", sender)
