@@ -171,13 +171,29 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 26: Handler.py Test Coverage
 
-- **Status:** PENDING
+- **Status:** DONE (v0.13.1, 2026-04-11)
 - **Added:** 2026-04-10
+- **Completed:** 2026-04-11
 - **Priority:** P2
-- **Problem:** Main bot handler (`handler.py`, 710 lines, ~15% of codebase) has zero dedicated tests. It's the most critical untested module — all message routing, onboarding, search, feedback flows go through it.
-- **Suggested solution:** Create `tests/test_handler.py` with mocked dependencies (WhatsApp API, scrapers, AI responder, DB). Test: onboarding flow, drug search routing, feedback flow, error handling, debug footer.
-- **Affected files:** `tests/test_handler.py` (new)
+- **Problem:** Main bot handler (`handler.py`, ~800 lines, ~15% of codebase) had no dedicated test file. Most critical untested module — onboarding, search routing, feedback flow, debug commands all go through it.
+- **Solution implemented:**
+  - Started with a full audit of existing handler coverage to avoid duplication. Inventoried 8 files that import `bot.handler` (test_location_sharing, test_feedback_suppression, test_clarification, test_nearest_store, test_symptom_typing, test_user_feedback, test_user_validation, test_ai_role_scope) and catalogued which handler branches each already exercises.
+  - Created `tests/test_handler.py` (21 tests) focused on the gaps:
+    - **`TestEmptyMessage`** (1): whitespace-only message short-circuits before DB / send.
+    - **`TestOnboardingWelcome`** (1): `welcome` step → `awaiting_name` + MSG_WELCOME.
+    - **`TestOnboardingAwaitingName`** (4): greeting re-asks; valid name persists + asks location; invalid name (`si`) rejected by `_is_valid_name`; name + location combined in one message skips to `awaiting_preference`.
+    - **`TestOnboardingAwaitingLocation`** (2): geocode success advances to `awaiting_preference`; geocode failure re-asks.
+    - **`TestOnboardingAwaitingPreference`** (2): `"1"` → `detail` + step cleared; garbage input re-asks.
+    - **`TestAwaitingFeedbackDetail`** (1): user in `awaiting_feedback_detail` → `record_feedback_detail` called with last search log id + step cleared.
+    - **`TestAwaitingFeedbackFallthrough`** (1): non-yes/no message in `awaiting_feedback` clears the stuck state and processes through normal intent routing.
+    - **`TestStatsCommand`** (2): `/stats` blocked when chat_debug off; rendered with per-user + global haiku/sonnet breakdown when on.
+    - **`TestHybridKeywordRouting`** (3): `location_change` → `awaiting_location` without classify_intent call; `name_change` → `awaiting_name`; `farewell` sends response verbatim.
+    - **`TestHybridIntentRouting`** (4): greeting intent sends MSG_RETURNING; help intent sends HELP_MESSAGE; drug_search without location → prompt + `awaiting_location`; unknown action falls back to `generate_response`.
+  - Shared fixture `_cleanup_handler_test_users` wipes a dedicated block of test phones (`5491999000001`-`5491999000021`) before and after each test. Shared helper `_seed_user` writes name/step/location/last_search_log_id in a single session re-query (avoids the SQLAlchemy 2 detached-object bug that bit Item 24).
+  - All handler collaborators are patched via `patch.object(handler, "...")`: `send_text_message`, `classify_with_ai`, `classify_intent`, `geocode_zone`, `get_setting`, `resolve_chat_debug`, `get_user_stats`, `_get_keyword_cache`, `record_feedback_detail`, `parse_feedback`, `generate_response`, `increment_token_usage`, `_update_memory_safe`. Zero real LLM / HTTP / WhatsApp traffic.
+- **Files added:** `tests/test_handler.py` (new, 21 tests)
 - **Effort:** High (4-6h)
+- **Notes:** Intentionally did NOT duplicate coverage already present in the 8 pre-existing files. Drug-search happy path, feedback suppression, clarification flow, nearest-store routing, `/bug` and `/comentario`, location pin onboarding, and `validate_user_profile` all stay in their existing homes. `test_handler.py` is strictly the "paths no one else tests" file.
 
 ### Item 17: 4th Pharmacy Scraper
 

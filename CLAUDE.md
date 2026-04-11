@@ -61,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (539 tests) |
+| `tests/` | pytest test suite (560 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
