@@ -86,6 +86,66 @@ async def send_text_message(to: str, text: str) -> dict | None:
     return await _send_message(to, payload, text)
 
 
+async def send_interactive_list(
+    to: str,
+    body: str,
+    button: str,
+    rows: list[dict],
+    header: str | None = None,
+    footer: str | None = None,
+    section_title: str = "Opciones",
+) -> dict | None:
+    """Send a WhatsApp interactive *list* message.
+
+    Used by the category quick-reply menu (Item 29, v0.13.2). Each row is a
+    dict with keys ``id`` (max 200 chars) and ``title`` (max 24 chars); an
+    optional ``description`` field (max 72 chars) is forwarded if present.
+    WhatsApp caps rows at 10 per section — the caller is responsible for
+    staying under the limit.
+
+    Args:
+        to: Recipient WhatsApp phone number.
+        body: Body text shown above the "View options" button (max ~1024 chars).
+        button: Label on the button that opens the list (max 20 chars).
+        rows: List of row dicts with ``id`` + ``title`` (and optional
+            ``description``).
+        header: Optional header text above the body.
+        footer: Optional footer text below the button.
+        section_title: Title for the single section in the list (max 24 chars).
+
+    Returns:
+        API response dict, or ``None`` on failure.
+    """
+    interactive: dict = {
+        "type": "list",
+        "body": {"text": body},
+        "action": {
+            "button": button,
+            "sections": [
+                {
+                    "title": section_title,
+                    "rows": rows,
+                }
+            ],
+        },
+    }
+    if header:
+        interactive["header"] = {"type": "text", "text": header}
+    if footer:
+        interactive["footer"] = {"text": footer}
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": interactive,
+    }
+    # Log the body text so conversation_logs still have something readable
+    # even though the real content is the rendered WhatsApp list.
+    log_text = f"[interactive:list] {body}"
+    return await _send_message(to, payload, log_text)
+
+
 async def send_image_message(
     to: str, image_url: str, caption: str | None = None
 ) -> dict | None:

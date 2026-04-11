@@ -149,7 +149,7 @@ LLM can also extract profile data mid-conversation:
 
 | Intent action | Bot behavior |
 |--------------|-------------|
-| `greeting` | Sends welcome-back message with current zone and preference |
+| `greeting` | If `app_settings.category_menu_enabled == "true"` (default), sends a WhatsApp interactive list with 5 category quick-replies (see [Category Menu Flow](#category-menu-flow)); otherwise sends the legacy welcome-back text with zone + preference. |
 | `help` | Sends full help menu with command list |
 | `drug_search` | Runs drug search, sends results text + image |
 | `clarify_needed` | Sends a clarifying question and stashes the original query (see [Clarification Flow](#clarification-flow-for-vague-categories)) |
@@ -226,6 +226,51 @@ On the **next** incoming message from that user, the handler detects the stashed
 - ❌ Never use `clarify_needed` in mid-onboarding (the check is gated on `step is None`)
 
 If the LLM returns `ACTION: clarify_needed` without a `CLARIFY_QUESTION`, the parser defensively degrades to `drug_search` so the user is never left hanging.
+
+---
+
+## Category Menu Flow
+
+When a fully-onboarded user sends a bare greeting in hybrid mode (intent = `greeting`, onboarding_step = None), the bot shows a WhatsApp interactive list with 5 category quick-replies instead of the legacy welcome-back text. Added in v0.13.2 (Item 29).
+
+### Categories
+
+| Reply ID | Display title |
+|---|---|
+| `cat_medicamentos` | Medicamentos |
+| `cat_cuidado_personal` | Cuidado Personal |
+| `cat_belleza` | Belleza |
+| `cat_alimentos` | Alimentos |
+| `cat_hogar` | Articulos Hogar |
+
+Defined in `src/farmafacil/bot/handler.py::CATEGORIES`. Adding or removing a row is a single-line edit. WhatsApp caps interactive lists at 10 rows per section — stay under the limit.
+
+### Flow
+
+1. User sends "hola" (or similar bare greeting). `classify_intent` returns `action=greeting`.
+2. Handler reads `app_settings.category_menu_enabled`. If the value is the literal string `"true"`, it calls `_send_category_list(sender, display_name)` which dispatches a WhatsApp `type=interactive` list payload. Any other value falls back to the legacy `MSG_RETURNING` text.
+3. User taps a row in the WhatsApp list UI. The webhook receives `msg_type=interactive` with `interactive.list_reply.id` and `.title`. `webhook.py` routes to `handle_list_reply(sender, reply_id)`.
+4. `handle_list_reply` validates the reply id against `_CATEGORY_BY_ID`, stashes the category in `users.awaiting_category_search` (VARCHAR 50), and sends the canned prompt `"🛍 {category} - ¿Qué producto buscas? ..."`. Unknown reply ids are logged and dropped silently.
+5. On the **next** free-text message from that user, the `awaiting_category_search` branch at the top of `handle_incoming_message` fires (runs AFTER `/bug` + clarification escape hatches, BEFORE onboarding so the guard is `step is None`):
+   - Clears the stash atomically BEFORE dispatch (fail-safe pattern from Item 31)
+   - Calls `_handle_drug_search(sender, user, text, ...)` with the raw user text (the category is **not** merged into the query — it's UX scaffolding, not a search filter)
+   - Updates user memory with `[{category}] {text}` for future context
+
+### Kill switch
+
+New `app_setting` `category_menu_enabled` (default `"true"`). Flip to `"false"` via the admin UI or a direct DB update to fall back to the legacy `MSG_RETURNING` text without redeploying. A misconfigured value (empty string, garbage) also falls back to the legacy path — never catastrophic.
+
+### Escape hatches
+
+| User sends | Behavior |
+|---|---|
+| `cancelar`, `olvidalo`, `nada`, `no`, ... | Clears `awaiting_category_search` and sends a cancellation message — no search |
+| `/bug ...` or `/comentario ...` | Feedback command runs normally; the stash is intentionally preserved so the user can resume after reporting |
+| Another list tap mid-flow | The second pick overwrites the first — last pick wins |
+
+### What the category does NOT do
+
+Category selection is **not** a scraper-side filter in v0.13.2. The drug search runs against all pharmacies unchanged. Adding actual category filtering (Farmatodo Algolia `facetFilters`, VTEX `categoryId`) is deferred to a future item — see IMPROVEMENT-PLAN.md.
 
 ---
 

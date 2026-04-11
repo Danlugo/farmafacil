@@ -358,20 +358,38 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 29: Category Quick-Reply Menu on Greeting
 
-- **Status:** PENDING
+- **Status:** DONE (v0.13.2, 2026-04-11)
 - **Added:** 2026-04-09
 - **Priority:** P2
-- **Problem:** New or returning users who say "hola" don't know what the bot supports beyond medicines. Freeform classification sometimes misroutes requests for non-medicine categories. A structured category menu would (a) set expectations, (b) improve classification accuracy by letting users pick a category explicitly, and (c) reduce LLM round trips on common flows.
 - **Origin:** Suggested by Jose Lugo (test user).
-- **Planned solution:** After greeting ("Hola {nombre}, ¿cómo te puedo ayudar?"), send a WhatsApp interactive list or quick-reply buttons with a **small set of top categories** (WhatsApp interactive lists cap at 10 rows, and 4-6 is more usable). Each selection either pre-filters subsequent searches to that category or seeds the AI role with context.
-- **Category set — NOT finalized:** Jose's original suggestion (Medicamentos / Cuidado Personal / Higiene / Belleza / Alimentos / Artículos Hogar / Equipos Ortopédicos) is one hypothesis. **Do NOT derive categories from our `search_logs` — the test dataset is too small to be representative.** Better sources:
-  1. **Scraper top-level category taxonomies** (Farmatodo / SAAS / Locatel). These are the primary source — the pharmacies have already segmented their full catalog based on millions of real customer sessions. Pull the top-level category tree from each scraper and take the intersection (or union) of the most populated categories.
-  2. **Industry benchmarks** — published pharmacy retail segmentation (IQVIA, Euromonitor, or local VE pharmacy associations if available).
-  3. **Competitor app menus** — what categories do FarmaTodo's own app, Locatel's app, and regional pharmacy apps surface at the top level? This is how end-users already think about pharmacy shopping.
-  4. **Generic pharmacy retail knowledge** — standard top-level buckets are: OTC medicine, prescription/Rx, personal care, baby, beauty, vitamins/supplements, first aid, home health / ortopedia. Use this as the baseline hypothesis.
-  5. Pick 4-6 categories that (a) map cleanly to scraper category filters we can actually query and (b) match how users already think about pharmacy shopping. Revisit and adjust once the user base grows enough for real usage data to be significant.
-- **Open questions:** (1) Which scraper APIs expose category facets we can filter on? (Farmatodo Algolia has `facetFilters` — confirm category field; VTEX has `categoryId` paths.) (2) Per-session vs persistent preference? (3) Show on every greeting or only for new users? (4) Fallback if user types freeform instead of selecting?
-- **Files likely to modify:** `src/farmafacil/bot/handler.py` (greeting flow), `src/farmafacil/bot/whatsapp.py` (interactive list sender), `src/farmafacil/services/intent.py` (category routing), `src/farmafacil/scrapers/*.py` (category filter support)
+- **Product decisions (2026-04-11):**
+  - **Category set:** 5 categories — `Medicamentos / Cuidado Personal / Belleza / Alimentos / Articulos Hogar`. Dropped `Higiene` (overlap with Cuidado Personal in practice) and `Equipos Ortopédicos` (too niche — effectively zero SKUs indexed). **No scraper-side category filtering** — category is UX scaffolding, not a search filter. The follow-up product query is dispatched through the normal drug-search pipeline exactly as if the user had typed it directly.
+  - **Trigger audience:** Fully-onboarded users whose greeting intent fires in hybrid mode. Users still in onboarding, or whose first message is not a bare greeting, continue on their existing path unchanged.
+  - **Freeform fallback:** After a category pick the bot stashes the category on the user, sends `"🛍 {category} - ¿Qué producto buscas?"`, and waits for the user's next text message — which is then dispatched as a normal drug search (no scraper-side category filter, no merging into the query). Cancel words (`cancelar`, `olvidalo`, `nada`...) clear the stash.
+  - **Kill switch:** New `app_setting` `category_menu_enabled` (default `"true"`). Flip to `"false"` via the admin UI or a direct DB update to fall back to the legacy `MSG_RETURNING` text without redeploying.
+- **Solution implemented:**
+  - New `User.awaiting_category_search` VARCHAR(50) column + idempotent `init_db()` migration (SQLite PRAGMA + Postgres `ADD COLUMN IF NOT EXISTS`).
+  - New `set_awaiting_category_search(phone, category)` atomic UPDATE helper in `services/users.py`.
+  - New `category_menu_enabled` entry in `services/settings.py` DEFAULTS, auto-seeded on startup.
+  - New `send_interactive_list(to, body, button, rows, header=, footer=, section_title=)` in `bot/whatsapp.py` that posts a WhatsApp `type=interactive` list message. Logs an `[interactive:list] {body}` line to `conversation_logs` so the history stays readable.
+  - New `CATEGORIES` constant in `bot/handler.py` (5 tuples) + `_CATEGORY_BY_ID` reverse lookup. New `_send_category_list(sender, display_name)` thin wrapper around `send_interactive_list` driven off that constant — adding or removing a category is a one-line edit.
+  - New public `handle_list_reply(sender, reply_id, wa_message_id)` — validates the reply id against `_CATEGORY_BY_ID`, stashes the category, sends the canned prompt. Unknown ids are logged and silently dropped so a stale or malformed payload never crashes the webhook.
+  - New `awaiting_category_search` freeform branch at the top of `handle_incoming_message` — runs AFTER the `/bug` + clarification escape hatches (so those still work mid-category-flow), and BEFORE onboarding (so the guard is `step is None`). Clears the stash BEFORE dispatching the drug search so a downstream failure cannot trap the user (fail-safe pattern from Item 31).
+  - Hybrid-mode greeting branch now reads `await get_setting("category_menu_enabled")` and, if `"true"`, calls `_send_category_list` instead of sending `MSG_RETURNING`. Any value other than the literal `"true"` falls back to the legacy text — a misconfigured setting is never catastrophic.
+  - `bot/webhook.py` now handles `msg_type == "interactive"` — parses `interactive.list_reply.id`/`title`, logs a readable `[interactive:list_reply] {id} ({title})` line, and routes to `handle_list_reply`. `button_reply` is accepted defensively for future use.
+- **Files created:**
+  - `tests/test_category_menu.py` — 12 tests: `TestCategoryListPayload` (2 — constant shape + payload shape), `TestGreetingRoutesCategoryList` (3 — setting on/off/onboarding-user), `TestHandleListReply` (3 — valid pick, unknown id, replace existing), `TestAwaitingCategorySearchFreeform` (3 — dispatch + state clear BEFORE dispatch, cancel word, `/bug` escape hatch), `TestKillSwitchIntegration` (1 — real DB setting flip disables menu).
+- **Files modified:**
+  - `src/farmafacil/models/database.py` — `User.awaiting_category_search` column
+  - `src/farmafacil/db/session.py` — additive migration entry
+  - `src/farmafacil/services/users.py` — `set_awaiting_category_search` helper
+  - `src/farmafacil/services/settings.py` — `category_menu_enabled` default
+  - `src/farmafacil/bot/whatsapp.py` — `send_interactive_list`
+  - `src/farmafacil/bot/handler.py` — `CATEGORIES`, `_send_category_list`, `handle_list_reply`, `awaiting_category_search` branch, greeting kill-switch
+  - `src/farmafacil/bot/webhook.py` — `interactive` message type handler
+  - `tests/test_nearest_store.py` — `MockUser.awaiting_category_search = None`
+  - `docs/bot-flow.md` — new section on category menu
+- **Deferred for a follow-up:** Actual scraper-side category filtering (Farmatodo Algolia `facetFilters`, VTEX `categoryId`) — see deferred Item 35.
 
 ### Item 31: Clarification Step for Vague Category Queries
 

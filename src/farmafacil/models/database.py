@@ -73,6 +73,10 @@ class User(Base):
         String(300), nullable=True,
         comment="Stored original vague query while bot waits for a clarification answer",
     )
+    awaiting_category_search: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+        comment="Category the user picked from the greeting menu while bot waits for a product name (Item 29, v0.13.2)",
+    )
     total_tokens_in: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0",
         comment="Cumulative input tokens across all LLM calls",

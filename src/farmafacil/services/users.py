@@ -304,6 +304,29 @@ async def set_awaiting_clarification(
         await session.commit()
 
 
+async def set_awaiting_category_search(
+    phone_number: str, category: str | None,
+) -> None:
+    """Store (or clear) the category the user picked from the greeting menu.
+
+    Used by the category-menu flow (Item 29, v0.13.2): when a returning user
+    sends a bare greeting, the bot shows a WhatsApp list message with 5
+    categories. When the user taps a category, the chosen category is stashed
+    here while the bot waits for a freeform product name in the next message.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        category: Category label (e.g., "Medicamentos"), or None to clear.
+    """
+    async with async_session() as session:
+        await session.execute(
+            update(User)
+            .where(User.phone_number == phone_number)
+            .values(awaiting_category_search=category)
+        )
+        await session.commit()
+
+
 async def set_onboarding_step(phone_number: str, step: str | None) -> User:
     """Set the user's current onboarding step.
 

@@ -54,6 +54,7 @@ async def init_db() -> None:
     # Format: (table, column, type_sql)
     additive_migrations: list[tuple[str, str, str]] = [
         ("users", "awaiting_clarification_context", "VARCHAR(300)"),
+        ("users", "awaiting_category_search", "VARCHAR(50)"),
     ]
 
     async with engine.begin() as conn:

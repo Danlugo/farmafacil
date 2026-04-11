@@ -4,7 +4,11 @@ import logging
 
 from fastapi import APIRouter, Query, Request, Response
 
-from farmafacil.bot.handler import handle_incoming_message, handle_location_message
+from farmafacil.bot.handler import (
+    handle_incoming_message,
+    handle_list_reply,
+    handle_location_message,
+)
 from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
 from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
@@ -119,6 +123,41 @@ async def receive_webhook(request: Request) -> dict:
                     await handle_location_message(
                         sender, lat, lng, wa_message_id=wa_id,
                     )
+
+                elif msg_type == "interactive":
+                    # Interactive replies — currently only list_reply is
+                    # used (category quick-reply menu, Item 29, v0.13.2).
+                    # button_reply is accepted defensively for future use.
+                    interactive = message.get("interactive", {}) or {}
+                    itype = interactive.get("type", "")
+                    reply = (
+                        interactive.get("list_reply")
+                        or interactive.get("button_reply")
+                        or {}
+                    )
+                    reply_id = reply.get("id", "")
+                    reply_title = reply.get("title", "")
+                    logger.info(
+                        "Received interactive %s from %s: id=%s title=%s",
+                        itype, sender, reply_id, reply_title,
+                    )
+
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=f"[interactive:{itype}] {reply_id} ({reply_title})",
+                        message_type="interactive",
+                        wa_message_id=wa_id,
+                    )
+
+                    if itype == "list_reply" and reply_id:
+                        await handle_list_reply(
+                            sender, reply_id, wa_message_id=wa_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Unhandled interactive type from %s: %s",
+                            sender, itype,
+                        )
 
                 elif msg_type == "image":
                     logger.info("Received image from %s", sender)

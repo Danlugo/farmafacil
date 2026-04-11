@@ -8,7 +8,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 
-from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
+from farmafacil.bot.whatsapp import (
+    send_image_message,
+    send_interactive_list,
+    send_local_image,
+    send_read_receipt,
+    send_text_message,
+)
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import classify_with_ai, generate_response, refine_clarified_query
 from farmafacil.services.user_memory import auto_update_memory, get_memory
@@ -36,6 +42,7 @@ from farmafacil.services.user_feedback import create_feedback, parse_feedback_co
 from farmafacil.services.users import (
     get_or_create_user,
     increment_token_usage,
+    set_awaiting_category_search,
     set_awaiting_clarification,
     set_onboarding_step,
     update_last_search,
@@ -151,6 +158,43 @@ _CLARIFY_CANCEL_WORDS = {
     "dejalo", "déjalo", "no", "ninguno", "ninguna",
 }
 
+# ── Category quick-reply menu (Item 29, v0.13.2) ────────────────────────
+# Shown as a WhatsApp interactive list when an onboarded user sends a bare
+# greeting. Each tuple is (reply_id, display_title). Reply IDs are stable
+# machine identifiers — the title is what the user sees in the list AND
+# what we echo back in the follow-up prompt.
+#
+# Category set chosen after Item 29 product review (2026-04-11):
+# kept Medicamentos + Cuidado Personal (core pharmacy volume), added
+# Belleza (high-margin), Alimentos (Farmatodo sells food), and
+# Artículos Hogar (pharmacy-adjacent). Dropped Higiene (overlap with
+# Cuidado Personal) and Equipos Ortopédicos (too niche). See MEMORY.md.
+CATEGORIES: list[tuple[str, str]] = [
+    ("cat_medicamentos", "Medicamentos"),
+    ("cat_cuidado_personal", "Cuidado Personal"),
+    ("cat_belleza", "Belleza"),
+    ("cat_alimentos", "Alimentos"),
+    ("cat_hogar", "Articulos Hogar"),
+]
+_CATEGORY_BY_ID: dict[str, str] = {cat_id: title for cat_id, title in CATEGORIES}
+
+MSG_CATEGORY_LIST_BODY = (
+    "\U0001f48a Hola *{name}*! \u00bfQu\u00e9 estas buscando hoy?\n\n"
+    "Elegi una categoria o escribi directamente el nombre de un producto."
+)
+MSG_CATEGORY_LIST_BUTTON = "Ver categorias"
+MSG_CATEGORY_LIST_HEADER = "FarmaFacil"
+MSG_CATEGORY_LIST_FOOTER = "Podes cancelar en cualquier momento"
+
+MSG_CATEGORY_PROMPT = (
+    "\U0001f6cd *{category}* - \u00bfQue producto buscas?\n\n"
+    "Escribi el nombre y lo busco para vos.\n"
+    "Ejemplo: _losartan_, _shampoo_, _vitamina C_"
+)
+MSG_CATEGORY_CANCELED = (
+    "Listo, cancele la busqueda por categoria. Dime que necesitas \U0001f64c"
+)
+
 async def _update_memory_safe(
     user_id: int, user_name: str, user_message: str, bot_response: str,
 ) -> None:
@@ -254,6 +298,74 @@ async def handle_location_message(
         sender,
         f"\u2705 Zona actualizada a *{user.zone_name}*. "
         "Ahora buscare farmacias cerca de ti.",
+    )
+
+
+async def _send_category_list(sender: str, display_name: str) -> None:
+    """Send the category quick-reply list message (Item 29, v0.13.2).
+
+    Wraps the WhatsApp interactive-list payload so the greeting branch in
+    ``handle_incoming_message`` stays readable. Uses the ``CATEGORIES``
+    constant as the source of truth — to add/remove a category, edit the
+    tuple list above.
+
+    Args:
+        sender: Recipient WhatsApp phone number.
+        display_name: User's name for the body greeting.
+    """
+    rows = [
+        {"id": cat_id, "title": title}
+        for cat_id, title in CATEGORIES
+    ]
+    await send_interactive_list(
+        to=sender,
+        body=MSG_CATEGORY_LIST_BODY.format(name=display_name),
+        button=MSG_CATEGORY_LIST_BUTTON,
+        rows=rows,
+        header=MSG_CATEGORY_LIST_HEADER,
+        footer=MSG_CATEGORY_LIST_FOOTER,
+        section_title="Categorias",
+    )
+
+
+async def handle_list_reply(
+    sender: str, reply_id: str, wa_message_id: str = "",
+) -> None:
+    """Handle a WhatsApp interactive list reply (Item 29, v0.13.2).
+
+    Fired when a user taps a row in an interactive list message. Currently
+    only category rows from the greeting menu are supported — unknown reply
+    IDs are logged and ignored so a stale or malformed payload never crashes
+    the webhook.
+
+    Args:
+        sender: WhatsApp phone number of the sender.
+        reply_id: The ``id`` field from the list reply payload.
+        wa_message_id: The WhatsApp message ID (for read receipts).
+    """
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    category = _CATEGORY_BY_ID.get(reply_id)
+    if category is None:
+        logger.warning(
+            "Unknown list_reply id from %s: %r (ignoring)", sender, reply_id,
+        )
+        return
+
+    # Stash the picked category and prompt the user for a concrete product.
+    # The next free-text message is routed through the normal drug-search
+    # pipeline in handle_incoming_message.
+    await set_awaiting_category_search(sender, category)
+    await send_text_message(
+        sender, MSG_CATEGORY_PROMPT.format(category=category),
+    )
+    logger.info(
+        "Category menu pick from %s: %s (awaiting_category_search set)",
+        sender, category,
     )
 
 
@@ -385,6 +497,45 @@ async def handle_incoming_message(
             user.id, user.name or "amigo",
             f"{pending_context} (clarified: {text})",
             f"User specified preference: {text}",
+        )
+        return
+
+    # ── Category menu follow-up (Item 29, v0.13.2) ──────────────────────
+    # If the user picked a category from the greeting list, their next
+    # free-text message is the product name. Merge state -> dispatch -> clear.
+    # Runs AFTER /bug + clarification so those escape hatches still work,
+    # and BEFORE onboarding so it only fires for fully-onboarded users.
+    if user.awaiting_category_search and step is None:
+        pending_category = user.awaiting_category_search
+        # Escape hatch — user wants to abandon the category search.
+        if text_lower in _CLARIFY_CANCEL_WORDS:
+            await set_awaiting_category_search(sender, None)
+            await send_text_message(sender, MSG_CATEGORY_CANCELED)
+            return
+        # Clear the stash BEFORE dispatching so a downstream failure cannot
+        # leave the user trapped in the category-search state (fail-safe
+        # pattern from Item 31).
+        await set_awaiting_category_search(sender, None)
+        logger.info(
+            "Category freeform from %s: category=%r query=%r",
+            sender, pending_category, text,
+        )
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=user.name or "amigo"),
+            )
+            return
+        await _handle_drug_search(
+            sender, user, text, user.name or "amigo",
+            debug_on=resolve_chat_debug(
+                user.chat_debug, await get_setting("chat_debug"),
+            ),
+        )
+        await _update_memory_safe(
+            user.id, user.name or "amigo",
+            f"[{pending_category}] {text}",
+            f"User searched within category: {pending_category}",
         )
         return
 
@@ -695,11 +846,24 @@ async def handle_incoming_message(
 
     # Route by action
     if intent.action == "greeting":
-        pref_label = "galeria" if user.display_preference == "grid" else "imagen grande"
-        await send_text_message(
-            sender,
-            MSG_RETURNING.format(name=display_name, zone=user.zone_name, pref=pref_label),
-        )
+        # Item 29 (v0.13.2) — show the category quick-reply menu instead
+        # of the legacy MSG_RETURNING text when the kill-switch is on and
+        # the user is fully onboarded. Setting evaluates as "true"/"false"
+        # (string) — anything other than the literal "true" falls back to
+        # the legacy path so a misconfigured setting is never catastrophic.
+        menu_setting = (await get_setting("category_menu_enabled")).strip().lower()
+        if menu_setting == "true":
+            await _send_category_list(sender, display_name)
+        else:
+            pref_label = (
+                "galeria" if user.display_preference == "grid" else "imagen grande"
+            )
+            await send_text_message(
+                sender,
+                MSG_RETURNING.format(
+                    name=display_name, zone=user.zone_name, pref=pref_label,
+                ),
+            )
 
     elif intent.action == "help":
         await send_text_message(sender, HELP_MESSAGE)

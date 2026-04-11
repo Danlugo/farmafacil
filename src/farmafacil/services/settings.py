@@ -18,6 +18,11 @@ DEFAULTS: dict[str, tuple[str, str]] = {
     "store_backfill_interval_hours": ("24", "How often to refresh store locations (hours)"),
     "response_mode": ("hybrid", "Bot response mode: hybrid (keywords+AI) or ai_only (all AI)"),
     "chat_debug": ("disabled", "Chat debug mode: enabled (show debug footer) or disabled"),
+    "category_menu_enabled": (
+        "true",
+        "Show category quick-reply menu on bare greetings for onboarded users "
+        "(Item 29, v0.13.2). Values: 'true' or 'false'.",
+    ),
 }
 
 
