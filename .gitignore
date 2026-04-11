@@ -32,3 +32,6 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Local SQLite dev database
+*.db
