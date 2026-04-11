@@ -170,7 +170,7 @@ When intent is `drug_search`:
 4. Send text message
 5. If results exist, send image based on preference:
    - `detail`: Send individual product images (top 3) with rich captions
-   - `grid`: Generate a product grid image (up to 6 products) via Pillow, send, delete temp file
+   - `grid`: Generate a stacked product image (up to 8 products) via Pillow at 1080×N px, save as JPEG (quality ladder starting at q=92 subsampling=0, falls back to progressively smaller tiers if the file exceeds the 4.5 MB WhatsApp safety budget), send, unlink temp file in a `try/finally` block. Farmatodo product photos (`lh*.googleusercontent.com`) are URL-upgraded to `=s1200` before download so the grid renders from a high-resolution source instead of the 512 px default thumbnail. VTEX URLs (SAAS / Locatel) are left unchanged because they already serve the full original on plain `/arquivos/ids/{id}/...` paths. Mild `UnsharpMask(radius=1, percent=50, threshold=2)` applied after LANCZOS resize to compensate for WhatsApp's JPEG recompression.
 
 Product image captions include:
 - Discount badge (if applicable)

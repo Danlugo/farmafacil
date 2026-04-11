@@ -1456,14 +1456,25 @@ async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
 
 
 async def _send_grid_image(sender: str, response) -> None:
-    """Generate and send a product grid image."""
+    """Generate and send a product grid image.
+
+    The grid JPEG is written to a temp file; we guarantee cleanup via
+    try/finally so an unexpected exception in ``send_local_image``
+    never leaks the file on disk.
+    """
     grid_path = await generate_product_grid(response.results)
-    if grid_path:
-        caption = f"Resultados para *{response.query}*"
-        if response.zone:
-            caption += f" cerca de *{response.zone}*"
+    if not grid_path:
+        return
+    caption = f"Resultados para *{response.query}*"
+    if response.zone:
+        caption += f" cerca de *{response.zone}*"
+    try:
         await send_local_image(sender, grid_path, caption)
-        os.unlink(grid_path)
+    finally:
+        try:
+            os.unlink(grid_path)
+        except OSError as exc:
+            logger.warning("Failed to unlink grid tempfile %s: %s", grid_path, exc)
 
 
 def _build_product_caption(result: DrugResult) -> str:

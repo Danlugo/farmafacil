@@ -164,16 +164,31 @@ async def send_image_message(
     return await _send_message(to, payload, log_text)
 
 
-async def _upload_media(file_path: str, mime_type: str = "image/png") -> str | None:
+_EXT_MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+async def _upload_media(file_path: str, mime_type: str | None = None) -> str | None:
     """Upload a local file to WhatsApp Media API and return the media ID.
 
     Args:
         file_path: Path to the local file.
-        mime_type: MIME type of the file.
+        mime_type: MIME type of the file. If None, inferred from the
+            file extension (``.jpg`` → ``image/jpeg``, etc.). Defaults
+            to ``image/png`` when the extension is unknown so older
+            callers keep working.
 
     Returns:
         Media ID string or None on failure.
     """
+    if mime_type is None:
+        ext = os.path.splitext(file_path)[1].lower()
+        mime_type = _EXT_MIME_MAP.get(ext, "image/png")
+
     headers = {"Authorization": f"Bearer {WHATSAPP_API_TOKEN}"}
 
     try:
