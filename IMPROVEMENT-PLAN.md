@@ -340,6 +340,26 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Open questions:** (1) Which scraper APIs expose category facets we can filter on? (Farmatodo Algolia has `facetFilters` — confirm category field; VTEX has `categoryId` paths.) (2) Per-session vs persistent preference? (3) Show on every greeting or only for new users? (4) Fallback if user types freeform instead of selecting?
 - **Files likely to modify:** `src/farmafacil/bot/handler.py` (greeting flow), `src/farmafacil/bot/whatsapp.py` (interactive list sender), `src/farmafacil/services/intent.py` (category routing), `src/farmafacil/scrapers/*.py` (category filter support)
 
+### Item 31: Clarification Step for Vague Category Queries
+
+- **Status:** DONE (v0.12.3, 2026-04-10)
+- **Added:** 2026-04-10 (from Case #1 bug report: "I asked AI that I needed help with memory medicines. It should ask more questions for correct product display, Maybe if I want to take a drink or pills or have some preference and then search for available products")
+- **Priority:** P1
+- **Problem:** When users asked for a vague product CATEGORY (e.g., "medicinas para la memoria", "algo para dormir", "vitaminas"), the AI classifier jumped straight to picking one product and scraping, leaving the user with results that did not match their form-factor or age preference. There was no mechanism to ask a clarifying question before searching.
+- **Solution:**
+  - New `clarify_needed` action in the AI classification prompt and parser (`ai_responder.py`). Prompt now has an explicit rule with examples ("memoria", "dormir", "vitaminas") plus a counter-example list of things that should NEVER be clarified (specific product names, ingredients).
+  - New `CLARIFY_QUESTION` and `CLARIFY_CONTEXT` output fields; parser defensively downgrades `clarify_needed` to `drug_search` if the question is missing.
+  - New `users.awaiting_clarification_context: VARCHAR(300)` column stashes the original vague query while the bot waits for the answer.
+  - New idempotent additive-migration helper in `db/session.py::init_db()` (PRAGMA check on SQLite, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on Postgres) so existing deployments pick up the new column automatically on container restart — no manual DDL needed.
+  - New `set_awaiting_clarification()` service in `users.py` (atomic UPDATE).
+  - Handler pre-route block: if `awaiting_clarification_context` is set AND `step is None`, the next incoming message is merged with the stored context (`"{original_query} {answer}"`), the context is cleared BEFORE dispatching (fail-safe), and the refined query goes straight to `_handle_drug_search()`.
+  - Escape hatches: the `/bug` and `/comentario` commands still intercept before the clarify block (bug reports always take priority). New `_CLARIFY_CANCEL_WORDS` set (`cancelar`, `cancela`, `olvidalo`, `nada`, `no`, etc.) clears the context and confirms cancellation.
+  - Both `ai_only` and hybrid routing branches wire the `clarify_needed` action to stash context + send the question + update memory.
+  - User preference is persisted to `user_memories` on clarification so the bot does not re-ask next time.
+- **Affected files:** `src/farmafacil/models/database.py` (new column), `src/farmafacil/db/session.py` (migration helper), `src/farmafacil/services/users.py` (set_awaiting_clarification), `src/farmafacil/services/ai_responder.py` (prompt + parser + AiResponse fields), `src/farmafacil/services/intent.py` (Intent fields + classify_intent_ai propagation), `src/farmafacil/bot/handler.py` (pre-route block + clarify_needed branches + cancel set), `tests/test_clarification.py` (21 new tests), `tests/test_nearest_store.py` (MockUser updated), `docs/bot-flow.md` (new Clarification Flow section), `src/farmafacil/__init__.py` + `pyproject.toml` (version bump).
+- **Tests:** 21 new. Parser: clarify_needed valid action, degrades without question, specific drugs skip clarification. Dataclasses: AiResponse + Intent expose fields. Prompt: mentions `clarify_needed`, vague examples, and warning against specific drugs. Service: `set_awaiting_clarification` roundtrip. Handler source: imports, branches in both modes, cancel set present. Integration: vague query → stash + question (scraper not called), answer → merged search + cleared context, `cancelar` → aborted, `/bug` → registers case, specific drug → skips clarification. Full suite: **497 passed** (was 476, +21). Migration idempotency verified against a pre-existing SQLite DB (column added on first run, no error on second run).
+- **Effort:** Small (0.5 day)
+
 ### Item 30: `find_cross_chain_matches` Unindexed Full-Scan
 
 - **Status:** PENDING

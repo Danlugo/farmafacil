@@ -36,6 +36,11 @@ class AiResponse:
     drug_query: str | None = None
     detected_name: str | None = None
     detected_location: str | None = None
+    # Clarification flow: when action == "clarify_needed", the bot asks
+    # clarify_question and stores clarify_context (the original vague query)
+    # in user.awaiting_clarification_context to merge with the next reply.
+    clarify_question: str | None = None
+    clarify_context: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -164,10 +169,12 @@ async def classify_with_ai(message: str, user_id: int, user_name: str) -> AiResp
 INSTRUCCIONES ADICIONALES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
 
 FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
-ACTION: [greeting|drug_search|nearest_store|question|unknown]
+ACTION: [greeting|drug_search|clarify_needed|nearest_store|view_similar|emergency|question|unknown]
 DRUG: [nombre del producto tal como lo escribió el usuario]
 NAME: [nombre de la persona si se presenta]
 LOCATION: [zona/barrio/ciudad si menciona ubicación]
+CLARIFY_QUESTION: [pregunta de clarificación si ACTION=clarify_needed]
+CLARIFY_CONTEXT: [la consulta original vaga del usuario, tal como la escribió]
 RESPONSE: [respuesta conversacional si es una pregunta]
 
 REGLAS:
@@ -176,10 +183,19 @@ REGLAS:
 - Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
 - Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, que tal aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, e incluye una RESPONSE breve que: (1) reconozca el síntoma, (2) confirme que el producto es buena opción para eso, (3) mencione 1-2 alternativas que también podrían buscar (ej: "También podrías probar Acetaminofén o Ibuprofeno"), (4) recuerde consultar al médico. Ejemplo: "Entiendo que tienes dolor de cabeza. Aspirina es buena opción para eso. También podrías buscar Acetaminofén o Ibuprofeno. Recuerda consultar con tu médico si es frecuente."
 - Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez"): clasifica como drug_search, pon el medicamento sugerido en DRUG, e incluye RESPONSE con: (1) reconocimiento del síntoma, (2) por qué sugieres ese medicamento, (3) alternativas que podrían buscar, (4) recordatorio de consultar al médico.
+- ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos distintos Y NO especifica forma farmacéutica/tipo (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé"), NO busques directamente. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), o marca preferida. Ejemplos:
+  * "medicinas para la memoria" → CLARIFY_QUESTION: "¿Prefieres pastillas o bebibles? ¿Es para adulto o niño? Así te busco la mejor opción."
+  * "algo para dormir" → CLARIFY_QUESTION: "¿Buscas algo natural (tipo melatonina o valeriana) o un medicamento recetado? ¿Pastillas o gotas?"
+  * "vitaminas" → CLARIFY_QUESTION: "¿Qué tipo de vitaminas? (multivitamínico, vitamina C, D, B12, etc.) ¿Pastillas, gomitas o líquido?"
+  * "protector solar" (producto específico, NO vago) → drug_search directo, NO clarificar
+  * "omeprazol" (producto específico) → drug_search directo, NO clarificar
+  NO uses clarify_needed si el usuario ya nombró un producto específico o un ingrediente activo. Solo para categorías genéricas ambiguas.
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
 - EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que TOMA otro medicamento o tiene una condición médica (ej: "tomo warfarina", "soy diabético", "estoy embarazada", "tomo anticoagulantes"), SIEMPRE incluye RESPONSE con: (1) advertencia de que podría haber interacciones, (2) recomendación FIRME de consultar con su médico o farmacéutico ANTES de tomar el producto, (3) busca el producto de todas formas pero con la advertencia. Ejemplo: "⚠️ Mencionas que tomas warfarina. Aspirina puede interactuar con anticoagulantes y aumentar riesgo de sangrado. Te recomiendo CONSULTAR CON TU MÉDICO antes de combinarlos. Te busco Aspirina de todas formas para que veas disponibilidad."
+- Si el usuario dice "ver similares", "similares", "ver otros", "mostrar similares", o "ver mas": clasifica como view_similar. El sistema re-ejecutará la última búsqueda mostrando más variantes del producto.
+- ⚠️ EMERGENCIA: Si el usuario describe una emergencia médica (dolor de pecho, no puede respirar, convulsiones, sobredosis, sangrado severo, pensamientos suicidas), clasifica INMEDIATAMENTE como emergency con RESPONSE que incluya números de emergencia. NO busques productos — esto tiene PRIORIDAD MÁXIMA.
 - En general NO hagas preguntas de seguimiento. Da información útil, alternativas, y advertencias directamente. Solo pregunta si hay una preocupación de seguridad real (medicamentos que podrían interactuar).
 - Si no entiendes: ACTION: unknown"""
 
@@ -275,12 +291,35 @@ def _parse_structured_response(reply: str) -> AiResponse:
             key, _, value = line.partition(":")
             key = key.strip().upper()
             value = value.strip()
-            if key in ("ACTION", "DRUG", "NAME", "LOCATION", "RESPONSE"):
+            if key in (
+                "ACTION",
+                "DRUG",
+                "NAME",
+                "LOCATION",
+                "RESPONSE",
+                "CLARIFY_QUESTION",
+                "CLARIFY_CONTEXT",
+            ):
                 fields[key] = value
 
     action = fields.get("ACTION", "unknown").lower()
-    if action not in ("greeting", "drug_search", "nearest_store", "question", "unknown"):
+    valid_actions = (
+        "greeting",
+        "drug_search",
+        "clarify_needed",
+        "nearest_store",
+        "view_similar",
+        "emergency",
+        "question",
+        "unknown",
+    )
+    if action not in valid_actions:
         action = "question" if fields.get("RESPONSE") else "unknown"
+
+    # Defensive: if LLM said clarify_needed but didn't provide a question,
+    # degrade to drug_search so we don't leave the user hanging.
+    if action == "clarify_needed" and not fields.get("CLARIFY_QUESTION"):
+        action = "drug_search"
 
     return AiResponse(
         text=fields.get("RESPONSE", ""),
@@ -289,4 +328,6 @@ def _parse_structured_response(reply: str) -> AiResponse:
         drug_query=fields.get("DRUG"),
         detected_name=fields.get("NAME"),
         detected_location=fields.get("LOCATION"),
+        clarify_question=fields.get("CLARIFY_QUESTION"),
+        clarify_context=fields.get("CLARIFY_CONTEXT"),
     )

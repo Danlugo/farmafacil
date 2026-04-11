@@ -280,6 +280,29 @@ async def increment_token_usage(
         )
 
 
+async def set_awaiting_clarification(
+    phone_number: str, context: str | None,
+) -> None:
+    """Store (or clear) the original vague query awaiting clarification.
+
+    Used by the clarify_needed flow: when the bot asks a clarifying question
+    about a vague category (e.g., "medicinas para la memoria"), it stashes
+    the original query here. The next message from the user is merged with
+    this context to form a refined drug search query.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        context: Original vague query, or None to clear.
+    """
+    async with async_session() as session:
+        await session.execute(
+            update(User)
+            .where(User.phone_number == phone_number)
+            .values(awaiting_clarification_context=context)
+        )
+        await session.commit()
+
+
 async def set_onboarding_step(phone_number: str, step: str | None) -> User:
     """Set the user's current onboarding step.
 

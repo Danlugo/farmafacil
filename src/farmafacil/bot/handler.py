@@ -34,6 +34,7 @@ from farmafacil.services.user_feedback import create_feedback, parse_feedback_co
 from farmafacil.services.users import (
     get_or_create_user,
     increment_token_usage,
+    set_awaiting_clarification,
     set_onboarding_step,
     update_last_search,
     update_user_location,
@@ -121,6 +122,16 @@ MSG_NEED_LOCATION = (
     "*En que zona o barrio estas?*\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
 )
 
+MSG_CLARIFY_CANCELED = (
+    "Listo, cancele la busqueda anterior. Dime que necesitas \U0001f64c"
+)
+
+# Words that cancel a pending clarification and reset the state.
+_CLARIFY_CANCEL_WORDS = {
+    "cancelar", "cancela", "cancel", "olvidalo", "olvídalo", "nada",
+    "dejalo", "déjalo", "no", "ninguno", "ninguna",
+}
+
 async def _update_memory_safe(
     user_id: int, user_name: str, user_message: str, bot_response: str,
 ) -> None:
@@ -196,6 +207,48 @@ async def handle_incoming_message(
         await send_text_message(
             sender,
             MSG_FEEDBACK_REGISTERED.format(label=label, case_id=case_id),
+        )
+        return
+
+    # ── Clarification reply handling ────────────────────────────────────
+    # If the bot previously asked a clarifying question for a vague query
+    # (e.g., "memory medicines" → "pills or drinks?"), the NEXT message
+    # from the user is the answer. We merge the original context with the
+    # answer into a refined query and dispatch it as a direct drug search.
+    # This runs AFTER the /bug escape hatch but BEFORE onboarding / intent
+    # routing so the user is always free to cancel or report a bug first.
+    if user.awaiting_clarification_context and step is None:
+        pending_context = user.awaiting_clarification_context
+        # Escape hatch — user wants to abandon the clarification.
+        if text_lower in _CLARIFY_CANCEL_WORDS:
+            await set_awaiting_clarification(sender, None)
+            await send_text_message(sender, MSG_CLARIFY_CANCELED)
+            return
+        # Clear the pending context BEFORE dispatching so that a failure
+        # downstream cannot leave the user trapped in the clarify state.
+        await set_awaiting_clarification(sender, None)
+        refined_query = f"{pending_context} {text}".strip()
+        logger.info(
+            "Clarification refinement for %s: %r + %r -> %r",
+            sender, pending_context, text, refined_query,
+        )
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=user.name or "amigo")
+            )
+            return
+        await _handle_drug_search(
+            sender, user, refined_query, user.name or "amigo",
+            debug_on=resolve_chat_debug(
+                user.chat_debug, await get_setting("chat_debug")
+            ),
+        )
+        # Remember the chosen preference so we don't ask again next time.
+        await _update_memory_safe(
+            user.id, user.name or "amigo",
+            f"{pending_context} (clarified: {text})",
+            f"User specified preference: {text}",
         )
         return
 
@@ -418,6 +471,20 @@ async def handle_incoming_message(
             )
             return
 
+        # If AI wants to clarify a vague category query, ask the question
+        # and stash the original context so the next reply is merged back in.
+        if ai_result.action == "clarify_needed" and ai_result.clarify_question:
+            context = ai_result.clarify_context or text
+            await set_awaiting_clarification(sender, context)
+            reply = ai_result.clarify_question
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
+            await _update_memory_safe(
+                user.id, display_name, text, ai_result.clarify_question,
+            )
+            return
+
         # For all other actions, generate a full AI response
         if ai_result.text:
             reply = ai_result.text
@@ -516,6 +583,19 @@ async def handle_incoming_message(
 
         query = intent.drug_query or text
         await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)
+
+    elif intent.action == "clarify_needed" and intent.clarify_question:
+        # Vague category — ask a clarifying question and stash the original
+        # query so the next reply is merged back in as a refined search.
+        context = intent.clarify_context or text
+        await set_awaiting_clarification(sender, context)
+        reply = intent.clarify_question
+        if debug_on:
+            reply += await _build_debug(sender, user.id)
+        await send_text_message(sender, reply)
+        await _update_memory_safe(
+            user.id, display_name, text, intent.clarify_question,
+        )
 
     elif intent.action == "nearest_store":
         if not user.latitude:

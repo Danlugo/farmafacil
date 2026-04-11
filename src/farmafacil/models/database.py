@@ -69,6 +69,10 @@ class User(Base):
         Integer, nullable=True,
         comment="ID of the most recent search_logs entry (for feedback)",
     )
+    awaiting_clarification_context: Mapped[str | None] = mapped_column(
+        String(300), nullable=True,
+        comment="Stored original vague query while bot waits for a clarification answer",
+    )
     total_tokens_in: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0",
         comment="Cumulative input tokens across all LLM calls",

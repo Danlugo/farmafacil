@@ -144,6 +144,7 @@ LLM can also extract profile data mid-conversation:
 | `greeting` | Sends welcome-back message with current zone and preference |
 | `help` | Sends full help menu with command list |
 | `drug_search` | Runs drug search, sends results text + image |
+| `clarify_needed` | Sends a clarifying question and stashes the original query (see [Clarification Flow](#clarification-flow-for-vague-categories)) |
 | `question` | Tries store lookup; if not a store, sends LLM-generated answer |
 | `unknown` | Prompts user to send a drug name |
 
@@ -185,6 +186,38 @@ Product image captions include:
 When results DO exist but some scrapers failed, the header shows `⚠️ No pudimos conectar con {names} — resultados parciales.` so users know the view is partial.
 
 `(cache)` and `(catalogo)` suffixes on `searched_pharmacies` are observability labels added by the cache/catalog paths — they are stripped when deciding whether "all queried" scrapers failed, so cache hits never trigger a connection-error message.
+
+---
+
+## Clarification Flow (for vague categories)
+
+When a user asks for a CATEGORY that comes in multiple form factors (e.g., "medicinas para la memoria", "algo para dormir", "vitaminas") instead of naming a specific product, the AI classifier returns `action: clarify_needed` with a `CLARIFY_QUESTION` and `CLARIFY_CONTEXT`. The handler then:
+
+1. Stashes the original vague query in `users.awaiting_clarification_context` (VARCHAR 300)
+2. Sends the clarifying question (e.g., "¿Pastillas o bebibles? ¿Adulto o niño?")
+3. Returns without running a search
+
+On the **next** incoming message from that user, the handler detects the stashed context (before running intent classification) and:
+
+1. Merges the original context with the new reply: `"medicinas para la memoria" + "pastillas adulto"` → `"medicinas para la memoria pastillas adulto"`
+2. Clears `awaiting_clarification_context` atomically
+3. Dispatches directly to `_handle_drug_search()`
+4. Updates user memory with the chosen preference so the question isn't repeated
+
+### Escape hatches
+
+| User sends | Behavior |
+|-----------|----------|
+| `cancelar`, `cancela`, `olvidalo`, `nada`, `no` | Clears the context and sends a cancellation confirmation — no search |
+| `/bug ...` or `/comentario ...` | The feedback command runs normally and the stashed context is intentionally preserved (bug report doesn't cancel the clarification) |
+
+**Rules for when to clarify (see classification prompt):**
+
+- ✅ Use `clarify_needed` for generic categories: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "algo para el cabello"
+- ❌ Never use `clarify_needed` when the user names a specific product or ingredient: "omeprazol", "protector solar", "aspirina"
+- ❌ Never use `clarify_needed` in mid-onboarding (the check is gated on `step is None`)
+
+If the LLM returns `ACTION: clarify_needed` without a `CLARIFY_QUESTION`, the parser defensively degrades to `drug_search` so the user is never left hanging.
 
 ---
 

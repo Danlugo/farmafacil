@@ -52,11 +52,15 @@ async def _get_keyword_cache() -> dict[str, tuple[str, str | None]]:
 class Intent:
     """Classified user intent with extracted profile data."""
 
-    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, nearest_store, question, unknown
+    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, clarify_needed, nearest_store, view_similar, emergency, question, unknown
     drug_query: str | None = None
     response_text: str | None = None
     detected_name: str | None = None
     detected_location: str | None = None
+    # clarify_needed fields — bot asks clarify_question and stores clarify_context
+    # in user.awaiting_clarification_context until the next reply arrives.
+    clarify_question: str | None = None
+    clarify_context: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -106,11 +110,20 @@ async def classify_intent_keywords(text: str) -> Intent | None:
         "cuanto ", "tienen ", "hay ", "puedo ", "puedes ",
     ))
 
-    if len(words) <= 4 and not is_question:
-        return Intent(action="drug_search", drug_query=text.strip())
+    # Detect conversational/statement patterns that are NOT drug names
+    is_conversational = text_lower.startswith((
+        "me ", "no ", "yo ", "mi ", "eso ", "ese ", "esa ", "esto ",
+        "esta ", "el ", "la ", "los ", "las ", "ya ", "pero ",
+        "oye ", "mira ", "dime ", "quiero saber", "necesito saber",
+        "me siento", "estoy ", "tengo ", "necesito ",
+    ))
 
-    # Longer text without question markers — still likely a drug search
-    if not is_question and len(words) <= 8:
+    if is_question or is_conversational:
+        # Ambiguous — needs LLM
+        return None
+
+    # Non-conversational, non-question text up to 8 words → drug search
+    if len(words) <= 8:
         return Intent(action="drug_search", drug_query=text.strip())
 
     # Ambiguous — needs LLM
@@ -141,6 +154,8 @@ async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
         response_text=ai_result.text if ai_result.text else None,
         detected_name=ai_result.detected_name,
         detected_location=ai_result.detected_location,
+        clarify_question=ai_result.clarify_question,
+        clarify_context=ai_result.clarify_context,
         input_tokens=ai_result.input_tokens,
         output_tokens=ai_result.output_tokens,
     )
