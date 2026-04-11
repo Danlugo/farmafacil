@@ -275,6 +275,92 @@ async def _call_llm(
         return ("Lo siento, tuve un error. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
 
 
+# ── Clarified-query refiner ────────────────────────────────────────────
+
+_REFINER_SYSTEM_PROMPT = """Eres un asistente de busqueda de productos de farmacia en Venezuela.
+
+El usuario hizo una pregunta VAGA sobre una categoria de productos y despues respondio una pregunta aclaratoria sobre el formato o preferencia. Tu trabajo es convertir AMBAS entradas en UN solo termino de busqueda corto y concreto que funcione en un catalogo de productos de farmacia (Algolia/VTEX).
+
+REGLAS ESTRICTAS:
+- Responde SOLO con el termino de busqueda. Sin explicacion, sin puntuacion final, sin comillas, sin prefijos.
+- 2 a 5 palabras maximo.
+- En minusculas, sin tildes si es posible, sin signos de puntuacion.
+- Usa nombres de productos o ingredientes activos reales, no frases conversacionales.
+- Si la respuesta del usuario menciona una forma farmaceutica (pastillas, gomitas, jarabe, capsulas, bebible, crema, gel), INCLUYELA.
+- Si menciona edad (niño, adulto, bebe), puedes incluirla como palabra clave.
+- NO incluyas frases como "que recomiendas", "algo para", "me gusta", "para mi".
+
+EJEMPLOS:
+Vaga: "medicinas para la memoria" / Respuesta: "adulto, gomitas" -> ginkgo gomitas adulto
+Vaga: "algo para dormir" / Respuesta: "pastillas" -> melatonina pastillas
+Vaga: "vitaminas" / Respuesta: "para niño, bebible" -> multivitaminico niños jarabe
+Vaga: "algo para el cabello" / Respuesta: "caida" -> biotina cabello
+Vaga: "suplementos" / Respuesta: "para energia, capsulas" -> vitamina b12 capsulas
+Vaga: "algo para la tos" / Respuesta: "jarabe, adulto" -> jarabe tos adulto
+Vaga: "protector solar" / Respuesta: "para cara" -> protector solar facial"""
+
+
+async def refine_clarified_query(
+    original_context: str, user_answer: str,
+) -> tuple[str, int, int]:
+    """Distill a vague query + clarifying answer into a concrete search term.
+
+    Takes the original vague query that triggered the clarification and the
+    user's answer to the clarifying question, and asks the LLM to produce a
+    short (2-5 words) product search keyword suitable for a pharmacy catalog.
+
+    If the LLM call fails OR the API key is missing, falls back to returning
+    the user's answer alone (which is usually closer to a real product name
+    than the vague original context).
+
+    Args:
+        original_context: The original vague query, e.g. "medicinas para la memoria".
+        user_answer: The user's clarifying answer, e.g. "gomitas adulto".
+
+    Returns:
+        Tuple of (refined_query, input_tokens, output_tokens).
+    """
+    if not ANTHROPIC_API_KEY:
+        logger.warning("refine_clarified_query: no API key, falling back to answer")
+        return (user_answer.strip(), 0, 0)
+
+    user_message = (
+        f"Pregunta vaga: {original_context}\n"
+        f"Respuesta del usuario: {user_answer}\n"
+        f"Termino de busqueda:"
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=40,
+            system=_REFINER_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        refined = response.content[0].text.strip()
+        # Strip any stray punctuation/quotes the LLM might still emit.
+        refined = refined.strip(" \t\n\"'`.,;:!?")
+        if not refined:
+            logger.warning(
+                "refine_clarified_query: empty LLM response, falling back. "
+                "context=%r answer=%r", original_context, user_answer,
+            )
+            return (user_answer.strip(), response.usage.input_tokens, response.usage.output_tokens)
+        logger.info(
+            "refine_clarified_query: %r + %r -> %r",
+            original_context, user_answer, refined,
+        )
+        return (
+            refined,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
+    except Exception:
+        logger.error("refine_clarified_query LLM call failed", exc_info=True)
+        return (user_answer.strip(), 0, 0)
+
+
 def _parse_structured_response(reply: str) -> AiResponse:
     """Parse the structured LLM response into an AiResponse.
 

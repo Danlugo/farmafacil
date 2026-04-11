@@ -136,6 +136,137 @@ class TestClarifyPrompt:
         assert "no" in source and ("específico" in source or "directo" in source)
 
 
+# ── Refiner tests (Item 33, v0.12.4) ──────────────────────────────────
+
+
+class TestRefineClarifiedQueryUnit:
+    """Unit tests for refine_clarified_query — no DB, mocked anthropic client."""
+
+    @pytest.mark.asyncio
+    async def test_refiner_returns_llm_text_stripped(self):
+        """Happy path: LLM returns a clean 2-5 word keyword."""
+        from unittest.mock import MagicMock
+
+        from farmafacil.services import ai_responder
+
+        fake_message = MagicMock()
+        fake_message.content = [MagicMock(text="  ginkgo gomitas adulto  \n")]
+        fake_message.usage = MagicMock(input_tokens=85, output_tokens=6)
+
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = fake_message
+
+        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+             patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
+            mock_anthropic.Anthropic.return_value = fake_client
+            result = await ai_responder.refine_clarified_query(
+                "medicinas para la memoria",
+                "gomitas, adulto",
+            )
+
+        refined, tin, tout = result
+        assert refined == "ginkgo gomitas adulto"
+        assert tin == 85
+        assert tout == 6
+
+    @pytest.mark.asyncio
+    async def test_refiner_strips_quotes_and_punctuation(self):
+        """LLMs sometimes wrap the term in quotes or add a period — we strip them."""
+        from unittest.mock import MagicMock
+
+        from farmafacil.services import ai_responder
+
+        fake_message = MagicMock()
+        fake_message.content = [MagicMock(text='"melatonina pastillas."')]
+        fake_message.usage = MagicMock(input_tokens=50, output_tokens=4)
+
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = fake_message
+
+        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+             patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
+            mock_anthropic.Anthropic.return_value = fake_client
+            refined, _, _ = await ai_responder.refine_clarified_query(
+                "algo para dormir", "pastillas",
+            )
+
+        assert refined == "melatonina pastillas"
+
+    @pytest.mark.asyncio
+    async def test_refiner_empty_response_falls_back_to_answer(self):
+        """If the LLM returns empty text, we fall back to the user's answer."""
+        from unittest.mock import MagicMock
+
+        from farmafacil.services import ai_responder
+
+        fake_message = MagicMock()
+        fake_message.content = [MagicMock(text="   ")]
+        fake_message.usage = MagicMock(input_tokens=40, output_tokens=1)
+
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = fake_message
+
+        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+             patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
+            mock_anthropic.Anthropic.return_value = fake_client
+            refined, tin, tout = await ai_responder.refine_clarified_query(
+                "vitaminas", "para niño bebible",
+            )
+
+        assert refined == "para niño bebible"  # fallback
+        # But tokens from the wasted call ARE still counted
+        assert tin == 40
+        assert tout == 1
+
+    @pytest.mark.asyncio
+    async def test_refiner_llm_exception_falls_back_zero_tokens(self):
+        """If the LLM call raises, fall back to user answer with 0 tokens."""
+        from unittest.mock import MagicMock
+
+        from farmafacil.services import ai_responder
+
+        fake_client = MagicMock()
+        fake_client.messages.create.side_effect = RuntimeError("API 500")
+
+        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+             patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
+            mock_anthropic.Anthropic.return_value = fake_client
+            refined, tin, tout = await ai_responder.refine_clarified_query(
+                "medicinas para la memoria", "gomitas adulto",
+            )
+
+        assert refined == "gomitas adulto"
+        assert tin == 0
+        assert tout == 0
+
+    @pytest.mark.asyncio
+    async def test_refiner_no_api_key_falls_back(self):
+        """Without ANTHROPIC_API_KEY the refiner cannot call the LLM and falls
+        back to the user's answer with 0 tokens."""
+        from farmafacil.services import ai_responder
+
+        with patch.object(ai_responder, "ANTHROPIC_API_KEY", ""):
+            refined, tin, tout = await ai_responder.refine_clarified_query(
+                "vitaminas", "gomitas niños",
+            )
+
+        assert refined == "gomitas niños"
+        assert tin == 0
+        assert tout == 0
+
+    def test_refiner_system_prompt_has_rules_and_examples(self):
+        """The refiner system prompt must contain the hard rules and at least
+        one canonical example, otherwise the LLM may still emit long sentences."""
+        from farmafacil.services.ai_responder import _REFINER_SYSTEM_PROMPT
+
+        prompt_lower = _REFINER_SYSTEM_PROMPT.lower()
+        # Hard rules
+        assert "2 a 5 palabras" in prompt_lower or "2-5 palabras" in prompt_lower
+        assert "sin explicacion" in prompt_lower or "sin explicación" in prompt_lower
+        # At least one canonical example the system should cover
+        assert "ginkgo" in prompt_lower or "melatonina" in prompt_lower
+
+
 # ── Service: set_awaiting_clarification ───────────────────────────────
 
 
@@ -302,8 +433,11 @@ async def test_vague_query_asks_clarify_and_stashes_context(clarify_user):
 
 
 @pytest.mark.asyncio
-async def test_clarify_answer_merges_and_dispatches_search(clarify_user):
-    """After clarify question, next reply should merge into a refined search."""
+async def test_clarify_answer_refines_and_dispatches_search(clarify_user):
+    """After clarify question, the next reply goes through refine_clarified_query
+    (LLM distillation) and the REFINED short keyword is dispatched — NOT the
+    raw concatenation of vague context + user answer. Regression guard for
+    Item 33 (v0.12.4)."""
     from farmafacil.bot import handler
     from farmafacil.models.schemas import SearchResponse
 
@@ -311,7 +445,7 @@ async def test_clarify_answer_merges_and_dispatches_search(clarify_user):
     await set_awaiting_clarification(clarify_user, "medicinas para la memoria")
 
     fake_response = SearchResponse(
-        query="medicinas para la memoria pastillas",
+        query="ginkgo gomitas adulto",
         results=[],
         total=0,
         searched_pharmacies=["Farmatodo"],
@@ -329,20 +463,41 @@ async def test_clarify_answer_merges_and_dispatches_search(clarify_user):
         search_calls.append(kwargs.get("query", ""))
         return fake_response
 
+    refiner_calls: list[tuple[str, str]] = []
+
+    async def fake_refine(context, answer):
+        refiner_calls.append((context, answer))
+        return ("ginkgo gomitas adulto", 80, 12)
+
     with patch.object(handler, "send_text_message", new=AsyncMock(side_effect=fake_send_text)), \
          patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \
+         patch.object(handler, "refine_clarified_query", new=AsyncMock(side_effect=fake_refine)), \
+         patch.object(handler, "increment_token_usage", AsyncMock()), \
          patch.object(handler, "get_setting", AsyncMock(return_value="hybrid")), \
          patch.object(handler, "_send_grid_image", AsyncMock()), \
          patch.object(handler, "_send_detail_images", AsyncMock()):
         await handler.handle_incoming_message(
-            clarify_user, "pastillas para adulto", wa_message_id=""
+            clarify_user,
+            "es para mi, adulto, me gusta la idea de gomitas",
+            wa_message_id="",
         )
 
-    # Search should have been called with the MERGED query
+    # Refiner was called with the right inputs
+    assert len(refiner_calls) == 1
+    ctx, ans = refiner_calls[0]
+    assert ctx == "medicinas para la memoria"
+    assert "gomitas" in ans.lower()
+
+    # Search should have been called with the REFINED (short) query, NOT the
+    # raw concatenation. This is the whole point of v0.12.4.
     assert len(search_calls) == 1, f"Expected 1 search, got {len(search_calls)}: {search_calls}"
-    merged = search_calls[0]
-    assert "medicinas para la memoria" in merged
-    assert "pastillas" in merged.lower()
+    dispatched = search_calls[0]
+    assert dispatched == "ginkgo gomitas adulto", \
+        f"Search must receive the refined keyword, got: {dispatched!r}"
+    # Explicitly guard against the v0.12.3 regression: the raw vague query
+    # should NOT be passed through to the scraper.
+    assert "que recomiendas" not in dispatched
+    assert "me gusta" not in dispatched
 
     # Context should have been cleared
     async with async_session() as session:
@@ -351,6 +506,47 @@ async def test_clarify_answer_merges_and_dispatches_search(clarify_user):
         )
         user = result.scalar_one()
         assert user.awaiting_clarification_context is None
+
+
+@pytest.mark.asyncio
+async def test_refiner_failure_falls_back_to_user_answer(clarify_user):
+    """If the refiner LLM fails (0 tokens, returns raw answer), the handler
+    still dispatches a search using whatever the refiner returned — the user
+    is never trapped."""
+    from farmafacil.bot import handler
+    from farmafacil.models.schemas import SearchResponse
+
+    await set_awaiting_clarification(clarify_user, "vitaminas")
+
+    search_calls: list[str] = []
+
+    async def fake_search(**kwargs):
+        search_calls.append(kwargs.get("query", ""))
+        return SearchResponse(
+            query="gomitas",
+            results=[],
+            total=0,
+            searched_pharmacies=["Farmatodo"],
+        )
+
+    async def fake_refine(context, answer):
+        # Simulate LLM failure fallback — returns the user's answer, 0 tokens
+        return (answer.strip(), 0, 0)
+
+    with patch.object(handler, "send_text_message", AsyncMock()), \
+         patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \
+         patch.object(handler, "refine_clarified_query", new=AsyncMock(side_effect=fake_refine)), \
+         patch.object(handler, "increment_token_usage", AsyncMock()) as mock_inc, \
+         patch.object(handler, "get_setting", AsyncMock(return_value="hybrid")), \
+         patch.object(handler, "_send_grid_image", AsyncMock()), \
+         patch.object(handler, "_send_detail_images", AsyncMock()):
+        await handler.handle_incoming_message(
+            clarify_user, "gomitas", wa_message_id=""
+        )
+
+    assert search_calls == ["gomitas"]
+    # 0-token refiner should NOT trigger token accounting
+    mock_inc.assert_not_called()
 
 
 @pytest.mark.asyncio

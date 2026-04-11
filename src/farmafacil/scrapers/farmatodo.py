@@ -113,13 +113,26 @@ class FarmatodoScraper(BaseScraper):
         offer_price_bs = self._get_offer_price(hit, city_code)
         in_stock = len(hit.get("stores_with_stock", [])) > 0
 
-        # Calculate per-unit price
-        unit_count = hit.get("measurePum")
+        # Calculate per-unit price.
+        # measurePum can come back as int OR float from Algolia — we MUST
+        # coerce to Decimal before dividing, otherwise Python raises
+        # TypeError: unsupported operand type(s) for /: 'Decimal' and 'float'
+        # which silently crashes the whole scraper (seen in prod 2026-04-10).
+        unit_count_raw = hit.get("measurePum")
         unit_label = hit.get("labelPum")
         best_price = offer_price_bs or price_bs
         unit_price_str = None
-        if unit_count and unit_count > 0 and best_price:
-            unit_price = best_price / unit_count
+        unit_count_dec: Decimal | None = None
+        unit_count_int: int | None = None
+        if unit_count_raw is not None:
+            try:
+                unit_count_dec = Decimal(str(unit_count_raw))
+                unit_count_int = int(unit_count_dec)
+            except Exception:
+                unit_count_dec = None
+                unit_count_int = None
+        if unit_count_dec is not None and unit_count_dec > 0 and best_price:
+            unit_price = best_price / unit_count_dec
             unit_price_str = f"{unit_label} {unit_price:.2f}" if unit_label else None
 
         return DrugResult(
@@ -136,7 +149,7 @@ class FarmatodoScraper(BaseScraper):
             brand=hit.get("marca") or hit.get("brand"),
             drug_class=hit.get("rms_class"),
             unit_label=unit_price_str,
-            unit_count=unit_count,
+            unit_count=unit_count_int,
             description=(hit.get("largeDescription") or "").strip() or None,
             stores_in_stock=len(hit.get("stores_with_stock", [])),
             stores_with_stock_ids=hit.get("stores_with_stock", []),

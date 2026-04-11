@@ -359,6 +359,96 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 - **Affected files:** `src/farmafacil/models/database.py` (new column), `src/farmafacil/db/session.py` (migration helper), `src/farmafacil/services/users.py` (set_awaiting_clarification), `src/farmafacil/services/ai_responder.py` (prompt + parser + AiResponse fields), `src/farmafacil/services/intent.py` (Intent fields + classify_intent_ai propagation), `src/farmafacil/bot/handler.py` (pre-route block + clarify_needed branches + cancel set), `tests/test_clarification.py` (21 new tests), `tests/test_nearest_store.py` (MockUser updated), `docs/bot-flow.md` (new Clarification Flow section), `src/farmafacil/__init__.py` + `pyproject.toml` (version bump).
 - **Tests:** 21 new. Parser: clarify_needed valid action, degrades without question, specific drugs skip clarification. Dataclasses: AiResponse + Intent expose fields. Prompt: mentions `clarify_needed`, vague examples, and warning against specific drugs. Service: `set_awaiting_clarification` roundtrip. Handler source: imports, branches in both modes, cancel set present. Integration: vague query → stash + question (scraper not called), answer → merged search + cleared context, `cancelar` → aborted, `/bug` → registers case, specific drug → skips clarification. Full suite: **497 passed** (was 476, +21). Migration idempotency verified against a pre-existing SQLite DB (column added on first run, no error on second run).
 - **Effort:** Small (0.5 day)
+- **Follow-up regression (v0.12.4, 2026-04-10):** Production test showed the naive string concatenation `"{context} {answer}"` produced a 15-word natural-language sentence that no scraper could match, AND simultaneously exposed a Farmatodo scraper crash on float `measurePum` values. Both fixed in **Item 33** (LLM query refiner) and the **v0.12.4 hotfix** below.
+
+### Item 33: LLM Query Refinement After Clarification
+
+- **Status:** DONE (v0.12.4, 2026-04-10)
+- **Added:** 2026-04-10 (from live prod test of v0.12.3)
+- **Priority:** P1
+- **Problem:** After Item 31 shipped, a real user test produced this flow:
+  1. User: `"Que me recomiendas para mejorar mi memoria?"`
+  2. Bot (correctly): `"¿Prefieres pastillas, cápsulas, bebibles o gomitas? ¿Es para adulto o niño?"`
+  3. User: `"es para mi, adulto, me gusta la idea de gomitas"`
+  4. Handler merged naively: `"que recomiendas para mejorar la memoria es para mi, adulto, me gusta la idea de gomitas"` — 15 words, fed directly to scrapers
+  5. All scrapers returned zero results (no product catalog matches 15-word sentences), so clarification produced *worse* results than no clarification at all.
+- **Solution:** Added `refine_clarified_query(original_context, user_answer)` in `ai_responder.py`. Single-purpose Claude Haiku call with a dedicated system prompt that distills the vague-query + answer pair into a concrete 2-5 word Spanish search term (e.g., `"medicinas para la memoria"` + `"adulto, gomitas"` → `"ginkgo gomitas adulto"`). Prompt includes 7 canonical examples and strict rules ("2 a 5 palabras", "sin explicación", "en español"). Returns `(refined_query, input_tokens, output_tokens)` so the handler can increment token counters.
+- **Fallback hierarchy:**
+  1. No `ANTHROPIC_API_KEY` → return raw user answer (0 tokens, logged warning)
+  2. LLM exception (API 500, network timeout) → return raw user answer (0 tokens, logged error)
+  3. LLM returns empty text → return raw user answer (tokens still counted)
+  4. LLM returns text → strip surrounding quotes/punctuation, return refined query
+- **Handler wiring:** In the clarification resume block (`handler.py`), the merged-string concatenation was replaced with:
+  ```python
+  refined_query, r_in, r_out = await refine_clarified_query(pending_context, text)
+  if r_in or r_out:
+      await increment_token_usage(user.id, r_in, r_out, model=LLM_MODEL)
+  ```
+  The refined query is what gets dispatched to `_handle_drug_search()`. The original context is still cleared BEFORE dispatch (fail-safe preserved from Item 31).
+- **Affected files:** `src/farmafacil/services/ai_responder.py` (new `_REFINER_SYSTEM_PROMPT`, new `refine_clarified_query()` function), `src/farmafacil/bot/handler.py` (import + wire refiner into clarification resume), `tests/test_clarification.py` (1 existing test renamed + updated, 2 new handler integration tests, 6 new refiner unit tests).
+- **Tests added (8 new):**
+  - `test_clarify_answer_refines_and_dispatches_search` (renamed from `..._merges_...`) — asserts scraper is called with the *refined* keyword, explicitly guards against the raw natural-language sentence leaking through.
+  - `test_refiner_failure_falls_back_to_user_answer` — 0-token refiner result does NOT trigger `increment_token_usage`.
+  - `TestRefineClarifiedQueryUnit` class (6 tests): happy path returns stripped LLM text; strips quotes/punctuation like `'"melatonina pastillas."'` → `"melatonina pastillas"`; empty LLM response falls back to user answer but counts tokens; LLM exception (`RuntimeError("API 500")`) falls back with 0 tokens; no API key falls back with 0 tokens; `_REFINER_SYSTEM_PROMPT` contains the "2-5 palabras" rule + at least one canonical example.
+- **Test suite:** **509 passed** (was 497, +12 net: 13 new, 1 rename). Verified with `rm farmafacil.db && pytest -m "not integration" -q`.
+- **Effort:** Small (2h, bundled with v0.12.4 hotfix)
+
+### Hotfix v0.12.4: Farmatodo Scraper Decimal/float Crash (P0)
+
+- **Status:** DONE (v0.12.4, 2026-04-10)
+- **Added:** 2026-04-10 (discovered while investigating the Item 33 bug via prod logs)
+- **Priority:** **P0** — every Farmatodo search with a product that had `measurePum` returned as a float was crashing the scraper.
+- **Symptom:** The v0.12.3 prod test showed the clarification flow return zero results with a "⚠️ No pudimos conectar con Farmatodo ahora mismo" line (the failed-pharmacies warning from Item 21). The user's assumption was a network/API outage. **It was not.**
+- **Root cause (from prod logs):**
+  ```
+  ERROR farmafacil.services.search: Scraper Farmatodo failed for query
+    'que recomiendas para mejorar la memoria ...':
+    unsupported operand type(s) for /: 'decimal.Decimal' and 'float'
+    File "/usr/local/lib/python3.12/site-packages/farmafacil/scrapers/farmatodo.py",
+    line 122, in _hit_to_result
+  ```
+  The Farmatodo Algolia index was returning 988 hits successfully — the crash happened while **parsing** them. At `farmatodo.py:122`, the scraper divided `best_price` (Decimal) by `hit.get("measurePum")`, and for some products (notably omega-3 gomitas) Algolia returned `measurePum` as a Python `float` (e.g. `60.0`) instead of an `int`. Python refuses `Decimal / float` with a `TypeError`, which bubbled up, triggered `asyncio.gather(return_exceptions=True)` to record the exception, and the whole Farmatodo result set was discarded as a "connection error."
+- **Why it wasn't caught earlier:** The existing unit tests for `_hit_to_result` only used integer `measurePum` values (or no value at all). Python's strict Decimal arithmetic made the bug data-dependent — it only fired when at least one hit in the result set had a float unit count. Zero-result searches never exercised the division path.
+- **Fix:** Coerce `measurePum` to `Decimal` before dividing, and track an `int` variant separately for the `DrugResult.unit_count: int | None` schema field to avoid passing a Decimal into a Pydantic int field.
+  ```python
+  unit_count_raw = hit.get("measurePum")
+  unit_count_dec: Decimal | None = None
+  unit_count_int: int | None = None
+  if unit_count_raw is not None:
+      try:
+          unit_count_dec = Decimal(str(unit_count_raw))
+          unit_count_int = int(unit_count_dec)
+      except Exception:
+          unit_count_dec = None
+          unit_count_int = None
+  if unit_count_dec is not None and unit_count_dec > 0 and best_price:
+      unit_price = best_price / unit_count_dec
+      unit_price_str = f"{unit_label} {unit_price:.2f}" if unit_label else None
+  ```
+  `Decimal(str(60.0))` → `Decimal("60.0")` which divides cleanly with other Decimals. `int(Decimal("60.0"))` → `60` for the schema field. Garbage strings and zero are caught by the guards.
+- **Affected files:** `src/farmafacil/scrapers/farmatodo.py` (`_hit_to_result` lines 116-156), `tests/test_farmatodo_scraper.py` (5 new regression tests).
+- **Regression tests added (5):**
+  - `test_hit_to_result_measurePum_float_no_crash` — **the actual bug**: uses `"measurePum": 60.0` and asserts `result.unit_label == "c/u 20.00"` (1200 / 60.0).
+  - `test_hit_to_result_measurePum_int` — int case (common) still works.
+  - `test_hit_to_result_measurePum_missing` — no field, `unit_count=None`, `unit_label=None`.
+  - `test_hit_to_result_measurePum_zero` — no `ZeroDivisionError`, `unit_label=None`.
+  - `test_hit_to_result_measurePum_garbage_string` — non-numeric falls back, no crash.
+- **Impact:** Every Farmatodo search that matched any product with a float `measurePum` (typically multi-unit items with decimal counts) returned zero results instead of the full product list. This was **silently** reported to users as a "connection error" for Farmatodo (the Item 21 failed-pharmacies UI, which correctly identifies scraper exceptions). Users experiencing this got half the pharmacy coverage they should have.
+- **Deployment note:** Pure code fix, no schema change, no migration. Ship with Item 33.
+
+### Item 34: Skip ¿Te sirvió? Prompt on Zero-Result / Partial-Failure Responses
+
+- **Status:** PENDING
+- **Added:** 2026-04-10 (from same v0.12.3 prod test)
+- **Priority:** P2
+- **Problem:** When a drug search returns zero results (or all scrapers fail), the bot still appends the `¿Te sirvió? Sí / No` feedback prompt at the end of the message. This is nonsensical — there is nothing to rate — and teaches users that the feedback prompt means "did the bot understand you?" instead of "did these results help?". The v0.12.3 prod test captured a screenshot where the clarification flow failed, returned "No encontramos resultados", and still asked "¿Te sirvió?" — which is a UX confusion signal.
+- **Suggested solution:** In the formatter (`bot/formatter.py` or wherever the `¿Te sirvió?` line is appended), suppress the feedback prompt when:
+  1. `results.products` is empty, OR
+  2. `results.failed_pharmacies` includes ALL active scrapers (total outage), OR
+  3. The response is a clarification question (Item 31)
+- **Open questions:** (1) For partial failures (1 of 3 scrapers down but 2 returned results), do we still ask? Probably yes. (2) Should the feedback be replaced with something like "¿Quieres intentar con otro nombre?" on zero results? Could feed a retry loop.
+- **Affected files:** `src/farmafacil/bot/formatter.py` (likely), `src/farmafacil/bot/handler.py` (where feedback prompt is assembled), possibly `src/farmafacil/services/search_feedback.py`.
+- **Effort:** Small (1-2h)
 
 ### Item 30: `find_cross_chain_matches` Unindexed Full-Scan
 

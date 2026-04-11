@@ -122,6 +122,88 @@ class TestFarmatodoScraper:
         result = scraper._hit_to_result(hit, city_code=None)
         assert result.price_bs == Decimal("500")
 
+    def test_hit_to_result_measurePum_float_no_crash(self, scraper):
+        """Regression (v0.12.4): measurePum can come back as a float from
+        Algolia (e.g., 60.0 instead of 60) — this used to crash the scraper
+        with TypeError: unsupported operand type(s) for /: 'Decimal' and 'float'
+        at _hit_to_result line 122, making the whole scrape fail and faking
+        a Farmatodo connection error in the user's view.
+        """
+        hit = {
+            "mediaDescription": "Omega 3 Gomitas x 60",
+            "brand": "Sundown",
+            "fullPrice": 1200,
+            "stores_with_stock": [1],
+            "url": "omega-3-gomitas",
+            "measurePum": 60.0,   # float — the bug trigger
+            "labelPum": "c/u",
+        }
+        # Must not raise
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.price_bs == Decimal("1200")
+        assert result.unit_count == 60
+        # per-unit price formatted correctly: 1200 / 60 = 20.00
+        assert result.unit_label == "c/u 20.00"
+
+    def test_hit_to_result_measurePum_int(self, scraper):
+        """measurePum as int (the common case) still works."""
+        hit = {
+            "mediaDescription": "Aspirin x 30",
+            "brand": "Bayer",
+            "fullPrice": 600,
+            "stores_with_stock": [1],
+            "url": "aspirin",
+            "measurePum": 30,
+            "labelPum": "x tableta",
+        }
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.unit_count == 30
+        assert result.unit_label == "x tableta 20.00"
+
+    def test_hit_to_result_measurePum_missing(self, scraper):
+        """No measurePum field — no per-unit price, no crash."""
+        hit = {
+            "mediaDescription": "No Unit Info",
+            "brand": "TestBrand",
+            "fullPrice": 500,
+            "stores_with_stock": [1],
+            "url": "test",
+        }
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.unit_count is None
+        assert result.unit_label is None
+
+    def test_hit_to_result_measurePum_zero(self, scraper):
+        """measurePum = 0 should not trigger a ZeroDivisionError."""
+        hit = {
+            "mediaDescription": "Zero Unit",
+            "brand": "TestBrand",
+            "fullPrice": 500,
+            "stores_with_stock": [1],
+            "url": "test",
+            "measurePum": 0,
+            "labelPum": "c/u",
+        }
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.unit_count == 0
+        assert result.unit_label is None  # skipped because not > 0
+
+    def test_hit_to_result_measurePum_garbage_string(self, scraper):
+        """Non-numeric measurePum falls back gracefully."""
+        hit = {
+            "mediaDescription": "Bad Unit",
+            "brand": "TestBrand",
+            "fullPrice": 500,
+            "stores_with_stock": [1],
+            "url": "test",
+            "measurePum": "not a number",
+            "labelPum": "c/u",
+        }
+        # Must not raise
+        result = scraper._hit_to_result(hit, city_code=None)
+        assert result.unit_count is None
+        assert result.unit_label is None
+
     def test_get_price_with_city(self, scraper, sample_algolia_hit):
         """Extracts city-specific price."""
         price = scraper._get_price(sample_algolia_hit, "CCS")

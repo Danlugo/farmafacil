@@ -8,7 +8,7 @@ from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 
 from farmafacil.bot.whatsapp import send_image_message, send_local_image, send_read_receipt, send_text_message
 from farmafacil.models.schemas import DrugResult
-from farmafacil.services.ai_responder import classify_with_ai, generate_response
+from farmafacil.services.ai_responder import classify_with_ai, generate_response, refine_clarified_query
 from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
@@ -227,7 +227,15 @@ async def handle_incoming_message(
         # Clear the pending context BEFORE dispatching so that a failure
         # downstream cannot leave the user trapped in the clarify state.
         await set_awaiting_clarification(sender, None)
-        refined_query = f"{pending_context} {text}".strip()
+        # Ask Claude Haiku to distill the vague context + the user's answer
+        # into a concrete 2-5 word search term. Without this step the scraper
+        # would receive a 15-word natural-language sentence that no product
+        # catalog can match (regression from v0.12.3, fixed in v0.12.4).
+        refined_query, r_in, r_out = await refine_clarified_query(
+            pending_context, text,
+        )
+        if r_in or r_out:
+            await increment_token_usage(user.id, r_in, r_out, model=LLM_MODEL)
         logger.info(
             "Clarification refinement for %s: %r + %r -> %r",
             sender, pending_context, text, refined_query,
