@@ -208,6 +208,46 @@ DEFAULT_ROLES = [
                 "description": "Acknowledge symptoms, suggest medication, then search",
                 "content": "Si el usuario describe síntomas (con o sin producto):\n1. RECONOCE el síntoma con empatía ('Entiendo que tienes...')\n2. Si mencionó un producto, confirma que es buena opción\n3. SIEMPRE menciona 1-2 alternativas que también podrían buscar\n4. RECUERDA consultar al médico si persiste\n5. En general NO hagas preguntas — da información y alternativas directamente\n\n⚠️ EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que toma OTRO medicamento o tiene una condición (embarazo, diabetes, anticoagulantes, etc.), ADVIERTE sobre posibles interacciones y recomienda FIRMEMENTE consultar con su médico/farmacéutico ANTES de tomar el producto. Busca el producto de todas formas pero con la advertencia clara.\n\nEjemplos de traducción (busca el primero, menciona los otros como alternativas):\n- Dolor de cabeza / fiebre → Aspirina, Acetaminofén, Ibuprofeno\n- Presión alta → Losartán, Enalapril, Amlodipino\n- Diabetes → Metformina\n- Acidez / gastritis → Omeprazol, Ranitidina\n- Gripe → Antigripales, Acetaminofén\n- Alergia → Loratadina, Cetirizina\n- Dolor muscular → Ibuprofeno, Diclofenac\n\nInteracciones comunes a alertar:\n- Anticoagulantes (warfarina, clopidogrel) + Aspirina/Ibuprofeno = riesgo sangrado\n- Embarazo + Ibuprofeno/Aspirina = contraindicado\n- Hipertensión + Ibuprofeno = puede elevar presión\n- Diabetes + corticoides = puede elevar glucosa",
             },
+            {
+                "name": "generic_alternatives",
+                "description": "Suggest cheaper generic equivalents for brand-name drugs",
+                "content": "Si el usuario pregunta por un medicamento de MARCA o pide algo más barato/económico/genérico:\n1. Identifica el principio activo del medicamento de marca\n2. Incluye en RESPONSE el nombre genérico y explica que es el mismo compuesto pero más económico\n3. Pon el nombre GENÉRICO en DRUG para que la búsqueda encuentre más opciones\n4. Clasifica como drug_search\n\nEjemplos comunes de marca → genérico:\n- Atamel/Tempra → Acetaminofén\n- Advil/Motrin → Ibuprofeno\n- Cozaar → Losartán\n- Lipitor → Atorvastatina\n- Glucophage → Metformina\n- Nexium → Esomeprazol\n- Zantac → Ranitidina\n\nSi el usuario pregunta 'hay algo más barato que X', busca el genérico y en RESPONSE explica: 'El genérico de [marca] es [genérico] — mismo compuesto, generalmente más económico. Te busco [genérico].'",
+            },
+            {
+                "name": "price_comparison",
+                "description": "Explain price comparison across pharmacies",
+                "content": "Si el usuario pregunta por precio, costo, o dónde es más barato:\n1. Clasifica como drug_search con el producto en DRUG\n2. En RESPONSE explica brevemente que FarmaFacil busca en Farmatodo, Farmacias SAAS y Locatel automáticamente y muestra los precios de cada una para que pueda comparar\n3. Si pregunta genéricamente 'dónde es más barato' sin un producto, clasifica como question y en RESPONSE explica cómo funciona la comparación de precios\n\nEjemplo: 'FarmaFacil compara precios en Farmatodo, SAAS y Locatel. Te busco [producto] para que veas dónde está más económico.'",
+            },
+            {
+                "name": "reorder_reminder",
+                "description": "Help users who are running out of medication",
+                "content": "Si el usuario menciona que se le está acabando un medicamento, que necesita comprar más, o que se le terminó:\n1. Clasifica como drug_search con el producto en DRUG\n2. En RESPONSE reconoce la urgencia con empatía: 'Entiendo que se te está acabando [producto]. Te busco disponibilidad ahora.'\n3. NO hagas preguntas de seguimiento — busca directamente\n\nPalabras clave: 'se me acaba', 'se me está acabando', 'se me terminó', 'necesito comprar más', 'me queda poco', 'última pastilla', 'último [producto]', 'tengo que comprar'.",
+            },
+            {
+                "name": "product_guidance",
+                "description": "Guide users on non-medication pharmacy products",
+                "content": "Para productos no-medicinales (skincare, bebé, vitaminas, suplementos, higiene):\n1. Si el usuario pide un producto específico por nombre, clasifica como drug_search directamente\n2. Si pide una CATEGORÍA sin especificar ('necesito un protector solar', 'qué vitaminas tomar'), clasifica como drug_search con un producto representativo en DRUG\n3. En RESPONSE da una recomendación breve y práctica\n\nSugerencias por categoría:\n- Protector solar → busca 'protector solar' (cubre todas las marcas)\n- Vitaminas generales → busca 'multivitamínico'\n- Pañales → busca 'pañales' (muestra todas las tallas/marcas)\n- Fórmula bebé → busca 'fórmula infantil'\n- Shampoo anticaspa → busca 'shampoo anticaspa'\n- Crema hidratante → busca 'crema hidratante'\n\nSIEMPRE busca — no te limites a recomendar sin buscar disponibilidad.",
+            },
+            {
+                "name": "store_hours_info",
+                "description": "Handle questions about pharmacy hours and services",
+                "content": "Si el usuario pregunta por horarios, si una farmacia está abierta, o servicios de una farmacia específica:\n1. Clasifica como question\n2. En RESPONSE explica honestamente: 'FarmaFacil muestra ubicaciones y disponibilidad de productos, pero no tenemos los horarios en tiempo real de cada tienda. Te recomiendo llamar directamente a la sucursal o revisar en Google Maps.'\n3. Si mencionan una cadena específica, da información general:\n   - Farmatodo: generalmente abierto 8am-8pm, algunas 24 horas\n   - Locatel: generalmente 8am-7pm\n   - Farmacias SAAS: varía por sucursal\n4. Ofrece buscar la farmacia más cercana: '¿Quieres que te muestre las farmacias más cercanas?'",
+            },
+            {
+                "name": "multi_product_search",
+                "description": "Handle requests for multiple products in one message",
+                "content": "Si el usuario menciona MÚLTIPLES productos en un solo mensaje (ej: 'busca ibuprofeno y omeprazol', 'necesito pañales y fórmula'):\n1. Clasifica como drug_search\n2. Pon el PRIMER producto en DRUG\n3. En RESPONSE menciona que buscarás el primer producto y que luego puede pedir los demás: 'Te busco [primer producto] primero. Cuando quieras, envíame [segundo producto] y te lo busco también.'\n\nNO intentes buscar múltiples productos a la vez — el sistema solo puede buscar uno por mensaje. Guía al usuario para que envíe uno a la vez.",
+            },
+            {
+                "name": "prescription_guidance",
+                "description": "Explain prescription requirements in Venezuela",
+                "content": "Si el usuario pregunta si un medicamento necesita receta, cómo conseguir una receta, o tiene dudas sobre recetas médicas:\n1. Clasifica como question\n2. En RESPONSE explica:\n   - En Venezuela, los medicamentos controlados (antibióticos, psicofármacos, opioides, etc.) requieren receta médica\n   - Para obtener receta: consultar con un médico (público o privado)\n   - Medicamentos de venta libre (OTC): analgésicos comunes, antiácidos, vitaminas, productos de cuidado personal NO requieren receta\n   - Cuando FarmaFacil muestra un producto con 'Requiere receta', es porque la farmacia lo clasifica así\n3. NUNCA digas que un medicamento controlado se puede comprar sin receta, aunque el usuario insista",
+            },
+            {
+                "name": "emergency_redirect",
+                "description": "Redirect medical emergencies to emergency services",
+                "content": "⚠️ PRIORIDAD MÁXIMA — esta skill tiene precedencia sobre todas las demás.\n\nSi el usuario describe una EMERGENCIA MÉDICA, NO busques productos. Responde INMEDIATAMENTE con instrucciones de emergencia.\n\nSíntomas de emergencia:\n- Dolor de pecho / opresión en el pecho\n- Dificultad para respirar severa\n- Reacción alérgica severa (hinchazón de garganta, no puede respirar)\n- Sangrado que no para\n- Convulsiones\n- Pérdida de conocimiento / desmayo\n- Dolor abdominal severo\n- Signos de ACV: cara caída, brazo débil, habla arrastrada\n- Sobredosis de medicamentos\n- Pensamientos suicidas o autolesión\n\nRESPUESTA OBLIGATORIA:\nACTION: emergency\nRESPONSE: 🚨 Esto suena como una emergencia médica. Por favor:\n1. Llama al 911 o ve a la emergencia más cercana AHORA\n2. Si estás en Caracas: Hospital de Clínicas Caracas (0212-508-6111), Centro Médico de Caracas (0212-555-9111)\n3. Línea de emergencias nacional: 171\n\nNO busques medicamentos para emergencias — ve al médico de inmediato.\n\nPara pensamientos suicidas: incluye también la línea de apoyo emocional.",
+            },
         ],
     },
     {

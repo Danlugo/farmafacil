@@ -11,7 +11,7 @@ from farmafacil.services.ai_roles import (
     get_role,
     list_active_roles,
 )
-from farmafacil.services.ai_router import _build_roles_list, route_to_role
+from farmafacil.services.ai_router import route_to_role
 from farmafacil.services.user_memory import get_memory, update_memory
 
 
@@ -58,7 +58,24 @@ class TestAiRolesService:
         await seed_ai_roles()
         role = await get_role("pharmacy_advisor")
         assert role is not None
-        assert len(role.skills) >= 2  # drug_search, symptom_translation
+        assert len(role.skills) >= 10  # drug_search, nearest_store, symptom_translation + 8 new
+
+    @pytest.mark.asyncio
+    async def test_pharmacy_advisor_has_all_skills(self):
+        """pharmacy_advisor role has all 11 expected skills in prompt."""
+        await seed_ai_roles()
+        role = await get_role("pharmacy_advisor")
+        assert role is not None
+        prompt = assemble_prompt(role)
+        # Verify key skill content is present
+        assert "genérico" in prompt.lower()  # generic_alternatives
+        assert "compara precios" in prompt.lower() or "comparar" in prompt.lower()  # price_comparison
+        assert "se me está acabando" in prompt.lower() or "se le está acabando" in prompt.lower()  # reorder_reminder
+        assert "protector solar" in prompt.lower()  # product_guidance
+        assert "horario" in prompt.lower()  # store_hours_info
+        assert "múltiples productos" in prompt.lower() or "primer producto" in prompt.lower()  # multi_product_search
+        assert "receta" in prompt.lower()  # prescription_guidance
+        assert "emergencia" in prompt.lower()  # emergency_redirect
 
     @pytest.mark.asyncio
     async def test_get_role_nonexistent(self):
@@ -191,16 +208,6 @@ class TestAssemblePrompt:
 class TestAiRouter:
     """Test role routing logic."""
 
-    def test_build_roles_list(self):
-        """Formats role list for the router prompt."""
-        roles = [
-            RoleConfig("pharmacy_advisor", "Asesor", "Busca medicamentos", "", [], []),
-            RoleConfig("app_support", "Soporte", "Ayuda técnica", "", [], []),
-        ]
-        result = _build_roles_list(roles)
-        assert "pharmacy_advisor: Busca medicamentos" in result
-        assert "app_support: Ayuda técnica" in result
-
     @pytest.mark.asyncio
     async def test_single_role_no_routing(self):
         """With a single active role, routing is skipped."""
@@ -220,16 +227,97 @@ class TestAiRouter:
             assert result == "pharmacy_advisor"
 
     @pytest.mark.asyncio
-    async def test_no_api_key_returns_default(self):
-        """Without API key, returns default role."""
-        with patch("farmafacil.services.ai_router.list_active_roles") as mock_roles, \
-             patch("farmafacil.services.ai_router.ANTHROPIC_API_KEY", ""):
-            mock_roles.return_value = [
-                RoleConfig("r1", "R1", "Role 1", "", [], []),
-                RoleConfig("r2", "R2", "Role 2", "", [], []),
+    async def test_app_support_keyword_routing(self):
+        """Messages with app support keywords route to app_support."""
+        with patch("farmafacil.services.ai_router.list_active_roles") as mock:
+            mock.return_value = [
+                RoleConfig("pharmacy_advisor", "Asesor", "Busca medicamentos", "", [], []),
+                RoleConfig("app_support", "Soporte", "Ayuda técnica", "", [], []),
             ]
-            result = await route_to_role("test")
+            result = await route_to_role("la app no funciona")
+            assert result == "app_support"
+
+    @pytest.mark.asyncio
+    async def test_drug_query_routes_to_pharmacy(self):
+        """Regular drug queries route to pharmacy_advisor."""
+        with patch("farmafacil.services.ai_router.list_active_roles") as mock:
+            mock.return_value = [
+                RoleConfig("pharmacy_advisor", "Asesor", "Busca medicamentos", "", [], []),
+                RoleConfig("app_support", "Soporte", "Ayuda técnica", "", [], []),
+            ]
+            result = await route_to_role("busco losartan")
             assert result == "pharmacy_advisor"
+
+    @pytest.mark.asyncio
+    async def test_error_keyword_routes_to_support(self):
+        """Messages mentioning errors route to app_support."""
+        with patch("farmafacil.services.ai_router.list_active_roles") as mock:
+            mock.return_value = [
+                RoleConfig("pharmacy_advisor", "Asesor", "Busca medicamentos", "", [], []),
+                RoleConfig("app_support", "Soporte", "Ayuda técnica", "", [], []),
+            ]
+            result = await route_to_role("tiene un error cuando busco")
+            assert result == "app_support"
+
+
+# ── AI Responder Parsing ───────────────────────────────────────────────
+
+
+class TestParseStructuredResponse:
+    """Test parsing of structured LLM responses including new actions."""
+
+    def test_parse_emergency_action(self):
+        """Emergency action is parsed correctly."""
+        from farmafacil.services.ai_responder import _parse_structured_response
+
+        reply = (
+            "ACTION: emergency\n"
+            "RESPONSE: 🚨 Esto suena como una emergencia. Llama al 911."
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "emergency"
+        assert "911" in result.text
+
+    def test_parse_view_similar_action(self):
+        """view_similar action is parsed correctly."""
+        from farmafacil.services.ai_responder import _parse_structured_response
+
+        reply = "ACTION: view_similar"
+        result = _parse_structured_response(reply)
+        assert result.action == "view_similar"
+
+    def test_parse_drug_search_with_response(self):
+        """drug_search with RESPONSE is parsed correctly (symptom + search)."""
+        from farmafacil.services.ai_responder import _parse_structured_response
+
+        reply = (
+            "ACTION: drug_search\n"
+            "DRUG: Acetaminofen\n"
+            "RESPONSE: Entiendo que tienes dolor de cabeza."
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "drug_search"
+        assert result.drug_query == "Acetaminofen"
+        assert "dolor de cabeza" in result.text
+
+    def test_parse_invalid_action_with_response_becomes_question(self):
+        """Unknown action with RESPONSE falls back to question."""
+        from farmafacil.services.ai_responder import _parse_structured_response
+
+        reply = (
+            "ACTION: something_invalid\n"
+            "RESPONSE: Aquí tienes la info."
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "question"
+
+    def test_parse_invalid_action_without_response_becomes_unknown(self):
+        """Unknown action without RESPONSE falls back to unknown."""
+        from farmafacil.services.ai_responder import _parse_structured_response
+
+        reply = "ACTION: something_invalid"
+        result = _parse_structured_response(reply)
+        assert result.action == "unknown"
 
 
 # ── User Memory ─────────────────────────────────────────────────────────

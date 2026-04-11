@@ -54,7 +54,8 @@ async def _load_roles_cache() -> None:
         new_cache: dict[str, RoleConfig] = {}
         for role in roles:
             active_rules = [
-                r.content for r in role.rules
+                r.content
+                for r in sorted(role.rules, key=lambda r: r.sort_order)
                 if r.is_active
             ]
             active_skills = [
