@@ -438,17 +438,22 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 34: Skip ¿Te sirvió? Prompt on Zero-Result / Partial-Failure Responses
 
-- **Status:** PENDING
+- **Status:** DONE (v0.12.5, 2026-04-11)
 - **Added:** 2026-04-10 (from same v0.12.3 prod test)
+- **Completed:** 2026-04-11
 - **Priority:** P2
-- **Problem:** When a drug search returns zero results (or all scrapers fail), the bot still appends the `¿Te sirvió? Sí / No` feedback prompt at the end of the message. This is nonsensical — there is nothing to rate — and teaches users that the feedback prompt means "did the bot understand you?" instead of "did these results help?". The v0.12.3 prod test captured a screenshot where the clarification flow failed, returned "No encontramos resultados", and still asked "¿Te sirvió?" — which is a UX confusion signal.
-- **Suggested solution:** In the formatter (`bot/formatter.py` or wherever the `¿Te sirvió?` line is appended), suppress the feedback prompt when:
-  1. `results.products` is empty, OR
-  2. `results.failed_pharmacies` includes ALL active scrapers (total outage), OR
-  3. The response is a clarification question (Item 31)
-- **Open questions:** (1) For partial failures (1 of 3 scrapers down but 2 returned results), do we still ask? Probably yes. (2) Should the feedback be replaced with something like "¿Quieres intentar con otro nombre?" on zero results? Could feed a retry loop.
-- **Affected files:** `src/farmafacil/bot/formatter.py` (likely), `src/farmafacil/bot/handler.py` (where feedback prompt is assembled), possibly `src/farmafacil/services/search_feedback.py`.
-- **Effort:** Small (1-2h)
+- **Problem:** When a drug search returned zero results (or all scrapers failed), the bot still appended the `¿Te sirvió? (sí/no)` feedback prompt at the end of the message. This was nonsensical — there was nothing to rate — and it taught users that the feedback prompt meant "did the bot understand you?" instead of "did these results help?". The v0.12.3 prod test captured a screenshot where the clarification flow failed, returned "No encontramos resultados", and still asked "¿Te sirvió?" — a clear UX confusion signal.
+- **Solution implemented:**
+  - New pure-logic helper `_should_ask_feedback(response)` in `handler.py` that returns False when (a) `response.results` is empty, OR (b) `len(failed_pharmacies) >= len(ACTIVE_SCRAPERS)` (total outage guard). Partial failures (1 of 3 scrapers down but at least one returned products) still get the prompt — the user has real results to rate even if coverage was incomplete.
+  - New `MSG_RETRY_DIFFERENT_NAME` constant: `"💡 Si no encontraste lo que buscabas, prueba con otro nombre o el principio activo. Ejemplo: acetaminofen en vez de tachipirin."` — shown instead of `¿Te sirvió?` when the prompt is suppressed, so the user still has a clear next action.
+  - `_handle_drug_search` now gates the feedback prompt + `set_onboarding_step("awaiting_feedback")` on `_should_ask_feedback(response)`. On suppression, it sends `MSG_RETRY_DIFFERENT_NAME` and logs the skip with query + results count + failed scraper list for analytics.
+  - `ACTIVE_SCRAPERS` was added to the handler imports so the helper can compare against the real active scraper count (not a hardcoded number).
+- **Affected files:** `src/farmafacil/bot/handler.py` (`ACTIVE_SCRAPERS` import, new `_should_ask_feedback` helper, new `MSG_RETRY_DIFFERENT_NAME`, gated feedback block in `_handle_drug_search`), `tests/test_feedback_suppression.py` (new, 11 tests).
+- **Tests added (11 new):**
+  - `TestShouldAskFeedbackUnit` (7 pure-logic tests): happy path with results + no failures, zero results alone, zero results + partial failure, 1-of-3 partial failure + results, 2-of-3 partial failure + results, total outage, empty failed list with results.
+  - 4 integration tests against `_handle_drug_search` with mocked `search_drug`/`send_text_message`/`set_onboarding_step`: zero-result skips prompt and sends retry hint and does NOT enter `awaiting_feedback`; results present still sends prompt + enters `awaiting_feedback` exactly once; partial failure with results still sends prompt; total failure + zero results skips prompt and sends retry hint.
+- **Test suite:** **520 passed** (was 509, +11 new). Verified with `rm farmafacil.db && pytest -m "not integration" -q`.
+- **Effort:** Small (1h)
 
 ### Item 30: `find_cross_chain_matches` Unindexed Full-Scan
 

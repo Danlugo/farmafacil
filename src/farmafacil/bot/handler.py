@@ -13,7 +13,7 @@ from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone
 from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
-from farmafacil.services.search import search_drug
+from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
 from farmafacil.services.search_feedback import (
     log_search,
     parse_feedback,
@@ -124,6 +124,14 @@ MSG_NEED_LOCATION = (
 
 MSG_CLARIFY_CANCELED = (
     "Listo, cancele la busqueda anterior. Dime que necesitas \U0001f64c"
+)
+
+# Shown instead of the ¿Te sirvió? prompt when a drug search returns zero
+# results. Asking "did it help?" when there is literally nothing to rate was
+# a UX confusion signal in the v0.12.3 prod test (Item 34).
+MSG_RETRY_DIFFERENT_NAME = (
+    "\U0001f4a1 Si no encontraste lo que buscabas, prueba con otro nombre "
+    "o el principio activo. Ejemplo: _acetaminofen_ en vez de _tachipirin_."
 )
 
 # Words that cancel a pending clarification and reset the state.
@@ -655,6 +663,37 @@ async def handle_incoming_message(
         await _update_memory_safe(user.id, display_name, text, reply)
 
 
+def _should_ask_feedback(response) -> bool:
+    """Decide whether to append the ¿Te sirvió? prompt after a drug search.
+
+    The prompt only makes sense when the user actually has something to rate.
+    Returns False when:
+      1. The response has zero results (nothing to rate).
+      2. Every active scraper failed (total outage — also zero results).
+
+    Partial failures (1 of 3 scrapers down but at least one returned products)
+    still get the prompt — the user has real results to evaluate even if
+    coverage was incomplete.
+
+    Args:
+        response: SearchResponse from ``search_drug``.
+
+    Returns:
+        True if the feedback prompt should be sent, False otherwise.
+    """
+    if not response.results:
+        return False
+    total_active = len(ACTIVE_SCRAPERS)
+    failed_count = len(response.failed_pharmacies or [])
+    if total_active > 0 and failed_count >= total_active:
+        # Defensive — if every scraper failed we would not have any results,
+        # so this branch is technically unreachable after the first check.
+        # Kept as an explicit guard against future regressions where we might
+        # start returning cached or partial data alongside a total outage.
+        return False
+    return True
+
+
 async def _handle_drug_search(
     sender: str,
     user,
@@ -666,6 +705,8 @@ async def _handle_drug_search(
     """Perform a drug search and send results to the user.
 
     After showing results, asks for feedback: "¿Te sirvió? (sí/no)".
+    The feedback prompt is suppressed on zero-result and total-failure
+    responses — see `_should_ask_feedback`.
 
     Args:
         sender: WhatsApp phone number.
@@ -717,9 +758,20 @@ async def _handle_drug_search(
         reply += await _build_debug(sender, user.id, ai_result)
     await send_text_message(sender, reply)
 
-    # Ask for feedback
-    await set_onboarding_step(sender, "awaiting_feedback")
-    await send_text_message(sender, MSG_ASK_FEEDBACK)
+    # Ask for feedback ONLY when there is something to rate (Item 34).
+    # Zero-result or total-outage responses get a retry hint instead —
+    # asking "¿Te sirvió?" when the bot showed no products is a UX
+    # confusion signal and trains users that the feedback prompt means
+    # "did you understand me?" rather than "did these results help?".
+    if _should_ask_feedback(response):
+        await set_onboarding_step(sender, "awaiting_feedback")
+        await send_text_message(sender, MSG_ASK_FEEDBACK)
+    else:
+        await send_text_message(sender, MSG_RETRY_DIFFERENT_NAME)
+        logger.info(
+            "Skipped ¿Te sirvió? for %s (query=%r, results=%d, failed=%s)",
+            sender, query, results_count, response.failed_pharmacies,
+        )
 
     # Update user memory with search context
     summary = f"Searched: {query} → {results_count} results"
