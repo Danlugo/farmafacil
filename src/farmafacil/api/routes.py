@@ -1,12 +1,15 @@
 """API route definitions."""
 
-from fastapi import APIRouter, Query
+from html import escape
+
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
 from farmafacil import __version__
+from farmafacil.api.limiter import limiter
 from farmafacil.db.session import async_session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
@@ -22,20 +25,28 @@ async def health_check() -> HealthResponse:
 
 
 @router.post("/api/v1/search", response_model=SearchResponse)
-async def search(request: SearchRequest) -> SearchResponse:
+@limiter.limit("30/minute")
+async def search(request: Request, body: SearchRequest) -> SearchResponse:
     """Search for a drug across all pharmacies."""
-    return await search_drug(request.query, city=request.city)
+    return await search_drug(body.query, city=body.city)
 
 
 @router.get("/api/v1/search", response_model=SearchResponse)
-async def search_get(q: str, city: str | None = None) -> SearchResponse:
+@limiter.limit("30/minute")
+async def search_get(
+    request: Request,
+    q: str = Query(..., min_length=2, max_length=200),
+    city: str | None = Query(None, max_length=50),
+) -> SearchResponse:
     """Search for a drug via GET (convenience for WhatsApp bot / browser)."""
     return await search_drug(q, city=city)
 
 
 @router.get("/api/v1/conversations")
+@limiter.limit("60/minute")
 async def get_conversations(
-    phone: str | None = None,
+    request: Request,
+    phone: str | None = Query(None, max_length=30),
     limit: int = Query(50, le=200),
 ) -> list[dict]:
     """View conversation logs for troubleshooting.
@@ -70,7 +81,11 @@ async def get_conversations(
 
 
 @router.get("/api/v1/users")
-async def get_users(limit: int = Query(50, le=200)) -> list[dict]:
+@limiter.limit("60/minute")
+async def get_users(
+    request: Request,
+    limit: int = Query(50, le=200),
+) -> list[dict]:
     """View registered users.
 
     Args:
@@ -106,13 +121,17 @@ async def get_users(limit: int = Query(50, le=200)) -> list[dict]:
 
 
 class IntentCreate(BaseModel):
-    action: str
-    keyword: str
-    response: str | None = None
+    action: str = Field(..., min_length=1, max_length=50)
+    keyword: str = Field(..., min_length=1, max_length=100)
+    response: str | None = Field(None, max_length=2000)
 
 
 @router.get("/api/v1/intents")
-async def get_intents(action: str | None = None) -> list[dict]:
+@limiter.limit("30/minute")
+async def get_intents(
+    request: Request,
+    action: str | None = Query(None, max_length=50),
+) -> list[dict]:
     """List all intent keywords, optionally filtered by action."""
     async with async_session() as session:
         query = select(IntentKeyword).order_by(IntentKeyword.action, IntentKeyword.keyword)
@@ -133,7 +152,8 @@ async def get_intents(action: str | None = None) -> list[dict]:
 
 
 @router.post("/api/v1/intents")
-async def create_intent(data: IntentCreate) -> dict:
+@limiter.limit("30/minute")
+async def create_intent(request: Request, data: IntentCreate) -> dict:
     """Add a new intent keyword."""
     async with async_session() as session:
         intent = IntentKeyword(
@@ -152,7 +172,11 @@ async def create_intent(data: IntentCreate) -> dict:
 
 
 @router.get("/api/v1/stats")
-async def get_stats(phone: str | None = None) -> dict:
+@limiter.limit("60/minute")
+async def get_stats(
+    request: Request,
+    phone: str | None = Query(None, max_length=30),
+) -> dict:
     """Usage statistics — global totals or per-user breakdown.
 
     Args:
@@ -235,7 +259,8 @@ async def get_stats(phone: str | None = None) -> dict:
 
 
 @router.delete("/api/v1/intents/{intent_id}")
-async def delete_intent(intent_id: int) -> dict:
+@limiter.limit("30/minute")
+async def delete_intent(request: Request, intent_id: int) -> dict:
     """Deactivate an intent keyword."""
     async with async_session() as session:
         result = await session.execute(
@@ -255,7 +280,8 @@ async def delete_intent(intent_id: int) -> dict:
 
 
 @router.get("/admin/user-stats/{user_id}", response_class=HTMLResponse)
-async def admin_user_stats(user_id: int) -> HTMLResponse:
+@limiter.limit("60/minute")
+async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
     """Render an HTML stats dashboard for a single user.
 
     Args:
@@ -294,6 +320,14 @@ async def admin_user_stats(user_id: int) -> HTMLResponse:
     costs = estimate_cost_breakdown(stats)
     success_rate = (successful_searches / total_searches * 100) if total_searches > 0 else 0
 
+    # All user-sourced values are HTML-escaped to prevent stored XSS
+    # (names and search queries come from WhatsApp and must not be trusted).
+    safe_name = escape(user.name or "Unknown")
+    safe_phone = escape(user.phone_number or "")
+    safe_zone = escape(user.zone_name or "—")
+    safe_city = escape(user.city_code or "—")
+    safe_title_name = escape(user.name or user.phone_number or "")
+
     # Build HTML
     searches_html = ""
     for s in recent_searches:
@@ -301,14 +335,14 @@ async def admin_user_stats(user_id: int) -> HTMLResponse:
         ts = s.searched_at.strftime("%Y-%m-%d %H:%M") if s.searched_at else "—"
         fb_class = "success" if fb == "yes" else ("danger" if fb == "no" else "")
         searches_html += (
-            f"<tr><td>{s.query}</td><td>{s.results_count}</td>"
-            f'<td class="{fb_class}">{fb}</td><td>{ts}</td></tr>'
+            f"<tr><td>{escape(s.query or '')}</td><td>{s.results_count}</td>"
+            f'<td class="{fb_class}">{escape(fb)}</td><td>{ts}</td></tr>'
         )
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>Stats — {user.name or user.phone_number}</title>
+    <title>Stats — {safe_title_name}</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                max-width: 900px; margin: 40px auto; padding: 0 20px; color: #333; }}
@@ -332,8 +366,8 @@ async def admin_user_stats(user_id: int) -> HTMLResponse:
 </head>
 <body>
     <a class="back" href="/admin/user/details/{user_id}">&larr; Back to User</a>
-    <h1>{user.name or "Unknown"} &mdash; Usage Stats</h1>
-    <p>Phone: {user.phone_number} &bull; Zone: {user.zone_name or "—"} &bull; City: {user.city_code or "—"}</p>
+    <h1>{safe_name} &mdash; Usage Stats</h1>
+    <p>Phone: {safe_phone} &bull; Zone: {safe_zone} &bull; City: {safe_city}</p>
 
     <div class="section">
         <h2>Activity</h2>
@@ -412,7 +446,7 @@ async def admin_user_stats(user_id: int) -> HTMLResponse:
 
     <div class="section" style="margin-top:40px; padding-top:16px; border-top:1px solid #e0e0e0; color:#888; font-size:12px;">
         FarmaFacil v{__version__} &bull;
-        <a href="/api/v1/stats?phone={user.phone_number}" style="color:#1a73e8;">JSON API</a>
+        <a href="/api/v1/stats?phone={safe_phone}" style="color:#1a73e8;">JSON API</a>
     </div>
 </body>
 </html>"""

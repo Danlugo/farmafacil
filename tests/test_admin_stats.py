@@ -147,3 +147,44 @@ class TestAdminUserStatsPage:
         body = response.text
         assert f"/api/v1/stats?phone={user.phone_number}" in body
         assert "JSON API" in body
+
+    @pytest.mark.asyncio
+    async def test_escapes_user_name_to_prevent_xss(self):
+        """User name containing a <script> tag must be HTML-escaped."""
+        user = await _create_test_user(
+            phone="5559910006", name="<script>alert(1)</script>"
+        )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/admin/user-stats/{user.id}")
+
+        body = response.text
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+    @pytest.mark.asyncio
+    async def test_escapes_search_query_to_prevent_xss(self):
+        """A malicious search query must be HTML-escaped in the recent list."""
+        user = await _create_test_user(phone="5559910007", name="XssQueryUser")
+        async with async_session() as session:
+            session.add(
+                SearchLog(
+                    user_id=user.id,
+                    query="<img src=x onerror=alert(1)>",
+                    results_count=0,
+                    feedback=None,
+                    source="bot",
+                )
+            )
+            await session.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/admin/user-stats/{user.id}")
+
+        body = response.text
+        assert "<img src=x onerror=alert(1)>" not in body
+        assert "&lt;img src=x onerror=alert(1)&gt;" in body

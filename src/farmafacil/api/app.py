@@ -5,9 +5,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from farmafacil import __version__
 from farmafacil.api.admin import setup_admin
+from farmafacil.api.limiter import limiter
 from farmafacil.api.routes import router
 from farmafacil.bot.webhook import webhook_router
 from farmafacil.config import LOG_LEVEL
@@ -42,6 +45,10 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    # Rate limiting (per-IP, in-memory) — see farmafacil.api.limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     app.include_router(router)
     app.include_router(webhook_router)

@@ -107,13 +107,19 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ### Item 23: API Input Validation & Rate Limiting
 
-- **Status:** PENDING
+- **Status:** DONE (v0.12.2, 2026-04-10)
 - **Added:** 2026-04-10
 - **Priority:** P2
 - **Problem:** No validation on search query (empty strings, excessive length accepted). No rate limiting on any API endpoint. Could be abused or cause unnecessary scraper load.
-- **Suggested solution:** Add Pydantic validation (min length 2, max length 200) on search query. Add basic rate limiting middleware (e.g., slowapi or custom). Validate phone number format on user-related endpoints.
-- **Affected files:** `src/farmafacil/api/routes.py`, `src/farmafacil/models/schemas.py`, `pyproject.toml`
-- **Effort:** Medium (2-3h)
+- **Solution shipped:**
+  - Added `slowapi>=0.1.9` dependency; shared `Limiter` instance in new `api/limiter.py` module (get_remote_address keyfunc).
+  - Wired limiter into `create_app()` with `RateLimitExceeded` exception handler.
+  - Added `Query(..., min_length=2, max_length=200)` on GET `/api/v1/search?q=`, `max_length=50` on `city`, `max_length=30` on `phone` filter params, `max_length=50` on `action` filter.
+  - Added `max_length=50` to `SearchRequest.city`; tightened `IntentCreate` with `min_length`/`max_length` on action, keyword, response.
+  - Applied per-endpoint rate limits: search 30/min, intents 30/min, stats/users/conversations/admin-stats 60/min. `/health` and `/webhook` remain unlimited (monitoring + Meta).
+  - Fixed stored XSS in `/admin/user-stats/{id}` HTML template: all user-sourced values (name, phone, zone, city, search query, feedback) now HTML-escaped via `html.escape()`.
+- **Files modified:** `pyproject.toml`, `src/farmafacil/api/limiter.py` (new), `src/farmafacil/api/app.py`, `src/farmafacil/api/routes.py`, `src/farmafacil/models/schemas.py`, `tests/test_rate_limiting.py` (new, 18 tests), `tests/test_admin_stats.py` (+2 XSS regression tests), `docs/api-reference.md`, `docs/deployment.md`.
+- **Notes:** `get_remote_address` reads `request.client.host`; behind ngrok all external users share one bucket. Acceptable for LAN deployment; revisit if public. WhatsApp bot users are unaffected — the bot handler calls `search_drug()` directly, bypassing HTTP routes.
 
 ### Item 24: WhatsApp Location Sharing Support
 

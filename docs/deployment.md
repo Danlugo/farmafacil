@@ -1,6 +1,6 @@
 # FarmaFacil — Deployment Guide
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-04-10
 
 ## Local Development
 
@@ -58,6 +58,12 @@ All variables live in `.env` (copy from `.env.example`).
 | App (Docker) | `8100` → container `8000` | Exposed via `docker compose` |
 | PostgreSQL (Docker) | `5433` → container `5432` | Data in `pgdata` named volume |
 | ngrok agent | `4040` | Admin UI for tunnel inspection |
+
+> **Rate limiting:** The app uses slowapi with in-memory storage, which is
+> keyed per-process. The Docker container runs a single uvicorn worker,
+> so per-IP counters are consistent. If the deployment is ever scaled to
+> multiple workers, slowapi must be reconfigured with a shared backend
+> (e.g., Redis) — otherwise each worker enforces limits independently.
 
 ### SSH Access
 

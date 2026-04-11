@@ -55,7 +55,9 @@ class SearchRequest(BaseModel):
         ..., min_length=2, max_length=200, description="Drug name to search for"
     )
     city: str | None = Field(
-        None, description="City for localized pricing (e.g., caracas, maracaibo)"
+        None,
+        max_length=50,
+        description="City for localized pricing (e.g., caracas, maracaibo)",
     )
 
 

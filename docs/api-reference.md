@@ -1,6 +1,6 @@
 # FarmaFacil — API Reference
 
-> Last Updated: 2026-04-08
+> Last Updated: 2026-04-10
 > Base URL (production): `https://amparo-chromophoric-christia.ngrok-free.dev`
 > Base URL (local dev): `http://localhost:8000`
 > Base URL (server direct): `http://10.0.0.116:8100`
@@ -8,6 +8,48 @@
 ## Authentication
 
 Most endpoints are unauthenticated (internal use). The admin dashboard at `/admin` requires HTTP Basic Auth (see [deployment.md](deployment.md) for credentials).
+
+## Rate Limiting
+
+All non-webhook, non-health endpoints are rate-limited per client IP via [slowapi](https://github.com/laurents/slowapi) (in-memory, single-worker). A client that exceeds the limit receives **HTTP 429 Too Many Requests**.
+
+| Endpoint | Limit |
+|----------|-------|
+| `GET/POST /api/v1/search` | 30 / minute |
+| `GET /api/v1/conversations` | 60 / minute |
+| `GET /api/v1/users` | 60 / minute |
+| `GET /api/v1/stats` | 60 / minute |
+| `GET /admin/user-stats/{id}` | 60 / minute |
+| `GET/POST/DELETE /api/v1/intents` | 30 / minute |
+| `GET /health` | unlimited (for monitoring) |
+| `GET/POST /webhook` | unlimited (Meta controls cadence) |
+
+**Notes:**
+- The WhatsApp bot handler calls `search_drug()` in-process and does NOT hit the HTTP routes, so bot users are never throttled.
+- Behind a reverse proxy (ngrok), `get_remote_address` returns the proxy IP — all external clients share one bucket. Acceptable for the LAN deployment; if exposed publicly, swap the key function for one that respects a trusted `X-Forwarded-For` header.
+
+## Input Validation
+
+All query parameters and request bodies are validated by FastAPI/Pydantic. Violations return **HTTP 422 Unprocessable Entity** with per-field detail. Bounds:
+
+| Field | Min | Max |
+|-------|-----|-----|
+| `q` (search query) | 2 | 200 |
+| `city` | — | 50 |
+| `phone` (filter) | — | 30 |
+| `action` (intent filter + body) | 1 | 50 |
+| `keyword` (intent body) | 1 | 100 |
+| `response` (intent body) | — | 2000 |
+
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 404 | Resource not found |
+| 422 | Validation failure (invalid query params, bad JSON body) |
+| 429 | Rate limit exceeded |
+| 500 | Server error (see logs) |
 
 ---
 
