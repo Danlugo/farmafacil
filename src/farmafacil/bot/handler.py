@@ -867,7 +867,7 @@ async def handle_incoming_message(
 
     if step == "awaiting_location":
         # Try to geocode — but also check if AI can extract location
-        intent = await classify_intent(text, user.id, user.name or "")
+        intent = await classify_intent(text, user.id, user.name or "", sender)
         location_text = intent.detected_location or text
 
         location = await geocode_zone(location_text)
@@ -1090,7 +1090,7 @@ async def handle_incoming_message(
             return
 
     # Classify intent (keywords first, AI fallback)
-    intent = await classify_intent(text, user.id, user.name or "")
+    intent = await classify_intent(text, user.id, user.name or "", sender)
     await increment_token_usage(user.id, intent.input_tokens, intent.output_tokens, model=LLM_MODEL)
 
     # Auto-update profile if LLM detected new info

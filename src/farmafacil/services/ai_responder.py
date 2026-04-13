@@ -154,17 +154,27 @@ async def generate_response(
     )
 
 
-async def classify_with_ai(message: str, user_id: int, user_name: str) -> AiResponse:
+async def classify_with_ai(
+    message: str,
+    user_id: int,
+    user_name: str,
+    phone_number: str | None = None,
+) -> AiResponse:
     """Classify a message and generate a response using AI.
 
     Used for complex messages that need both intent classification and
     a response. Returns structured data including detected name, location,
     and drug query alongside the response text.
 
+    When ``phone_number`` is provided, recent conversation history is
+    included so the AI has context for follow-up questions like "which
+    one is cheapest?" after a search.
+
     Args:
         message: The user's message text.
         user_id: The user's database ID.
         user_name: The user's display name.
+        phone_number: WhatsApp phone number for conversation history lookup.
 
     Returns:
         AiResponse with classification data and response text.
@@ -224,12 +234,34 @@ REGLAS:
         )
 
     try:
+        # Build messages list — include recent conversation history for
+        # follow-up context (e.g., "which is cheapest?" after a search).
+        messages: list[dict[str, str]] = []
+        if phone_number:
+            from farmafacil.services.conversation_log import get_recent_history
+
+            history = await get_recent_history(phone_number, limit=10)
+            # Anthropic requires alternating user/assistant roles.
+            # Deduplicate consecutive same-role messages by merging.
+            for msg in history:
+                if messages and messages[-1]["role"] == msg["role"]:
+                    messages[-1]["content"] += "\n" + msg["content"]
+                else:
+                    messages.append(dict(msg))
+
+        # Append the current message (it may already be in history from
+        # the inbound log, so replace the last user message if it matches)
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] = message
+        else:
+            messages.append({"role": "user", "content": message})
+
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
             model=LLM_MODEL,
             max_tokens=500,
             system=system_prompt,
-            messages=[{"role": "user", "content": message}],
+            messages=messages,
         )
         reply = response.content[0].text.strip()
         logger.info("AI classify for '%s': %s", message[:50], reply[:200])

@@ -59,6 +59,56 @@ async def log_inbound(
         await session.commit()
 
 
+async def get_recent_history(
+    phone_number: str, limit: int = 10,
+) -> list[dict[str, str]]:
+    """Fetch recent conversation messages for AI context.
+
+    Returns messages in chronological order as Anthropic-compatible
+    role/content dicts (``role`` = ``"user"`` for inbound,
+    ``"assistant"`` for outbound).  Skips debug footers, product-grid
+    captions, and admin messages to keep the context clean.
+
+    Args:
+        phone_number: WhatsApp phone number.
+        limit: Maximum messages to return (most recent N).
+
+    Returns:
+        List of ``{"role": "user"|"assistant", "content": "..."}`` dicts.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(ConversationLog)
+            .where(
+                ConversationLog.phone_number == phone_number,
+                ConversationLog.message_type.in_(["text"]),
+            )
+            .order_by(ConversationLog.id.desc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+
+    # Reverse to chronological order
+    rows = list(reversed(rows))
+
+    messages: list[dict[str, str]] = []
+    for row in rows:
+        text = row.message_text or ""
+        # Skip debug footers and empty messages
+        if not text.strip() or text.startswith("[product-grid]"):
+            continue
+        # Strip debug footer if present (everything after "---\n🔧 *DEBUG*")
+        if "\n---\n" in text and "DEBUG" in text:
+            text = text[:text.index("\n---\n")].strip()
+        if not text:
+            continue
+
+        role = "user" if row.direction == "inbound" else "assistant"
+        messages.append({"role": role, "content": text})
+
+    return messages
+
+
 async def log_outbound(
     phone_number: str,
     message_text: str,

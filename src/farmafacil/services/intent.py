@@ -129,7 +129,9 @@ async def classify_intent_keywords(text: str) -> Intent | None:
     return None
 
 
-async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
+async def classify_intent_ai(
+    text: str, user_id: int, user_name: str, phone_number: str = "",
+) -> Intent:
     """Use AI responder to classify intent and extract profile data.
 
     Delegates to the role-based AI system which loads its system prompt
@@ -139,13 +141,16 @@ async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
         text: User message text.
         user_id: The user's database ID.
         user_name: The user's display name.
+        phone_number: WhatsApp phone for conversation history context.
 
     Returns:
         Classified intent with optional drug name, name, location, or response.
     """
     from farmafacil.services.ai_responder import classify_with_ai
 
-    ai_result = await classify_with_ai(text, user_id, user_name)
+    ai_result = await classify_with_ai(
+        text, user_id, user_name, phone_number=phone_number or None
+    )
 
     return Intent(
         action=ai_result.action,
@@ -160,13 +165,16 @@ async def classify_intent_ai(text: str, user_id: int, user_name: str) -> Intent:
     )
 
 
-async def classify_intent(text: str, user_id: int = 0, user_name: str = "") -> Intent:
+async def classify_intent(
+    text: str, user_id: int = 0, user_name: str = "", phone_number: str = "",
+) -> Intent:
     """Classify user intent — DB keywords first, AI fallback.
 
     Args:
         text: User message text.
         user_id: The user's database ID (for AI fallback).
         user_name: The user's display name (for AI fallback).
+        phone_number: WhatsApp phone for conversation history context.
 
     Returns:
         Classified Intent.
@@ -179,4 +187,4 @@ async def classify_intent(text: str, user_id: int = 0, user_name: str = "") -> I
 
     # Ambiguous — use AI responder
     logger.info("Keyword detection inconclusive for '%s' — calling AI", text[:50])
-    return await classify_intent_ai(text, user_id, user_name)
+    return await classify_intent_ai(text, user_id, user_name, phone_number)
