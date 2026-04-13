@@ -8,6 +8,7 @@ products are counted and offered via "ver similares".
 import asyncio
 import logging
 import re
+from decimal import Decimal
 
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
@@ -284,6 +285,15 @@ async def search_drug(
                 "No exact match for '%s' — showing all %d results",
                 query, len(all_results),
             )
+
+    # Sort: in-stock products first, then by price (cheapest first)
+    if all_results:
+        all_results.sort(
+            key=lambda r: (
+                0 if r.available else 1,  # in-stock first
+                r.price_bs if r.price_bs is not None else Decimal("999999"),
+            )
+        )
 
     return SearchResponse(
         query=query,
