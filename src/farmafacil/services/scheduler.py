@@ -64,28 +64,36 @@ async def _backfill_stores(task: ScheduledTask) -> str:
 
 
 async def _rescore_products(task: ScheduledTask) -> str:
-    """Re-classify is_pharmaceutical on products with NULL flag."""
-    from sqlalchemy import func as sql_func
+    """Re-classify is_pharmaceutical on ALL products with a drug_class.
 
+    Runs ``classify_pharmaceutical`` against the current
+    ``NON_PHARMA_CATEGORIES`` set, so code changes (adding/removing
+    categories) are applied to existing products on the next scheduler
+    tick without manual SQL.  Only updates rows whose classification
+    actually changed.
+    """
     from farmafacil.models.database import Product
     from farmafacil.services.relevance import classify_pharmaceutical
 
     async with async_session() as session:
         result = await session.execute(
-            select(Product).where(
-                Product.is_pharmaceutical.is_(None),
-                Product.drug_class.is_not(None),
-            )
+            select(Product).where(Product.drug_class.is_not(None))
         )
         products = result.scalars().all()
         if not products:
-            return "No unclassified products"
+            return "No products with drug_class"
 
+        changed = 0
         for product in products:
-            product.is_pharmaceutical = classify_pharmaceutical(product.drug_class)
-        await session.commit()
+            new_value = classify_pharmaceutical(product.drug_class)
+            if product.is_pharmaceutical != new_value:
+                product.is_pharmaceutical = new_value
+                changed += 1
 
-    return f"Classified {len(products)} products"
+        if changed:
+            await session.commit()
+
+    return f"Checked {len(products)} products, reclassified {changed}"
 
 
 async def _cleanup_old_logs(task: ScheduledTask) -> str:
