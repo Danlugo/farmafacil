@@ -70,13 +70,14 @@ class TestSeedContentPolicy:
         """System prompt must contain the liability disclaimer."""
         seed = _get_pharmacy_seed()
         prompt = seed["system_prompt"]
-        assert "NUNCA recomiendes un medicamento específico" in prompt
+        assert "NUNCA prescribas" in prompt
+        assert "NUNCA sugieras dosis" in prompt
 
-    def test_system_prompt_allows_non_drug_recommendations(self):
-        """System prompt mentions non-drug product recommendations are OK."""
+    def test_system_prompt_allows_otc_mentions(self):
+        """System prompt allows mentioning OTC options."""
         seed = _get_pharmacy_seed()
-        prompt = seed["system_prompt"].lower()
-        assert "recomendar productos no medicinales" in prompt
+        prompt = seed["system_prompt"]
+        assert "opciones comunes de venta libre (OTC)" in prompt
 
     def test_no_drug_recommendations_rule_exists(self):
         """The no_drug_recommendations rule exists in seed."""
@@ -91,15 +92,22 @@ class TestSeedContentPolicy:
                 return
         pytest.fail("no_drug_recommendations rule not found")
 
-    def test_no_drug_recommendations_content_prohibits_recommendations(self):
-        """The rule content explicitly prohibits drug recommendations."""
+    def test_no_drug_recommendations_content_allows_otc_prohibits_prescribing(self):
+        """The rule allows OTC informing but prohibits prescribing."""
         seed = _get_pharmacy_seed()
         for rule in seed["rules"]:
             if rule["name"] == "no_drug_recommendations":
                 content = rule["content"]
-                assert "NUNCA recomiendes un medicamento" in content
                 assert "RESPONSABILIDAD LEGAL" in content
-                assert "NO digas 'te recomiendo" in content
+                # Allows OTC informing
+                assert "opciones comunes de venta libre (OTC)" in content
+                assert "Opciones OTC comunes por síntoma" in content
+                # Prohibits prescribing
+                assert "NO prescribas" in content
+                assert "NO sugieras dosis" in content
+                assert "NO diagnostiques" in content
+                # Requires disclaimer
+                assert "Consulta con tu médico" in content
                 return
         pytest.fail("no_drug_recommendations rule not found")
 
@@ -107,14 +115,16 @@ class TestSeedContentPolicy:
         """The non_drug_recommendations_ok rule exists in seed."""
         assert "non_drug_recommendations_ok" in _seed_rule_names()
 
-    def test_no_diagnosis_rewritten(self):
-        """no_diagnosis rule no longer tells AI to suggest drugs for symptoms."""
+    def test_no_diagnosis_prohibits_diagnosis_allows_otc(self):
+        """no_diagnosis rule prohibits diagnosing but allows naming OTC options."""
         seed = _get_pharmacy_seed()
         for rule in seed["rules"]:
             if rule["name"] == "no_diagnosis":
-                content = rule["content"].lower()
-                assert "sugiere medicamentos comunes" not in content
-                assert "no sugieras medicamentos" in content
+                content = rule["content"]
+                assert "NUNCA diagnostiques" in content
+                assert "No digas 'parece que tienes X'" in content
+                # Should reference the OTC rule, not block drug mentions
+                assert "opciones OTC" in content.lower() or "no_drug_recommendations" in content
                 return
         pytest.fail("no_diagnosis rule not found")
 
@@ -130,17 +140,21 @@ class TestSeedContentPolicy:
         """New symptom_acknowledgment skill exists in seed."""
         assert "symptom_acknowledgment" in _seed_skill_names()
 
-    def test_symptom_acknowledgment_does_not_map_symptoms_to_drugs(self):
-        """The new skill must NOT contain symptom→drug mapping tables."""
+    def test_symptom_acknowledgment_offers_otc_with_disclaimer(self):
+        """The symptom skill names OTC options and includes disclaimer + prohibitions."""
         seed = _get_pharmacy_seed()
         for skill in seed["skills"]:
             if skill["name"] == "symptom_acknowledgment":
                 content = skill["content"]
-                # The old skill had lines like "Dolor de cabeza → Aspirina, Acetaminofén"
-                assert "→ Aspirina" not in content
+                # Must offer OTC options
+                assert "opciones OTC comunes" in content.lower() or "opciones comunes de venta libre" in content.lower()
+                # Must include disclaimer
+                assert "Consulta con tu médico" in content
+                # Must still prohibit prescribing
+                assert "PROHIBIDO" in content
+                # Should NOT have old direct symptom→drug mapping tables
                 assert "→ Losartán" not in content
                 assert "→ Metformina" not in content
-                assert "PROHIBIDO" in content
                 return
         pytest.fail("symptom_acknowledgment skill not found")
 
@@ -197,8 +211,9 @@ class TestAssembledPromptPolicy:
         role = await get_role("pharmacy_advisor")
         assert role is not None
         prompt = assemble_prompt(role)
-        assert "NUNCA recomiendes un medicamento" in prompt
         assert "RESPONSABILIDAD LEGAL" in prompt
+        assert "NO prescribas" in prompt
+        assert "Consulta con tu médico" in prompt
 
 
 # ── sync_seeded_roles() tests ──────────────────────────────────────────
@@ -241,7 +256,7 @@ class TestSyncSeededRoles:
         _invalidate_role_cache()
         role = await get_role("pharmacy_advisor")
         assert role is not None
-        assert "NUNCA recomiendes un medicamento" in role.system_prompt
+        assert "NUNCA prescribas" in role.system_prompt
         assert "OLD STALE PROMPT" not in role.system_prompt
 
     @pytest.mark.asyncio
@@ -411,7 +426,8 @@ class TestSyncSeededRoles:
                 )
             )
             content = result.scalar_one()
-        assert "NUNCA recomiendes un medicamento" in content
+        assert "RESPONSABILIDAD LEGAL" in content
+        assert "NO prescribas" in content
 
 
 # ── locked_by_admin column tests ───────────────────────────────────────

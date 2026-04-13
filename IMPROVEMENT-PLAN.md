@@ -228,6 +228,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 39: OTC Drug Suggestions for Symptoms
+
+- **Status:** DONE (2026-04-13)
+- **Added:** 2026-04-13
+- **Completed:** 2026-04-13
+- **Problem:** The `no_drug_recommendations` rule (Item 37, v0.14.2) was too restrictive — it prohibited naming ANY drug for ANY symptom, causing the AI to say "no puedo recomendar, pregunta a tu médico" which is a dead end. Users expect the app to help them find drugs, not refuse to name them. The distinction should be: informing (naming common OTC options) is fine; prescribing (saying "you should take X") is not.
+- **Solution implemented:** Rewrote `no_drug_recommendations` rule to allow INFORMING (naming common OTC options for symptoms) while still prohibiting PRESCRIBING ("deberías tomar X"), DOSING, DIAGNOSING, and Rx suggestions. Added OTC symptom→drug mapping table (headache, cold, muscle pain, allergies, stomach, diarrhea). Updated `symptom_acknowledgment` skill to name OTC options and offer to search instead of dead-ending to "ask your doctor". Updated `no_diagnosis` rule to reference new OTC policy. Updated system prompt to reflect new capabilities. All changes synced via `sync_seeded_roles()` on startup.
+- **Files modified:** `src/farmafacil/db/seed.py` (system prompt + 2 rules + 1 skill), `tests/test_drug_liability.py` (8 assertions updated)
+- **Example new behavior:** User: "Tengo dolor de cabeza" → Bot: "Opciones comunes de venta libre son Acetaminofén, Ibuprofeno y Aspirina. ¿Quieres que te busque alguno? Consulta con tu médico para la opción más adecuada. 💊"
+
 ### Item 38: Search Relevance Filtering — "Learn Once, Serve Fast"
 
 - **Status:** DONE (2026-04-12)
