@@ -45,13 +45,12 @@ NON_PHARMA_CATEGORIES: set[str] = {
     "panales",
     # Cosmetics / beauty
     "mascaras",
-    "prot corporal",
-    "proteccion facial",
     "facial especializada",
     "nutritivas",
-    # Toys / novelty
-    "roblox",
-    # Preservativos are borderline — keep them as pharma for now
+    # NOTE: "roblox" is Farmatodo's internal code for throat lozenges
+    # (Bencidamina, Bucoxol), NOT the game — kept as pharma.
+    # NOTE: "prot corporal" / "proteccion facial" are sunscreen —
+    # legitimate pharmacy products users search for, kept as pharma.
 }
 
 # ---------------------------------------------------------------------------

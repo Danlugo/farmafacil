@@ -92,7 +92,8 @@ class TestClassifyPharmaceutical:
         assert classify_pharmaceutical("PANALES") is False
 
     def test_non_pharma_case_insensitive(self):
-        assert classify_pharmaceutical("Roblox") is False
+        # "Roblox" is Farmatodo's internal code for throat lozenges — pharma, not the game
+        assert classify_pharmaceutical("Roblox") is True
 
     def test_unknown_none(self):
         assert classify_pharmaceutical(None) is None
