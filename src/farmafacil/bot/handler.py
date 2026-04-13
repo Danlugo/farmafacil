@@ -226,7 +226,7 @@ MSG_ADMIN_WELCOME = (
     "de usuarios\n"
     "\u2022 */stats* — estadisticas de uso + costos\n"
     "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n"
-    "\u2022 */ai_simulate* — simular preguntas de un archivo (batch test)\n\n"
+    "\u2022 */simulate* — adjunta un archivo con preguntas + caption /simulate\n\n"
     "*Ejemplos de lo que puedo hacer:*\n"
     "\u2022 _Mostrame los ultimos 10 feedbacks pendientes_\n"
     "\u2022 _Ver caso #12_ / _Marcar caso #12 revisado_\n"
@@ -504,9 +504,18 @@ async def handle_image_message(
 
     data, actual_mime = result
 
-    # ── /ai_simulate batch mode: process file as question list ───────
-    if user.awaiting_clarification_context == "__ai_simulate__":
-        await set_awaiting_clarification(sender, None)
+    # ── /simulate command: file caption triggers batch simulation ─────
+    # Admin attaches a file with caption "/simulate" (or "/ai_simulate")
+    # and it runs the batch test in one step. Also supports the two-step
+    # flow where /ai_simulate was sent first (awaiting state).
+    caption_lower = (caption or "").strip().lower()
+    is_simulate = (
+        caption_lower in ("/simulate", "/ai_simulate")
+        or user.awaiting_clarification_context == "__ai_simulate__"
+    )
+    if is_simulate and user.admin_mode_active and await is_chat_admin(sender):
+        if user.awaiting_clarification_context == "__ai_simulate__":
+            await set_awaiting_clarification(sender, None)
         await _run_batch_simulation(sender, user, data, actual_mime, caption)
         return
 
