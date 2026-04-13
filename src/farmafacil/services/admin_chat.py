@@ -955,6 +955,19 @@ async def _tool_list_code(args: dict[str, Any]) -> str:
 # Mapping: tool name → (description shown in manifest, coroutine)
 ToolFn = "Callable[[dict[str, Any]], Awaitable[str]]"  # type: ignore[name-defined]
 
+# ── Web search tool ─────────────────────────────────────────────────────
+
+
+async def _tool_web_search(args: dict[str, Any]) -> str:
+    """Search the web via Brave Search API."""
+    from farmafacil.services.web_search import web_search
+
+    query = args.get("query", "").strip()
+    if not query:
+        return "Error: query es requerido."
+    return await web_search(query)
+
+
 # ── Scheduler tools ─────────────────────────────────────────────────────
 
 
@@ -1152,6 +1165,10 @@ TOOLS: dict[str, tuple[str, Any]] = {
     "list_code": (
         "Listar directorio del proyecto (allowlist). Args: path?",
         _tool_list_code,
+    ),
+    "web_search": (
+        "Buscar en internet via Brave Search API. Args: query (str)",
+        _tool_web_search,
     ),
     "list_scheduled_tasks": (
         "Listar todas las tareas programadas con su estado, intervalo, y "

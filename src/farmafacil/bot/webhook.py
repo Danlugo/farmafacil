@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Query, Request, Response
 
 from farmafacil.bot.handler import (
+    handle_image_message,
     handle_incoming_message,
     handle_list_reply,
     handle_location_message,
@@ -160,20 +161,47 @@ async def receive_webhook(request: Request) -> dict:
                         )
 
                 elif msg_type == "image":
-                    logger.info("Received image from %s", sender)
+                    image_data = message.get("image", {})
+                    media_id = image_data.get("id", "")
+                    caption = image_data.get("caption", "")
+                    mime_type = image_data.get("mime_type", "image/jpeg")
+                    logger.info(
+                        "Received image from %s: media_id=%s caption=%s",
+                        sender, media_id, caption[:50] if caption else "",
+                    )
                     await log_inbound(
                         phone_number=sender,
-                        message_text="[imagen]",
+                        message_text=f"[imagen] {caption}" if caption else "[imagen]",
                         message_type="image",
                         wa_message_id=wa_id,
                     )
-                    await send_text_message(
-                        sender,
-                        "\U0001f4f7 Recibimos tu imagen!\n\n"
-                        "La funcion de reconocimiento de recetas y productos "
-                        "por foto estara disponible pronto.\n\n"
-                        "Por ahora, enviame el *nombre del medicamento* por texto.",
+                    if media_id:
+                        await handle_image_message(
+                            sender, media_id, mime_type,
+                            caption=caption, wa_message_id=wa_id,
+                        )
+
+                elif msg_type == "document":
+                    doc_data = message.get("document", {})
+                    media_id = doc_data.get("id", "")
+                    mime_type = doc_data.get("mime_type", "")
+                    filename = doc_data.get("filename", "")
+                    caption = doc_data.get("caption", "")
+                    logger.info(
+                        "Received document from %s: %s (%s)",
+                        sender, filename, mime_type,
                     )
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=f"[documento] {filename}" if filename else "[documento]",
+                        message_type="document",
+                        wa_message_id=wa_id,
+                    )
+                    if media_id:
+                        await handle_image_message(
+                            sender, media_id, mime_type,
+                            caption=caption or filename, wa_message_id=wa_id,
+                        )
 
                 else:
                     logger.info("Received %s message from %s", msg_type, sender)

@@ -48,6 +48,9 @@ MODEL_ALIASES: dict[str, str] = {
     "opus": LLM_MODEL_OPUS,
 }
 
+# Web search (Brave API — admin chat tool)
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
+
 # Admin dashboard
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "LetsGoChiguires")

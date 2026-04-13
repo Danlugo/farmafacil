@@ -495,7 +495,7 @@ def _parse_admin_action(reply: str) -> tuple[str, dict[str, str]]:
 
 
 async def run_admin_turn(
-    user_message: str,
+    user_message: str | list[dict],
     system_prompt: str,
     history: list[dict[str, str]] | None = None,
     *,
@@ -557,7 +557,7 @@ async def run_admin_turn(
         if (
             isinstance(m, dict)
             and m.get("role") in ("user", "assistant")
-            and isinstance(m.get("content"), str)
+            and (isinstance(m.get("content"), (str, list)))
         ):
             messages.append({"role": m["role"], "content": m["content"]})
         else:
@@ -566,6 +566,7 @@ async def run_admin_turn(
         logger.warning(
             "run_admin_turn: dropped %d malformed history element(s)", dropped,
         )
+    # user_message can be a str or a list of content blocks (for images)
     messages.append({"role": "user", "content": user_message})
 
     total_in = 0

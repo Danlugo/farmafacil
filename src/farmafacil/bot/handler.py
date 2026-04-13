@@ -458,6 +458,275 @@ async def _update_memory_safe(
         logger.error("Memory update failed (non-blocking)", exc_info=True)
 
 
+async def handle_image_message(
+    sender: str,
+    media_id: str,
+    mime_type: str,
+    caption: str = "",
+    wa_message_id: str | None = None,
+) -> None:
+    """Handle an image or document sent via WhatsApp.
+
+    For regular users: uses Claude Vision to read drug names from
+    prescription photos / drug box images, then searches automatically.
+
+    For admin users in admin mode: passes the image to the admin AI
+    for analysis (screenshots, documents, etc.).
+
+    Args:
+        sender: WhatsApp phone number.
+        media_id: WhatsApp media ID for downloading.
+        mime_type: MIME type of the media.
+        caption: Optional caption text from the user.
+        wa_message_id: WhatsApp message ID for read receipts.
+    """
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        download_whatsapp_media,
+        encode_image_for_vision,
+        extract_text_from_document,
+    )
+
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    user = await get_or_create_user(sender)
+
+    # Download the media
+    result = await download_whatsapp_media(media_id)
+    if result is None:
+        await send_text_message(
+            sender,
+            "No pude descargar el archivo. Intenta de nuevo o envia el nombre por texto.",
+        )
+        return
+
+    data, actual_mime = result
+
+    # ── Admin mode: pass image/document to admin AI ──────────────────
+    if user.admin_mode_active and await is_chat_admin(sender):
+        await _handle_admin_media(sender, user, data, actual_mime, caption)
+        return
+
+    # ── Regular user: image → Vision → drug name → search ────────────
+    if actual_mime in SUPPORTED_IMAGE_TYPES:
+        image_block = encode_image_for_vision(data, actual_mime)
+        if image_block is None:
+            await send_text_message(
+                sender,
+                "La imagen es demasiado grande o no es compatible. "
+                "Intenta con una foto más pequeña o envia el nombre por texto.",
+            )
+            return
+
+        await send_text_message(
+            sender,
+            "\U0001f50d Analizando la imagen para identificar el medicamento...",
+        )
+
+        drug_name = await _extract_drug_name_from_image(image_block, caption)
+        if not drug_name:
+            await send_text_message(
+                sender,
+                "No pude identificar un medicamento en la imagen. "
+                "Intenta con una foto más clara o envia el nombre por texto.",
+            )
+            return
+
+        await send_text_message(
+            sender,
+            f"\U0001f4ca Encontre: *{drug_name}*. Buscando disponibilidad...",
+        )
+
+        # Trigger a drug search with the extracted name
+        await handle_incoming_message(sender, drug_name)
+        return
+
+    # ── Document (PDF/DOCX) — extract text for drug names ────────────
+    text = await extract_text_from_document(data, actual_mime)
+    if text:
+        # Try to find drug names in the extracted text using AI
+        await send_text_message(
+            sender,
+            "\U0001f4c4 Leyendo el documento para identificar medicamentos...",
+        )
+        drug_name = await _extract_drug_name_from_text(text)
+        if drug_name:
+            await send_text_message(
+                sender,
+                f"\U0001f4ca Encontre: *{drug_name}*. Buscando disponibilidad...",
+            )
+            await handle_incoming_message(sender, drug_name)
+            return
+
+    # Unsupported or couldn't process
+    await send_text_message(
+        sender,
+        "\U0001f4f7 Recibimos tu archivo, pero no pudimos extraer un nombre "
+        "de medicamento. Envia el *nombre del producto* por texto y te lo busco.",
+    )
+
+
+async def _extract_drug_name_from_image(
+    image_block: dict, caption: str = "",
+) -> str | None:
+    """Use Claude Vision to extract a drug name from a photo.
+
+    Sends the image to Claude with a targeted prompt asking for
+    the drug name visible in the image (prescription, drug box, label).
+
+    Returns:
+        The drug name string, or None if not found.
+    """
+    import anthropic
+
+    from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    content: list[dict] = [image_block]
+    user_text = (
+        "Mira esta imagen. Identifica el nombre del medicamento o producto "
+        "de farmacia que aparece. Responde SOLO con el nombre del producto "
+        "(sin dosis, sin marca, solo el nombre genérico o comercial principal). "
+        "Si hay varios, responde con el más prominente. "
+        "Si no puedes identificar ningún medicamento, responde: NONE"
+    )
+    if caption:
+        user_text += f"\n\nEl usuario también escribió: {caption}"
+
+    content.append({"type": "text", "text": user_text})
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=100,
+            messages=[{"role": "user", "content": content}],
+        )
+        reply = response.content[0].text.strip()
+        logger.info("Vision drug extraction: %s", reply[:100])
+
+        if reply.upper() == "NONE" or len(reply) > 100:
+            return None
+        return reply
+
+    except Exception as exc:
+        logger.error("Vision drug extraction failed: %s", exc)
+        return None
+
+
+async def _extract_drug_name_from_text(text: str) -> str | None:
+    """Use AI to extract a drug name from document text."""
+    import anthropic
+
+    from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    # Only send the first 2000 chars to keep the call cheap
+    snippet = text[:2000]
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=100,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Este es el texto extraído de un documento médico o receta. "
+                    "Identifica el medicamento principal mencionado. "
+                    "Responde SOLO con el nombre del medicamento "
+                    "(sin dosis ni instrucciones). "
+                    "Si hay varios, responde con el primero. "
+                    "Si no encuentras ninguno, responde: NONE\n\n"
+                    f"Texto del documento:\n{snippet}"
+                ),
+            }],
+        )
+        reply = response.content[0].text.strip()
+        logger.info("Document drug extraction: %s", reply[:100])
+
+        if reply.upper() == "NONE" or len(reply) > 100:
+            return None
+        return reply
+
+    except Exception as exc:
+        logger.error("Document drug extraction failed: %s", exc)
+        return None
+
+
+async def _handle_admin_media(
+    sender: str,
+    user,
+    data: bytes,
+    mime_type: str,
+    caption: str = "",
+) -> None:
+    """Handle media in admin mode — pass to admin AI for analysis."""
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        encode_image_for_vision,
+        extract_text_from_document,
+    )
+
+    if mime_type in SUPPORTED_IMAGE_TYPES:
+        image_block = encode_image_for_vision(data, mime_type)
+        if image_block is None:
+            await send_text_message(sender, "Imagen demasiado grande o formato no soportado.")
+            return
+
+        # Build admin turn with image
+        role = await get_role("app_admin")
+        if not role:
+            await send_text_message(sender, "Admin role not found.")
+            return
+
+        tools_manifest = build_tools_manifest()
+        system_prompt = assemble_prompt(role) + "\n\n" + tools_manifest
+
+        user_content: list[dict] = [image_block]
+        if caption:
+            user_content.append({"type": "text", "text": caption})
+        else:
+            user_content.append({"type": "text", "text": "Analiza esta imagen."})
+
+        # Run admin turn with image content
+        admin_result = await run_admin_turn(
+            user_message=user_content,
+            system_prompt=system_prompt,
+            admin_user_id=user.id,
+        )
+
+        if admin_result.text:
+            await send_text_message(sender, admin_result.text)
+            await log_outbound_conv(sender, admin_result.text, message_type="admin_out")
+
+        await increment_token_usage(
+            sender,
+            admin_result.tokens_in,
+            admin_result.tokens_out,
+            is_admin=True,
+            model="opus",
+        )
+        return
+
+    # Document in admin mode — extract text and pass as context
+    text = await extract_text_from_document(data, mime_type)
+    if text:
+        await handle_incoming_message(
+            sender,
+            f"[Documento adjunto — contenido extraído]:\n{text[:3000]}",
+        )
+    else:
+        await send_text_message(
+            sender, "No pude extraer texto de este documento.",
+        )
+
+
 async def handle_location_message(
     sender: str,
     latitude: float,
