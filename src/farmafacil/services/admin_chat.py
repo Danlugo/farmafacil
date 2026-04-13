@@ -955,6 +955,151 @@ async def _tool_list_code(args: dict[str, Any]) -> str:
 # Mapping: tool name → (description shown in manifest, coroutine)
 ToolFn = "Callable[[dict[str, Any]], Awaitable[str]]"  # type: ignore[name-defined]
 
+# ── File management tools ───────────────────────────────────────────────
+
+
+async def _tool_list_files(args: dict[str, Any]) -> str:
+    """List files in user folder or project docs."""
+    from farmafacil.services.file_manager import list_files
+
+    scope = args.get("scope", "user")
+    phone = args.get("phone")
+    # If no phone given for user scope, use the admin's phone
+    admin_id = args.get("_admin_user_id")
+    if scope == "user" and not phone and admin_id:
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.id == admin_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                phone = user.phone_number
+    return list_files(phone=phone, scope=scope)
+
+
+async def _tool_read_file(args: dict[str, Any]) -> str:
+    """Read a file's content."""
+    from farmafacil.services.file_manager import read_file
+
+    path = args.get("path", "")
+    phone = args.get("phone")
+    admin_id = args.get("_admin_user_id")
+    if not phone and admin_id:
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.id == admin_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                phone = user.phone_number
+    return read_file(path, phone=phone)
+
+
+async def _tool_write_file(args: dict[str, Any]) -> str:
+    """Create or overwrite a file."""
+    from farmafacil.services.file_manager import write_file
+
+    path = args.get("path", "")
+    content = args.get("content", "")
+    phone = args.get("phone")
+    admin_id = args.get("_admin_user_id")
+    if not phone and admin_id:
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.id == admin_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                phone = user.phone_number
+    if not path:
+        return "Error: path es requerido."
+    return write_file(path, content, phone=phone)
+
+
+async def _tool_delete_file(args: dict[str, Any]) -> str:
+    """Delete a file (user scope only)."""
+    from farmafacil.services.file_manager import delete_file
+
+    path = args.get("path", "")
+    phone = args.get("phone")
+    admin_id = args.get("_admin_user_id")
+    if not phone and admin_id:
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.id == admin_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                phone = user.phone_number
+    if not path:
+        return "Error: path es requerido."
+    return delete_file(path, phone=phone)
+
+
+async def _tool_batch_simulate(args: dict[str, Any]) -> str:
+    """Run a batch of questions through the pharmacy AI and save results.
+
+    Reads a file with one question per line, runs each through
+    classify_with_ai (pharmacy_advisor role), and saves the results
+    to an output file in the admin's user folder.
+    """
+    from farmafacil.services.ai_responder import classify_with_ai
+    from farmafacil.services.file_manager import read_file, write_file
+
+    input_path = args.get("input_file", "")
+    output_path = args.get("output_file", "batch_results.txt")
+
+    admin_id = args.get("_admin_user_id")
+    phone = None
+    user_name = "TestUser"
+    if admin_id:
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.id == admin_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                phone = user.phone_number
+                user_name = user.name or "TestUser"
+
+    if not input_path:
+        return "Error: input_file es requerido (path al archivo con preguntas, una por línea)."
+
+    content = read_file(input_path, phone=phone)
+    if content.startswith("Error:") or content.startswith("File not found"):
+        return content
+
+    questions = [q.strip() for q in content.strip().split("\n") if q.strip()]
+    if not questions:
+        return "Error: el archivo está vacío o no tiene preguntas."
+
+    lines = [f"Batch simulation — {len(questions)} questions\n{'='*50}\n"]
+
+    for i, question in enumerate(questions, 1):
+        try:
+            result = await classify_with_ai(
+                question, admin_id or 0, user_name,
+            )
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"ACTION: {result.action}")
+            if result.drug_query:
+                lines.append(f"DRUG: {result.drug_query}")
+            if result.text:
+                lines.append(f"RESPONSE: {result.text}")
+            if result.clarify_question:
+                lines.append(f"CLARIFY: {result.clarify_question}")
+            lines.append("")
+        except Exception as exc:
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"ERROR: {exc}")
+            lines.append("")
+
+    output = "\n".join(lines)
+    write_result = write_file(output_path, output, phone=phone)
+
+    return f"Simulación completada: {len(questions)} preguntas. {write_result}"
+
+
 # ── Web search tool ─────────────────────────────────────────────────────
 
 
@@ -1165,6 +1310,28 @@ TOOLS: dict[str, tuple[str, Any]] = {
     "list_code": (
         "Listar directorio del proyecto (allowlist). Args: path?",
         _tool_list_code,
+    ),
+    "list_files": (
+        "Listar archivos en carpeta de usuario o docs del proyecto. "
+        "Args: scope ('user'|'docs'), phone? (default: admin's phone)",
+        _tool_list_files,
+    ),
+    "read_file": (
+        "Leer contenido de un archivo. Args: path (user:file, docs/file, project:file), phone?",
+        _tool_read_file,
+    ),
+    "write_file": (
+        "Crear o sobrescribir un archivo. Args: path, content, phone?",
+        _tool_write_file,
+    ),
+    "delete_file": (
+        "Eliminar un archivo (solo carpeta de usuario). Args: path, phone?",
+        _tool_delete_file,
+    ),
+    "batch_simulate": (
+        "Ejecutar preguntas de un archivo por el AI de farmacia y guardar resultados. "
+        "Args: input_file (path), output_file? (default: batch_results.txt)",
+        _tool_batch_simulate,
     ),
     "web_search": (
         "Buscar en internet via Brave Search API. Args: query (str)",

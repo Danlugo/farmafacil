@@ -225,7 +225,8 @@ MSG_ADMIN_WELCOME = (
     "\u2022 */model haiku|sonnet|opus* — cambiar modelo default "
     "de usuarios\n"
     "\u2022 */stats* — estadisticas de uso + costos\n"
-    "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n\n"
+    "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n"
+    "\u2022 */ai_simulate* — simular preguntas de un archivo (batch test)\n\n"
     "*Ejemplos de lo que puedo hacer:*\n"
     "\u2022 _Mostrame los ultimos 10 feedbacks pendientes_\n"
     "\u2022 _Ver caso #12_ / _Marcar caso #12 revisado_\n"
@@ -503,6 +504,12 @@ async def handle_image_message(
 
     data, actual_mime = result
 
+    # ── /ai_simulate batch mode: process file as question list ───────
+    if user.awaiting_clarification_context == "__ai_simulate__":
+        await set_awaiting_clarification(sender, None)
+        await _run_batch_simulation(sender, user, data, actual_mime, caption)
+        return
+
     # ── Admin mode: pass image/document to admin AI ──────────────────
     if user.admin_mode_active and await is_chat_admin(sender):
         await _handle_admin_media(sender, user, data, actual_mime, caption)
@@ -725,6 +732,100 @@ async def _handle_admin_media(
         await send_text_message(
             sender, "No pude extraer texto de este documento.",
         )
+
+
+async def _run_batch_simulation(
+    sender: str,
+    user,
+    data: bytes,
+    mime_type: str,
+    caption: str = "",
+) -> None:
+    """Run batch AI simulation from an uploaded file.
+
+    Extracts text from the file (txt/pdf/docx), splits into questions
+    (one per line), runs each through classify_with_ai, and sends
+    results back as a WhatsApp message + saves to user's file folder.
+    """
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        extract_text_from_document,
+    )
+    from farmafacil.services.ai_responder import classify_with_ai
+    from farmafacil.services.file_manager import write_file
+
+    # Extract text from the file
+    if mime_type == "text/plain":
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("latin-1")
+    elif mime_type in SUPPORTED_IMAGE_TYPES:
+        await send_text_message(
+            sender,
+            "Para /ai_simulate necesito un archivo de texto (.txt, .pdf, .docx), no una imagen.",
+        )
+        return
+    else:
+        text = await extract_text_from_document(data, mime_type)
+
+    if not text:
+        await send_text_message(
+            sender,
+            "No pude extraer texto del archivo. Usa .txt, .pdf o .docx con una pregunta por línea.",
+        )
+        return
+
+    questions = [q.strip() for q in text.strip().split("\n") if q.strip()]
+    if not questions:
+        await send_text_message(sender, "El archivo está vacío.")
+        return
+
+    await send_text_message(
+        sender,
+        f"\U0001f9ea Iniciando simulación con *{len(questions)} preguntas*...\n"
+        "Esto puede tomar unos minutos.",
+    )
+
+    user_name = user.name or "TestUser"
+    lines = [f"Batch Simulation — {len(questions)} questions\n{'='*50}\n"]
+
+    for i, question in enumerate(questions, 1):
+        try:
+            result = await classify_with_ai(question, user.id, user_name)
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"  ACTION: {result.action}")
+            if result.drug_query:
+                lines.append(f"  DRUG: {result.drug_query}")
+            if result.text:
+                lines.append(f"  RESPONSE: {result.text}")
+            if result.clarify_question:
+                lines.append(f"  CLARIFY: {result.clarify_question}")
+            lines.append("")
+        except Exception as exc:
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"  ERROR: {exc}")
+            lines.append("")
+
+    output = "\n".join(lines)
+
+    # Save to user's file folder
+    write_result = write_file("batch_results.txt", output, phone=sender)
+    logger.info("Batch simulation for %s: %d questions. %s", sender, len(questions), write_result)
+
+    # Send summary via WhatsApp (truncate if too long for a single message)
+    if len(output) > 4000:
+        summary = output[:4000] + "\n\n... (resultado completo guardado en batch_results.txt)"
+    else:
+        summary = output
+
+    await send_text_message(sender, summary)
+    await send_text_message(
+        sender,
+        f"\u2705 Simulación completada. {write_result}\n"
+        "Usa el admin chat para leer el archivo completo: "
+        "\"lee mi archivo batch_results.txt\"",
+    )
 
 
 async def handle_location_message(
@@ -986,6 +1087,19 @@ async def handle_incoming_message(
         # Model commands are only valid while admin mode is active so
         # regular users can never change the default model by accident.
         if await _handle_model_commands(sender, text):
+            return
+        # /ai_simulate — batch test the pharmacy AI with a file of questions
+        if text_lower == "/ai_simulate":
+            await send_text_message(
+                sender,
+                "\U0001f9ea *Modo simulación activado.*\n\n"
+                "Envía un archivo (.txt, .pdf, .docx) con una pregunta por línea. "
+                "Ejecutaré cada pregunta como si fuera un usuario real y te "
+                "devuelvo los resultados.\n\n"
+                "Para cancelar, escribe */admin* o cualquier otro mensaje.",
+            )
+            # Store state — next file upload triggers batch simulation
+            await set_awaiting_clarification(sender, "__ai_simulate__")
             return
         # Any other message goes through the Opus tool loop. Resolve
         # debug flag up-front so the admin helper can append a footer.
