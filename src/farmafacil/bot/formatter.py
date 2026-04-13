@@ -126,7 +126,10 @@ def format_search_results(response: SearchResponse) -> str:
         )
 
     product_groups = _group_by_product(response.results)
-    pharmacies = ", ".join(response.searched_pharmacies)
+    pharmacies = ", ".join(
+        p.replace(" (cache)", "").replace(" (catalogo)", "")
+        for p in response.searched_pharmacies
+    )
     zone_label = f" cerca de *{response.zone}*" if response.zone else ""
 
     header = (
