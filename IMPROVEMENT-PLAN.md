@@ -228,6 +228,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 40: Remove Grid Image Mode — Individual Product Images Only
+
+- **Status:** DONE (2026-04-13)
+- **Added:** 2026-04-13
+- **Completed:** 2026-04-13
+- **Problem:** The composite grid image (multiple products stitched into one tall JPEG) looked bad on WhatsApp — tiny thumbnails that users couldn't read or tap. User feedback: "the images look bad, need to change the concept." Individual product images (each as its own WhatsApp message) look much better — full-width, tappable, native WhatsApp rendering.
+- **Solution implemented:** Removed `grid` display mode entirely. Always sends individual product images (what was previously the `detail` mode). Removed `_send_grid_image()`, `_parse_preference()`, `generate_product_grid` import, `os` import. Removed `awaiting_preference` onboarding step — users go from location straight to ready (one fewer question during onboarding). Legacy users stuck in `awaiting_preference` get step cleared on next message. Removed `preference_change` keyword handler. Updated `MSG_RETURNING` to remove preference reference. `_send_detail_images` now reads `max_detail_products` from AppSetting (default 3). Updated `update_user_location` to set step to `None` instead of `awaiting_preference`. `image_grid.py` still exists but is no longer imported — safe to delete in future cleanup.
+- **Files modified:** `src/farmafacil/bot/handler.py` (major — removed grid path, preference step, simplified onboarding), `src/farmafacil/services/users.py` (onboarding step change), `src/farmafacil/services/intent.py` (removed preference command from help), `tests/test_handler.py` (3 tests updated), `tests/test_feedback_suppression.py` (4 mock patches updated), `tests/test_location_sharing.py` (1 test updated)
+- **Test count:** 703 → 702 (-1: 2 preference tests replaced with 1 legacy-clear test)
+
 ### Item 39: OTC Drug Suggestions for Symptoms
 
 - **Status:** DONE (2026-04-13)

@@ -96,7 +96,7 @@ async def update_user_location(
         user.longitude = longitude
         user.zone_name = zone_name
         user.city_code = city_code
-        user.onboarding_step = "awaiting_preference"
+        user.onboarding_step = None
         await session.commit()
         await session.refresh(user)
         logger.info("User %s location: %s (%s)", phone_number, zone_name, city_code)

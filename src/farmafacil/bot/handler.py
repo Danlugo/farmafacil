@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -11,7 +10,6 @@ from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 from farmafacil.bot.whatsapp import (
     send_image_message,
     send_interactive_list,
-    send_local_image,
     send_read_receipt,
     send_text_message,
 )
@@ -26,7 +24,6 @@ from farmafacil.services.admin_chat import build_tools_manifest
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone, reverse_geocode
-from farmafacil.services.image_grid import generate_product_grid
 from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
 from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
 from farmafacil.services.search_feedback import (
@@ -116,11 +113,10 @@ MSG_LOCATION_PIN_NOT_FOUND = (
 MSG_INVALID_PREFERENCE = "Responde *1* para imagen grande o *2* para galeria."
 
 MSG_RETURNING = (
-    "\U0001f48a *Hola {name}!* Buscando en *{zone}* (_{pref}_).\n\n"
+    "\U0001f48a *Hola {name}!* Buscando en *{zone}*.\n\n"
     "Enviame el nombre de un producto de farmacia.\n\n"
     "\U0001f527 _Comandos:_\n"
     "\u2022 _cambiar zona_ — nueva ubicacion\n"
-    "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
     "\u2022 _cambiar nombre_ — actualizar nombre\n"
     "\u2022 _ayuda_ — instrucciones"
 )
@@ -535,11 +531,10 @@ async def handle_location_message(
         return
 
     # Still onboarding? (prior step was welcome / awaiting_name /
-    # awaiting_location). Continue onboarding by asking for a display
-    # preference — ``update_user_location`` already advanced the step.
+    # awaiting_location). Onboarding is now complete after location.
     if prior_step is not None:
         await send_text_message(
-            sender, MSG_ASK_PREFERENCE.format(zone=user.zone_name),
+            sender, MSG_READY.format(name=user.name or "amigo"),
         )
         return
 
@@ -862,9 +857,8 @@ async def handle_incoming_message(
                     sender, location["lat"], location["lng"],
                     location["zone_name"], location["city"],
                 )
-                # Skip to preference
                 await send_text_message(
-                    sender, MSG_ASK_PREFERENCE.format(zone=user.zone_name)
+                    sender, MSG_READY.format(name=user.name or "amigo")
                 )
                 return
 
@@ -883,22 +877,18 @@ async def handle_incoming_message(
                 location["zone_name"], location["city"],
             )
             await send_text_message(
-                sender, MSG_ASK_PREFERENCE.format(zone=user.zone_name)
+                sender, MSG_READY.format(name=user.name or "amigo")
             )
         else:
             await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
         return
 
     if step == "awaiting_preference":
-        pref = _parse_preference(text_lower)
-        if pref:
-            user = await update_user_preference(sender, pref)
-            await send_text_message(
-                sender, MSG_READY.format(name=user.name or "amigo")
-            )
-        else:
-            await send_text_message(sender, MSG_INVALID_PREFERENCE)
-        return
+        # Legacy: users stuck in this state from pre-v0.15.2 onboarding.
+        # Clear the step and let them proceed normally.
+        await set_onboarding_step(sender, None)
+        # Fall through to normal message handling
+        step = None
 
     if step == "awaiting_feedback":
         feedback = parse_feedback(text)
@@ -1079,10 +1069,6 @@ async def handle_incoming_message(
             await set_onboarding_step(sender, "awaiting_location")
             await send_text_message(sender, MSG_ASK_NEW_LOCATION)
             return
-        if action == "preference_change":
-            await set_onboarding_step(sender, "awaiting_preference")
-            await send_text_message(sender, MSG_ASK_NEW_PREFERENCE)
-            return
         if action == "name_change":
             await set_onboarding_step(sender, "awaiting_name")
             await send_text_message(sender, MSG_ASK_NEW_NAME)
@@ -1136,13 +1122,10 @@ async def handle_incoming_message(
         if menu_setting == "true":
             await _send_category_list(sender, display_name)
         else:
-            pref_label = (
-                "galeria" if user.display_preference == "grid" else "imagen grande"
-            )
             await send_text_message(
                 sender,
                 MSG_RETURNING.format(
-                    name=display_name, zone=user.zone_name, pref=pref_label,
+                    name=display_name, zone=user.zone_name,
                 ),
             )
 
@@ -1311,12 +1294,9 @@ async def _handle_drug_search(
     search_log_id = await log_search(user.id, query, results_count)
     await update_last_search(sender, query, search_log_id)
 
-    # Send grid/detail image FIRST, then text summary below
+    # Send individual product images FIRST, then text summary below
     if response.results:
-        if user.display_preference == "detail":
-            await _send_detail_images(sender, response.results)
-        else:
-            await _send_grid_image(sender, response)
+        await _send_detail_images(sender, response.results)
 
     reply = format_search_results(response)
     if debug_on:
@@ -1438,43 +1418,19 @@ def _is_valid_name(name: str) -> bool:
     return True
 
 
-def _parse_preference(text: str) -> str | None:
-    """Parse user's display preference response."""
-    if text in ("1", "imagen grande", "imagen", "grande", "detalle", "detail"):
-        return "detail"
-    if text in ("2", "galeria", "galería", "grid", "grilla", "varios"):
-        return "grid"
-    return None
-
-
 async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
-    """Send individual product images with rich captions (top 3)."""
-    for result in results[:3]:
+    """Send individual product images with rich captions.
+
+    Each product gets its own WhatsApp image message so users can tap
+    to zoom.  Capped at ``max_detail_products`` app setting (default 3).
+    """
+    from farmafacil.services.settings import get_setting_int
+
+    max_images = await get_setting_int("max_detail_products")
+    for result in results[:max_images]:
         if result.image_url:
             caption = _build_product_caption(result)
             await send_image_message(sender, result.image_url, caption)
-
-
-async def _send_grid_image(sender: str, response) -> None:
-    """Generate and send a product grid image.
-
-    The grid JPEG is written to a temp file; we guarantee cleanup via
-    try/finally so an unexpected exception in ``send_local_image``
-    never leaks the file on disk.
-    """
-    grid_path = await generate_product_grid(response.results)
-    if not grid_path:
-        return
-    caption = f"Resultados para *{response.query}*"
-    if response.zone:
-        caption += f" cerca de *{response.zone}*"
-    try:
-        await send_local_image(sender, grid_path, caption)
-    finally:
-        try:
-            os.unlink(grid_path)
-        except OSError as exc:
-            logger.warning("Failed to unlink grid tempfile %s: %s", grid_path, exc)
 
 
 def _build_product_caption(result: DrugResult) -> str:
@@ -1578,10 +1534,7 @@ async def _handle_view_similar(sender: str, user) -> None:
     )
 
     if response.results:
-        if user.display_preference == "detail":
-            await _send_detail_images(sender, response.results)
-        else:
-            await _send_grid_image(sender, response)
+        await _send_detail_images(sender, response.results)
 
     reply = format_search_results(response)
     await send_text_message(sender, reply)

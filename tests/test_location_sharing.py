@@ -182,8 +182,8 @@ class TestHandleLocationMessage:
     """Integration tests for the location-pin handler."""
 
     @pytest.mark.asyncio
-    async def test_onboarding_location_advances_to_preference(self):
-        """User in awaiting_location who shares a pin → preference step."""
+    async def test_onboarding_location_completes_onboarding(self):
+        """User in awaiting_location who shares a pin → onboarding complete."""
         phone = "5491200000001"
         # Pre-populate the user at the awaiting_location step with a name
         await get_or_create_user(phone)
@@ -225,13 +225,12 @@ class TestHandleLocationMessage:
         assert refreshed.longitude == -66.87
         assert refreshed.city_code == "CCS"
         assert refreshed.zone_name == "La Boyera"
-        assert refreshed.onboarding_step == "awaiting_preference"
+        assert refreshed.onboarding_step is None
 
-        # A preference prompt was sent
+        # A ready message was sent
         assert mock_send.await_count == 1
         sent_text = mock_send.await_args.args[1]
-        assert "La Boyera" in sent_text
-        assert "1" in sent_text and "2" in sent_text  # preference options
+        assert "Listo" in sent_text or "Maria" in sent_text
 
     @pytest.mark.asyncio
     async def test_location_before_name_asks_for_name(self):

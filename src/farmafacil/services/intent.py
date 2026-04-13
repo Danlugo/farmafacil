@@ -76,7 +76,6 @@ HELP_MESSAGE = (
     "\u2022 Pregunta _farmacia cercana_ o _donde comprar_\n\n"
     "*Configuracion:*\n"
     "\u2022 _cambiar zona_ — nueva ubicacion\n"
-    "\u2022 _cambiar preferencia_ — modo de visualizacion\n"
     "\u2022 _cambiar nombre_ — actualizar tu nombre\n\n"
     "*Ejemplos:*\n"
     "\u2022 _losartan_\n"

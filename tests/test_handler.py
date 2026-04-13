@@ -241,8 +241,8 @@ class TestOnboardingAwaitingName:
         assert "No logre entender tu nombre" in sent
 
     @pytest.mark.asyncio
-    async def test_name_with_location_skips_to_preference(self):
-        """When the AI extracts both name and location, skip straight to preference."""
+    async def test_name_with_location_completes_onboarding(self):
+        """When the AI extracts both name and location, onboarding is complete."""
         phone = "5491999000006"
         await _seed_user(phone, step="awaiting_name")
 
@@ -275,10 +275,9 @@ class TestOnboardingAwaitingName:
         assert refreshed.name == "Carlos"
         assert refreshed.zone_name == "Chacao"
         assert refreshed.city_code == "CCS"
-        assert refreshed.onboarding_step == "awaiting_preference"
+        assert refreshed.onboarding_step is None
         sent = mock_send.await_args.args[1]
-        assert "Chacao" in sent
-        assert "1" in sent and "2" in sent
+        assert "Listo" in sent or "Carlos" in sent
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +289,7 @@ class TestOnboardingAwaitingLocation:
     """Tests for the ``awaiting_location`` branch (typed zone, not pin)."""
 
     @pytest.mark.asyncio
-    async def test_geocode_success_advances_to_preference(self):
+    async def test_geocode_success_completes_onboarding(self):
         phone = "5491999000007"
         await _seed_user(phone, name="Maria", step="awaiting_location")
 
@@ -316,9 +315,9 @@ class TestOnboardingAwaitingLocation:
         refreshed = await _fetch_user(phone)
         assert refreshed.zone_name == "La Boyera"
         assert refreshed.city_code == "CCS"
-        assert refreshed.onboarding_step == "awaiting_preference"
+        assert refreshed.onboarding_step is None
         sent = mock_send.await_args.args[1]
-        assert "La Boyera" in sent
+        assert "Listo" in sent or "Maria" in sent
 
     @pytest.mark.asyncio
     async def test_geocode_failure_reasks(self):
@@ -350,11 +349,12 @@ class TestOnboardingAwaitingLocation:
 # ---------------------------------------------------------------------------
 
 
-class TestOnboardingAwaitingPreference:
-    """Tests for the ``awaiting_preference`` branch."""
+class TestOnboardingAwaitingPreferenceLegacy:
+    """Legacy users stuck in ``awaiting_preference`` get cleared (v0.15.2)."""
 
     @pytest.mark.asyncio
-    async def test_valid_preference_1_completes_onboarding(self):
+    async def test_legacy_preference_step_cleared(self):
+        """A user stuck in awaiting_preference has step cleared to None."""
         phone = "5491999000009"
         await _seed_user(
             phone,
@@ -366,36 +366,14 @@ class TestOnboardingAwaitingPreference:
             city_code="CCS",
         )
 
-        with patch.object(handler, "send_text_message", new=AsyncMock()) as mock_send:
-            await handle_incoming_message(phone, "1")
+        with patch.object(handler, "send_text_message", new=AsyncMock()), \
+             patch.object(handler, "classify_intent", new=AsyncMock(
+                 return_value=Intent(action="greeting"),
+             )):
+            await handle_incoming_message(phone, "hola")
 
         refreshed = await _fetch_user(phone)
-        assert refreshed.display_preference == "detail"
         assert refreshed.onboarding_step is None
-        sent = mock_send.await_args.args[1]
-        assert "Maria" in sent
-
-    @pytest.mark.asyncio
-    async def test_invalid_preference_reasks(self):
-        phone = "5491999000010"
-        await _seed_user(
-            phone,
-            name="Maria",
-            step="awaiting_preference",
-            latitude=10.48,
-            longitude=-66.87,
-            zone_name="La Boyera",
-            city_code="CCS",
-        )
-
-        with patch.object(handler, "send_text_message", new=AsyncMock()) as mock_send:
-            await handle_incoming_message(phone, "quiza")
-
-        refreshed = await _fetch_user(phone)
-        assert refreshed.onboarding_step == "awaiting_preference"
-        assert refreshed.display_preference == "grid"  # default, unchanged
-        sent = mock_send.await_args.args[1]
-        assert "1" in sent or "2" in sent
 
 
 # ---------------------------------------------------------------------------

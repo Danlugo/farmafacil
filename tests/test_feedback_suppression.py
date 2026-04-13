@@ -210,7 +210,6 @@ async def test_zero_results_skips_feedback_prompt(feedback_user):
          patch.object(handler, "get_memory", new=AsyncMock(return_value="")), \
          patch.object(handler, "extract_medications_from_memory", return_value=[]), \
          patch.object(handler, "set_onboarding_step", new=AsyncMock()) as mock_step, \
-         patch.object(handler, "_send_grid_image", new=AsyncMock()), \
          patch.object(handler, "_send_detail_images", new=AsyncMock()):
         await handler._handle_drug_search(
             feedback_user, user, "xyznonexistent", "Feedback Tester"
@@ -261,7 +260,6 @@ async def test_results_present_still_asks_feedback(feedback_user):
          patch.object(handler, "get_memory", new=AsyncMock(return_value="")), \
          patch.object(handler, "extract_medications_from_memory", return_value=[]), \
          patch.object(handler, "set_onboarding_step", new=AsyncMock()) as mock_step, \
-         patch.object(handler, "_send_grid_image", new=AsyncMock()), \
          patch.object(handler, "_send_detail_images", new=AsyncMock()):
         await handler._handle_drug_search(
             feedback_user, user, "losartan", "Feedback Tester"
@@ -310,7 +308,6 @@ async def test_partial_failure_with_results_asks_feedback(feedback_user):
          patch.object(handler, "get_memory", new=AsyncMock(return_value="")), \
          patch.object(handler, "extract_medications_from_memory", return_value=[]), \
          patch.object(handler, "set_onboarding_step", new=AsyncMock()), \
-         patch.object(handler, "_send_grid_image", new=AsyncMock()), \
          patch.object(handler, "_send_detail_images", new=AsyncMock()):
         await handler._handle_drug_search(
             feedback_user, user, "losartan", "Feedback Tester"
@@ -351,7 +348,6 @@ async def test_total_failure_zero_results_skips_feedback(feedback_user):
          patch.object(handler, "get_memory", new=AsyncMock(return_value="")), \
          patch.object(handler, "extract_medications_from_memory", return_value=[]), \
          patch.object(handler, "set_onboarding_step", new=AsyncMock()) as mock_step, \
-         patch.object(handler, "_send_grid_image", new=AsyncMock()), \
          patch.object(handler, "_send_detail_images", new=AsyncMock()):
         await handler._handle_drug_search(
             feedback_user, user, "losartan", "Feedback Tester"
