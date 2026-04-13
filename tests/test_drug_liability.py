@@ -540,3 +540,104 @@ class TestRuleCounts:
         assert "symptom_acknowledgment" in skill_names
         assert "drug_interaction_info" in skill_names
         assert len(skills) == 12
+
+
+# ── Three-layer consistency tests ─────────────────────────────────────
+# These tests verify that the three instruction layers that control
+# symptom→drug behavior all agree with each other.  The layers are:
+#   Layer 1: Seed rules (no_drug_recommendations) in seed.py
+#   Layer 2: Seed skills (symptom_acknowledgment) in seed.py
+#   Layer 3: Classify instructions (CLASSIFY_INSTRUCTIONS) in ai_responder.py
+# If any layer contradicts the others, the AI will behave unpredictably.
+
+
+class TestThreeLayerConsistency:
+    """Verify the three instruction layers agree on symptom→drug policy."""
+
+    def _get_rule_content(self, name: str) -> str:
+        seed = _get_pharmacy_seed()
+        for rule in seed["rules"]:
+            if rule["name"] == name:
+                return rule["content"]
+        raise AssertionError(f"Rule {name!r} not found in seed")
+
+    def _get_skill_content(self, name: str) -> str:
+        seed = _get_pharmacy_seed()
+        for skill in seed["skills"]:
+            if skill["name"] == name:
+                return skill["content"]
+        raise AssertionError(f"Skill {name!r} not found in seed")
+
+    def _get_classify_instructions(self) -> str:
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
+        return CLASSIFY_INSTRUCTIONS
+
+    # ── Symptom-only = question, NOT drug_search ──
+
+    def test_rule_says_symptom_only_is_question(self):
+        """Layer 1: no_drug_recommendations rule says symptom-only = question."""
+        content = self._get_rule_content("no_drug_recommendations")
+        assert "question" in content.lower() or "NO drug_search" in content
+        assert "NO elijas un medicamento por el usuario" in content
+
+    def test_skill_says_symptom_only_is_question(self):
+        """Layer 2: symptom_acknowledgment skill says symptom-only = question."""
+        content = self._get_skill_content("symptom_acknowledgment")
+        assert "question" in content.lower()
+        assert "NUNCA como 'drug_search'" in content or "NO drug_search" in content or "NO como drug_search" in content or "NUNCA como drug_search" in content
+
+    def test_classify_says_symptom_only_is_question(self):
+        """Layer 3: CLASSIFY_INSTRUCTIONS says symptom-only = question."""
+        instructions = self._get_classify_instructions()
+        # Must contain the symptom-only rule pointing to question
+        assert "SOLO SÍNTOMAS sin nombrar un producto" in instructions
+        assert "clasifica como question (NO drug_search)" in instructions
+
+    def test_classify_does_not_say_symptom_is_drug_search(self):
+        """Layer 3: CLASSIFY_INSTRUCTIONS must NOT say symptom-only = drug_search."""
+        instructions = self._get_classify_instructions()
+        # Find the symptom-only rule line and verify it says question
+        for line in instructions.split("\n"):
+            if "SOLO SÍNTOMAS sin nombrar" in line:
+                assert "drug_search" not in line.split("question")[0], \
+                    f"Symptom-only line says drug_search BEFORE question: {line}"
+                break
+        else:
+            pytest.fail("Symptom-only rule not found in CLASSIFY_INSTRUCTIONS")
+
+    # ── All three layers require doctor disclaimer ──
+
+    def test_all_layers_require_doctor_disclaimer(self):
+        """All three layers include 'consulta con tu médico'."""
+        rule = self._get_rule_content("no_drug_recommendations")
+        skill = self._get_skill_content("symptom_acknowledgment")
+        instructions = self._get_classify_instructions()
+
+        assert "consulta con tu médico" in rule.lower(), "Rule missing doctor disclaimer"
+        assert "consulta con tu médico" in skill.lower(), "Skill missing doctor disclaimer"
+        assert "consulta con tu médico" in instructions.lower(), "Classify missing doctor disclaimer"
+
+    # ── All three layers prohibit prescribing ──
+
+    def test_all_layers_prohibit_prescribing(self):
+        """All three layers prohibit prescribing language."""
+        rule = self._get_rule_content("no_drug_recommendations")
+        skill = self._get_skill_content("symptom_acknowledgment")
+        instructions = self._get_classify_instructions()
+
+        assert "PROHIBIDO" in skill or "NUNCA" in rule
+        assert "NUNCA elijas un medicamento por el usuario" in instructions or \
+               "NUNCA elijas un medicamento" in rule
+
+    # ── All three layers allow naming OTC options ──
+
+    def test_all_layers_allow_otc_informing(self):
+        """All three layers allow naming common OTC options."""
+        rule = self._get_rule_content("no_drug_recommendations")
+        skill = self._get_skill_content("symptom_acknowledgment")
+        instructions = self._get_classify_instructions()
+
+        assert "OTC" in rule or "venta libre" in rule, "Rule doesn't mention OTC"
+        assert "OTC" in skill or "opciones" in skill.lower(), "Skill doesn't mention OTC options"
+        assert "OTC" in instructions or "opciones" in instructions.lower(), \
+            "Classify doesn't mention OTC options"

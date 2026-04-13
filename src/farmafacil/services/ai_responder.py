@@ -26,6 +26,45 @@ from farmafacil.services.user_memory import get_memory
 
 logger = logging.getLogger(__name__)
 
+# ── Classification instructions appended to every classify_with_ai call ──
+# Extracted as a module-level constant so test_drug_liability.py can verify
+# consistency with the seed rules (no_drug_recommendations, symptom_acknowledgment).
+# If you change symptom-handling policy in seed.py, update this too — and vice versa.
+CLASSIFY_INSTRUCTIONS = """
+
+INSTRUCCIONES ADICIONALES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
+
+FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
+ACTION: [greeting|drug_search|clarify_needed|nearest_store|view_similar|emergency|question|unknown]
+DRUG: [nombre del producto tal como lo escribió el usuario]
+NAME: [nombre de la persona si se presenta]
+LOCATION: [zona/barrio/ciudad si menciona ubicación]
+CLARIFY_QUESTION: [pregunta de clarificación si ACTION=clarify_needed]
+CLARIFY_CONTEXT: [la consulta original vaga del usuario, tal como la escribió]
+RESPONSE: [respuesta conversacional si es una pregunta]
+
+REGLAS:
+- Si el usuario pregunta por la farmacia más cercana, farmacias cerca, dónde comprar, o cualquier variación de "qué farmacia queda cerca": clasifica como nearest_store. NO hagas preguntas — el sistema mostrará las farmacias más cercanas automáticamente. Si el usuario tiene historial de búsquedas o menciona una cadena preferida, puedes incluir un RESPONSE breve mencionándolo.
+- Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
+- Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
+- Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, busca aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, incluye RESPONSE breve reconociendo el síntoma + "consulta con tu médico".
+- ⚠️ Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez", "dolor de estomago"): clasifica como question (NO drug_search). En RESPONSE: (1) reconoce el síntoma, (2) LISTA opciones OTC comunes para ese síntoma (ej: para estómago: Omeprazol, Ranitidina, antiácidos; para dolor de cabeza: Acetaminofén, Ibuprofeno, Aspirina), (3) pregunta cuál quiere buscar, (4) incluye "consulta con tu médico". NUNCA elijas un medicamento por el usuario ni clasifiques como drug_search cuando no nombran un producto.
+- ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos distintos Y NO especifica forma farmacéutica/tipo (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé"), NO busques directamente. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), o marca preferida. Ejemplos:
+  * "medicinas para la memoria" → CLARIFY_QUESTION: "¿Prefieres pastillas o bebibles? ¿Es para adulto o niño? Así te busco la mejor opción."
+  * "algo para dormir" → CLARIFY_QUESTION: "¿Buscas algo natural (tipo melatonina o valeriana) o un medicamento recetado? ¿Pastillas o gotas?"
+  * "vitaminas" → CLARIFY_QUESTION: "¿Qué tipo de vitaminas? (multivitamínico, vitamina C, D, B12, etc.) ¿Pastillas, gomitas o líquido?"
+  * "protector solar" (producto específico, NO vago) → drug_search directo, NO clarificar
+  * "omeprazol" (producto específico) → drug_search directo, NO clarificar
+  NO uses clarify_needed si el usuario ya nombró un producto específico o un ingrediente activo. Solo para categorías genéricas ambiguas.
+- Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
+- Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
+- En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
+- EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que TOMA otro medicamento o tiene una condición médica (ej: "tomo warfarina", "soy diabético", "estoy embarazada", "tomo anticoagulantes"), SIEMPRE incluye RESPONSE con: (1) advertencia de que podría haber interacciones, (2) recomendación FIRME de consultar con su médico o farmacéutico ANTES de tomar el producto, (3) busca el producto de todas formas pero con la advertencia. Ejemplo: "⚠️ Mencionas que tomas warfarina. Aspirina puede interactuar con anticoagulantes y aumentar riesgo de sangrado. Te recomiendo CONSULTAR CON TU MÉDICO antes de combinarlos. Te busco Aspirina de todas formas para que veas disponibilidad."
+- Si el usuario dice "ver similares", "similares", "ver otros", "mostrar similares", o "ver mas": clasifica como view_similar. El sistema re-ejecutará la última búsqueda mostrando más variantes del producto.
+- ⚠️ EMERGENCIA: Si el usuario describe una emergencia médica (dolor de pecho, no puede respirar, convulsiones, sobredosis, sangrado severo, pensamientos suicidas), clasifica INMEDIATAMENTE como emergency con RESPONSE que incluya números de emergencia. NO busques productos — esto tiene PRIORIDAD MÁXIMA.
+- En general NO hagas preguntas de seguimiento. Da información útil, alternativas, y advertencias directamente. Solo pregunta si hay una preocupación de seguridad real (medicamentos que podrían interactuar).
+- Si no entiendes: ACTION: unknown"""
+
 
 @dataclass
 class AiResponse:
@@ -189,41 +228,9 @@ async def classify_with_ai(
     else:
         base_prompt = _FALLBACK_PROMPT
 
-    # Add classification instructions
-    system_prompt = base_prompt + """
-
-INSTRUCCIONES ADICIONALES: Analiza el mensaje del usuario y responde en formato estructurado. Extrae TODA la información que puedas del mensaje.
-
-FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
-ACTION: [greeting|drug_search|clarify_needed|nearest_store|view_similar|emergency|question|unknown]
-DRUG: [nombre del producto tal como lo escribió el usuario]
-NAME: [nombre de la persona si se presenta]
-LOCATION: [zona/barrio/ciudad si menciona ubicación]
-CLARIFY_QUESTION: [pregunta de clarificación si ACTION=clarify_needed]
-CLARIFY_CONTEXT: [la consulta original vaga del usuario, tal como la escribió]
-RESPONSE: [respuesta conversacional si es una pregunta]
-
-REGLAS:
-- Si el usuario pregunta por la farmacia más cercana, farmacias cerca, dónde comprar, o cualquier variación de "qué farmacia queda cerca": clasifica como nearest_store. NO hagas preguntas — el sistema mostrará las farmacias más cercanas automáticamente. Si el usuario tiene historial de búsquedas o menciona una cadena preferida, puedes incluir un RESPONSE breve mencionándolo.
-- Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
-- Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
-- Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, busca aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, incluye RESPONSE breve reconociendo el síntoma + "consulta con tu médico".
-- ⚠️ Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez", "dolor de estomago"): clasifica como question (NO drug_search). En RESPONSE: (1) reconoce el síntoma, (2) LISTA opciones OTC comunes para ese síntoma (ej: para estómago: Omeprazol, Ranitidina, antiácidos; para dolor de cabeza: Acetaminofén, Ibuprofeno, Aspirina), (3) pregunta cuál quiere buscar, (4) incluye "consulta con tu médico". NUNCA elijas un medicamento por el usuario ni clasifiques como drug_search cuando no nombran un producto.
-- ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos distintos Y NO especifica forma farmacéutica/tipo (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé"), NO busques directamente. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), o marca preferida. Ejemplos:
-  * "medicinas para la memoria" → CLARIFY_QUESTION: "¿Prefieres pastillas o bebibles? ¿Es para adulto o niño? Así te busco la mejor opción."
-  * "algo para dormir" → CLARIFY_QUESTION: "¿Buscas algo natural (tipo melatonina o valeriana) o un medicamento recetado? ¿Pastillas o gotas?"
-  * "vitaminas" → CLARIFY_QUESTION: "¿Qué tipo de vitaminas? (multivitamínico, vitamina C, D, B12, etc.) ¿Pastillas, gomitas o líquido?"
-  * "protector solar" (producto específico, NO vago) → drug_search directo, NO clarificar
-  * "omeprazol" (producto específico) → drug_search directo, NO clarificar
-  NO uses clarify_needed si el usuario ya nombró un producto específico o un ingrediente activo. Solo para categorías genéricas ambiguas.
-- Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
-- Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
-- En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
-- EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que TOMA otro medicamento o tiene una condición médica (ej: "tomo warfarina", "soy diabético", "estoy embarazada", "tomo anticoagulantes"), SIEMPRE incluye RESPONSE con: (1) advertencia de que podría haber interacciones, (2) recomendación FIRME de consultar con su médico o farmacéutico ANTES de tomar el producto, (3) busca el producto de todas formas pero con la advertencia. Ejemplo: "⚠️ Mencionas que tomas warfarina. Aspirina puede interactuar con anticoagulantes y aumentar riesgo de sangrado. Te recomiendo CONSULTAR CON TU MÉDICO antes de combinarlos. Te busco Aspirina de todas formas para que veas disponibilidad."
-- Si el usuario dice "ver similares", "similares", "ver otros", "mostrar similares", o "ver mas": clasifica como view_similar. El sistema re-ejecutará la última búsqueda mostrando más variantes del producto.
-- ⚠️ EMERGENCIA: Si el usuario describe una emergencia médica (dolor de pecho, no puede respirar, convulsiones, sobredosis, sangrado severo, pensamientos suicidas), clasifica INMEDIATAMENTE como emergency con RESPONSE que incluya números de emergencia. NO busques productos — esto tiene PRIORIDAD MÁXIMA.
-- En general NO hagas preguntas de seguimiento. Da información útil, alternativas, y advertencias directamente. Solo pregunta si hay una preocupación de seguridad real (medicamentos que podrían interactuar).
-- Si no entiendes: ACTION: unknown"""
+    # Add classification instructions (extracted to module-level constant
+    # so test_drug_liability.py can verify consistency with seed rules).
+    system_prompt = base_prompt + CLASSIFY_INSTRUCTIONS
 
     if not ANTHROPIC_API_KEY:
         return AiResponse(

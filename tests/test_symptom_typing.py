@@ -146,21 +146,16 @@ class TestClassificationInstructions:
 
     def test_classify_instructions_mention_symptoms(self):
         """Classification prompt should include symptom handling rules."""
-        import inspect
-        from farmafacil.services.ai_responder import classify_with_ai
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
 
-        source = inspect.getsource(classify_with_ai)
-        assert "SÍNTOMAS" in source or "síntomas" in source
+        assert "SÍNTOMAS" in CLASSIFY_INSTRUCTIONS or "síntomas" in CLASSIFY_INSTRUCTIONS
 
     def test_classify_instructions_require_response_for_symptoms(self):
         """Classification prompt should require RESPONSE for symptom messages."""
-        import inspect
-        from farmafacil.services.ai_responder import classify_with_ai
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
 
-        source = inspect.getsource(classify_with_ai)
-        assert "RESPONSE" in source
-        # Should instruct to include both DRUG and RESPONSE for symptoms
-        assert "drug_search" in source.lower()
+        assert "RESPONSE" in CLASSIFY_INSTRUCTIONS
+        assert "question" in CLASSIFY_INSTRUCTIONS.lower()
 
 
 # ── Typing indicator ──────────────────────────────────────────────────

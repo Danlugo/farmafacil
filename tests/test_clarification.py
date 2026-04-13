@@ -113,26 +113,20 @@ class TestClarifyPrompt:
     """Verify the classification prompt instructs the AI on clarify_needed."""
 
     def test_prompt_mentions_clarify_needed_action(self):
-        import inspect
-        from farmafacil.services.ai_responder import classify_with_ai
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
 
-        source = inspect.getsource(classify_with_ai)
-        assert "clarify_needed" in source
+        assert "clarify_needed" in CLASSIFY_INSTRUCTIONS
 
     def test_prompt_mentions_vague_category_examples(self):
-        import inspect
-        from farmafacil.services.ai_responder import classify_with_ai
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
 
-        source = inspect.getsource(classify_with_ai).lower()
-        # Prompt should mention at least one of the canonical vague examples
+        source = CLASSIFY_INSTRUCTIONS.lower()
         assert "memoria" in source or "vitaminas" in source or "dormir" in source
 
     def test_prompt_instructs_not_to_clarify_specific_drugs(self):
-        import inspect
-        from farmafacil.services.ai_responder import classify_with_ai
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
 
-        source = inspect.getsource(classify_with_ai).lower()
-        # Prompt should warn NOT to clarify specific products
+        source = CLASSIFY_INSTRUCTIONS.lower()
         assert "no" in source and ("específico" in source or "directo" in source)
 
 
