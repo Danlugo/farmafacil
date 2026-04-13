@@ -228,6 +228,17 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 41: Background Task Scheduler with Admin UI
+
+- **Status:** DONE (2026-04-13)
+- **Added:** 2026-04-13
+- **Completed:** 2026-04-13
+- **Problem:** No recurring maintenance tasks — stale search cache, store locations, product classifications all required manual intervention or container restarts. Needed a scheduler to automate these with admin visibility and control.
+- **Solution implemented:** New `ScheduledTask` ORM model with `scheduled_tasks` DB table. New `services/scheduler.py` with: `TASK_REGISTRY` (4 built-in tasks), `scheduler_loop()` (asyncio background task polling every 60s), `seed_scheduled_tasks()` (seeds defaults on startup), `run_task_now()` (manual trigger). Built-in tasks: `cleanup_stale_cache` (60min), `backfill_stores` (24h), `rescore_products` (24h), `cleanup_old_logs` (7d). SQLAdmin `ScheduledTaskAdmin` view for full CRUD (edit name, interval, enable/disable; view status, last result, duration). API endpoints: `GET /api/v1/scheduled-tasks`, `POST /api/v1/scheduled-tasks/{id}/run`. Admin chat tools: `list_scheduled_tasks`, `run_scheduled_task`, `toggle_scheduled_task`, `update_scheduled_task`. Scheduler starts as `asyncio.create_task` in lifespan, cancelled on shutdown. Replaced startup-only `backfill_stores()` call — now handled by the scheduler on first poll.
+- **Files created:** `src/farmafacil/services/scheduler.py`, `tests/test_scheduler.py` (17 tests)
+- **Files modified:** `src/farmafacil/models/database.py` (ScheduledTask model), `src/farmafacil/api/admin.py` (ScheduledTaskAdmin view), `src/farmafacil/api/app.py` (lifespan scheduler start), `src/farmafacil/api/routes.py` (2 endpoints), `src/farmafacil/services/admin_chat.py` (4 tools)
+- **Test count:** 709 → 726 (+17)
+
 ### Item 40: Remove Grid Image Mode — Individual Product Images Only
 
 - **Status:** DONE (2026-04-13)

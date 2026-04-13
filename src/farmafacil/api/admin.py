@@ -22,6 +22,7 @@ from farmafacil.models.database import (
     PharmacyLocation,
     Product,
     ProductPrice,
+    ScheduledTask,
     SearchLog,
     SearchQuery,
     User,
@@ -763,6 +764,47 @@ class UserMemoryAdmin(ModelView, model=UserMemory):
 
 
 # All admin views to register — order determines sidebar order
+class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
+    """Admin view for background scheduled tasks."""
+
+    name = "Scheduled Task"
+    name_plural = "Scheduled Tasks"
+    icon = "fa-solid fa-clock"
+
+    column_list = [
+        ScheduledTask.id,
+        ScheduledTask.name,
+        ScheduledTask.task_key,
+        ScheduledTask.interval_minutes,
+        ScheduledTask.enabled,
+        ScheduledTask.status,
+        ScheduledTask.last_run_at,
+        ScheduledTask.next_run_at,
+        ScheduledTask.last_duration_seconds,
+        ScheduledTask.last_result,
+    ]
+    column_sortable_list = [
+        ScheduledTask.name,
+        ScheduledTask.enabled,
+        ScheduledTask.status,
+        ScheduledTask.last_run_at,
+        ScheduledTask.next_run_at,
+    ]
+    column_searchable_list = [ScheduledTask.name, ScheduledTask.task_key]
+    column_labels = {
+        ScheduledTask.interval_minutes: "Interval (min)",
+        ScheduledTask.last_duration_seconds: "Duration (s)",
+        ScheduledTask.task_key: "Task Function",
+    }
+    form_include_pk = False
+    form_columns = [
+        ScheduledTask.name,
+        ScheduledTask.task_key,
+        ScheduledTask.interval_minutes,
+        ScheduledTask.enabled,
+    ]
+
+
 ADMIN_VIEWS = [
     UserAdmin,
     UserFeedbackAdmin,
@@ -780,6 +822,7 @@ ADMIN_VIEWS = [
     ProductPriceAdmin,
     SearchQueryAdmin,
     AppSettingAdmin,
+    ScheduledTaskAdmin,
 ]
 
 

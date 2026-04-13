@@ -17,19 +17,27 @@ from farmafacil.config import LOG_LEVEL
 from farmafacil.db.seed import seed_ai_roles, seed_intents, sync_seeded_roles
 from farmafacil.db.session import close_db, engine, init_db
 from farmafacil.services.settings import seed_settings
-from farmafacil.services.store_backfill import backfill_stores
+from farmafacil.services.scheduler import scheduler_loop, seed_scheduled_tasks
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage startup and shutdown events."""
+    import asyncio
+
     await init_db()
     await seed_intents()
     await seed_ai_roles()
     await sync_seeded_roles()  # Item 37: sync prompt/rules/skills from seed
     await seed_settings()
-    await backfill_stores()
+    await seed_scheduled_tasks()
+
+    # Start background scheduler (runs maintenance tasks on intervals)
+    scheduler_task = asyncio.create_task(scheduler_loop())
+
     yield
+
+    scheduler_task.cancel()
     await close_db()
 
 

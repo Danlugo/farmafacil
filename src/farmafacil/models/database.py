@@ -638,3 +638,58 @@ class UserFeedback(Base):
 
     def __repr__(self) -> str:
         return f"#{self.id} [{self.feedback_type}]"
+
+
+class ScheduledTask(Base):
+    """A recurring background maintenance task managed via the admin UI.
+
+    Task functions are registered in ``services/scheduler.py:TASK_REGISTRY``.
+    Admins can enable/disable, change the interval, and trigger manual runs
+    from SQLAdmin.  The scheduler loop reads ``next_run_at`` from this table
+    so timing survives container restarts.
+    """
+
+    __tablename__ = "scheduled_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(
+        String(100), nullable=False, unique=True,
+        comment="Human-readable task name",
+    )
+    task_key: Mapped[str] = mapped_column(
+        String(100), nullable=False,
+        comment="Key into TASK_REGISTRY — maps to the Python function",
+    )
+    interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60,
+        comment="How often to run (minutes)",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1",
+        comment="Toggle to pause/resume this task",
+    )
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+        comment="When this task last ran",
+    )
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True,
+        comment="When this task is due to run next",
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="idle", server_default="idle",
+        comment="idle, running, success, failed",
+    )
+    last_result: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Output or error from the last run",
+    )
+    last_duration_seconds: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="How long the last run took",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    def __repr__(self) -> str:
+        status = "enabled" if self.enabled else "paused"
+        return f"{self.name} ({status})"

@@ -473,3 +473,45 @@ async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
 </body>
 </html>"""
     return HTMLResponse(html)
+
+
+# ── Scheduled Tasks API ───────────────────────────────────────────────
+
+
+@router.get("/api/v1/scheduled-tasks")
+@limiter.limit("60/minute")
+async def list_scheduled_tasks(request: Request) -> list[dict]:
+    """List all scheduled tasks with their status."""
+    from farmafacil.models.database import ScheduledTask
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ScheduledTask).order_by(ScheduledTask.id)
+        )
+        tasks = result.scalars().all()
+
+    return [
+        {
+            "id": t.id,
+            "name": t.name,
+            "task_key": t.task_key,
+            "interval_minutes": t.interval_minutes,
+            "enabled": t.enabled,
+            "status": t.status,
+            "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+            "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
+            "last_result": t.last_result,
+            "last_duration_seconds": t.last_duration_seconds,
+        }
+        for t in tasks
+    ]
+
+
+@router.post("/api/v1/scheduled-tasks/{task_id}/run")
+@limiter.limit("10/minute")
+async def run_scheduled_task(request: Request, task_id: int) -> dict:
+    """Manually trigger a scheduled task."""
+    from farmafacil.services.scheduler import run_task_now
+
+    result = await run_task_now(task_id)
+    return {"task_id": task_id, "result": result}

@@ -955,6 +955,93 @@ async def _tool_list_code(args: dict[str, Any]) -> str:
 # Mapping: tool name → (description shown in manifest, coroutine)
 ToolFn = "Callable[[dict[str, Any]], Awaitable[str]]"  # type: ignore[name-defined]
 
+# ── Scheduler tools ─────────────────────────────────────────────────────
+
+
+async def _tool_list_scheduled_tasks(args: dict[str, Any]) -> str:
+    """List all scheduled tasks with status."""
+    from farmafacil.models.database import ScheduledTask
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ScheduledTask).order_by(ScheduledTask.id)
+        )
+        tasks = result.scalars().all()
+
+    if not tasks:
+        return "No hay tareas programadas."
+
+    lines = []
+    for t in tasks:
+        status_icon = {"idle": "⏸️", "running": "🔄", "success": "✅", "failed": "❌"}.get(t.status, "❓")
+        enabled_label = "habilitada" if t.enabled else "pausada"
+        last = t.last_run_at.strftime("%Y-%m-%d %H:%M") if t.last_run_at else "nunca"
+        lines.append(
+            f"• **#{t.id}** {status_icon} {t.name} ({enabled_label})\n"
+            f"  Intervalo: {t.interval_minutes}min | Última: {last}\n"
+            f"  Resultado: {t.last_result or 'N/A'}"
+        )
+    return "\n".join(lines)
+
+
+async def _tool_run_scheduled_task(args: dict[str, Any]) -> str:
+    """Run a task manually by ID."""
+    from farmafacil.services.scheduler import run_task_now
+
+    task_id = int(args.get("task_id", 0))
+    if not task_id:
+        return "Error: task_id es requerido."
+    result = await run_task_now(task_id)
+    return f"Tarea #{task_id} ejecutada. Resultado: {result}"
+
+
+async def _tool_toggle_scheduled_task(args: dict[str, Any]) -> str:
+    """Enable or disable a task."""
+    from farmafacil.models.database import ScheduledTask
+
+    task_id = int(args.get("task_id", 0))
+    enabled = args.get("enabled", True)
+    if not task_id:
+        return "Error: task_id es requerido."
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ScheduledTask).where(ScheduledTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+        if not task:
+            return f"Tarea #{task_id} no encontrada."
+        task.enabled = bool(enabled)
+        label = "habilitada" if task.enabled else "pausada"
+        await session.commit()
+
+    return f"Tarea #{task_id} ({task.name}) ahora está {label}."
+
+
+async def _tool_update_scheduled_task(args: dict[str, Any]) -> str:
+    """Update the interval of a task."""
+    from farmafacil.models.database import ScheduledTask
+
+    task_id = int(args.get("task_id", 0))
+    interval = int(args.get("interval_minutes", 0))
+    if not task_id or not interval:
+        return "Error: task_id e interval_minutes son requeridos."
+    if interval < 1:
+        return "Error: interval_minutes debe ser >= 1."
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ScheduledTask).where(ScheduledTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+        if not task:
+            return f"Tarea #{task_id} no encontrada."
+        task.interval_minutes = interval
+        await session.commit()
+
+    return f"Tarea #{task_id} ({task.name}) intervalo actualizado a {interval} minutos."
+
+
 TOOLS: dict[str, tuple[str, Any]] = {
     # Feedback
     "list_feedback": (
@@ -1065,6 +1152,23 @@ TOOLS: dict[str, tuple[str, Any]] = {
     "list_code": (
         "Listar directorio del proyecto (allowlist). Args: path?",
         _tool_list_code,
+    ),
+    "list_scheduled_tasks": (
+        "Listar todas las tareas programadas con su estado, intervalo, y "
+        "última ejecución. Args: ninguno",
+        _tool_list_scheduled_tasks,
+    ),
+    "run_scheduled_task": (
+        "Ejecutar una tarea programada manualmente por ID. Args: task_id (int)",
+        _tool_run_scheduled_task,
+    ),
+    "toggle_scheduled_task": (
+        "Habilitar o deshabilitar una tarea programada. Args: task_id (int), enabled (bool)",
+        _tool_toggle_scheduled_task,
+    ),
+    "update_scheduled_task": (
+        "Actualizar intervalo de una tarea programada. Args: task_id (int), interval_minutes (int)",
+        _tool_update_scheduled_task,
     ),
 }
 

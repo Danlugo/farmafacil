@@ -61,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (702 tests) |
+| `tests/` | pytest test suite (726 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -76,6 +76,7 @@ docker compose logs -f app
 | `product_keywords` | Inverted index of keyword tokens per product (FK → products CASCADE) for fast cross-chain matching (v0.12.6) |
 | `search_queries` | Maps search query + city to product IDs for cache lookups |
 | `app_settings` | Admin-editable config (cache TTL, response mode, etc.) |
+| `scheduled_tasks` | Background maintenance tasks with intervals, status, enable/disable (v0.16.0) |
 | `conversation_logs` | Every inbound/outbound WhatsApp message |
 | `search_logs` | Search analytics with user feedback (yes/no + detail) |
 | `ai_roles` | AI personas with system prompts (admin-editable), `locked_by_admin` flag to prevent startup seed sync from overwriting manual edits |
