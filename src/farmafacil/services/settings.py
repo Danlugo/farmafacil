@@ -23,6 +23,12 @@ DEFAULTS: dict[str, tuple[str, str]] = {
         "Show category quick-reply menu on bare greetings for onboarded users "
         "(Item 29, v0.13.2). Values: 'true' or 'false'.",
     ),
+    "relevance_threshold": (
+        "0.3",
+        "Minimum relevance score (0.0-1.0) for a product to be included in "
+        "search results. Lower = more permissive, higher = stricter. "
+        "(Item 38, v0.15.0)",
+    ),
     "default_model": (
         "haiku",
         "Default Claude model alias for USER-FACING AI calls (intent "
@@ -74,6 +80,23 @@ async def get_setting(key: str) -> str:
 async def get_setting_int(key: str) -> int:
     """Get a setting as integer."""
     return int(await get_setting(key))
+
+
+async def get_setting_float(key: str, fallback: float = 0.0) -> float:
+    """Get a setting as float with a safe fallback.
+
+    Args:
+        key: Setting key.
+        fallback: Value to return if the setting cannot be parsed as float.
+
+    Returns:
+        Setting value as float.
+    """
+    raw = await get_setting(key)
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return fallback
 
 
 async def set_setting(key: str, value: str) -> None:

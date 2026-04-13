@@ -10,6 +10,14 @@ from farmafacil.models.schemas import DrugResult
 from farmafacil.services.search import search_drug
 
 
+# Disable relevance filtering for concurrency tests — these test scraper
+# orchestration, not result quality.  The relevance filter is tested in
+# test_relevance.py.
+_BYPASS_RELEVANCE = patch(
+    "farmafacil.services.search.is_relevant", return_value=True
+)
+
+
 def _make_result(name: str, pharmacy: str) -> DrugResult:
     """Create a minimal DrugResult for testing."""
     return DrugResult(
@@ -62,6 +70,7 @@ class TestConcurrentExecution:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -87,6 +96,7 @@ class TestConcurrentExecution:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             loop = asyncio.get_running_loop()
             start = loop.time()
@@ -110,6 +120,7 @@ class TestConcurrentExecution:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -130,6 +141,7 @@ class TestConcurrentExecution:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -154,6 +166,7 @@ class TestErrorIsolation:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -196,6 +209,7 @@ class TestErrorIsolation:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -215,6 +229,7 @@ class TestCacheBypass:
         with (
             patch("farmafacil.services.search.ACTIVE_SCRAPERS", [scraper]),
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=cached)),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -277,6 +292,7 @@ class TestFailedPharmaciesTracking:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -296,6 +312,7 @@ class TestFailedPharmaciesTracking:
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=None)),
             patch("farmafacil.services.search.find_cached_products", new=AsyncMock(return_value=[])),
             patch("farmafacil.services.search.save_search_results", new=AsyncMock()),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 
@@ -330,6 +347,7 @@ class TestFailedPharmaciesTracking:
         with (
             patch("farmafacil.services.search.ACTIVE_SCRAPERS", [scraper]),
             patch("farmafacil.services.search.get_cached_results", new=AsyncMock(return_value=cached)),
+            _BYPASS_RELEVANCE,
         ):
             response = await search_drug("test")
 

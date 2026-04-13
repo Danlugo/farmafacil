@@ -61,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (671 tests) |
+| `tests/` | pytest test suite (703 tests) |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -71,7 +71,7 @@ docker compose logs -f app
 | `users` | Phone, name, location, display preference, response mode override, chat debug override, last search log ID, cumulative token counters, per-model token/call counters (haiku, sonnet, admin), `chat_admin` (UI-only flag), `admin_mode_active` (per-session toggle via `/admin`), onboarding step, awaiting_clarification_context, awaiting_category_search |
 | `intent_keywords` | Bot keyword→action mappings (admin-editable) |
 | `pharmacy_locations` | Physical store locations (generic, multi-chain) |
-| `products` | Permanent product catalog (never deleted, only upserted) |
+| `products` | Permanent product catalog (never deleted, only upserted), `is_pharmaceutical` flag for relevance filtering |
 | `product_prices` | Per-location pricing with refresh timestamps (FK → products) |
 | `product_keywords` | Inverted index of keyword tokens per product (FK → products CASCADE) for fast cross-chain matching (v0.12.6) |
 | `search_queries` | Maps search query + city to product IDs for cache lookups |

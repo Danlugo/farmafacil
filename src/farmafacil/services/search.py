@@ -21,6 +21,8 @@ from farmafacil.services.product_cache import (
     get_cached_results,
     save_search_results,
 )
+from farmafacil.services.relevance import is_relevant
+from farmafacil.services.settings import get_setting_float
 from farmafacil.services.stores import Store, filter_stores_with_stock, get_nearby_stores
 from farmafacil.services.store_locations import get_nearby_chain_stores
 
@@ -237,6 +239,25 @@ async def search_drug(
             # Save to product catalog (upsert — never deletes)
             if all_results:
                 await save_search_results(query, city_code, all_results)
+
+    # Relevance filtering — remove non-pharmaceutical junk (Item 38).
+    # Read threshold once and reuse for both display filtering and cache write.
+    # The save_search_results call above also filters, but that only controls
+    # what product IDs are cached for FUTURE searches. This filter is the
+    # safety net for the CURRENT response (including pre-v0.15.0 cached data).
+    relevance_threshold = await get_setting_float("relevance_threshold", 0.3)
+    if all_results:
+        before_count = len(all_results)
+        all_results = [
+            r for r in all_results
+            if is_relevant(query, r.drug_name, r.drug_class, r.description, relevance_threshold)
+        ]
+        filtered = before_count - len(all_results)
+        if filtered > 0:
+            logger.info(
+                "Relevance filter removed %d/%d results for '%s'",
+                filtered, before_count, query,
+            )
 
     # Enrich with nearby store data if we have location
     if city_code and latitude and longitude:

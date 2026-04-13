@@ -20,7 +20,8 @@ from farmafacil.models.database import (
     SearchQuery,
 )
 from farmafacil.models.schemas import DrugResult
-from farmafacil.services.settings import get_setting_int
+from farmafacil.services.relevance import classify_pharmaceutical, is_relevant
+from farmafacil.services.settings import get_setting_float, get_setting_int
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +128,12 @@ async def find_cached_products(
     effective_city = city_code or "ALL"
 
     async with async_session() as session:
-        # Find products whose drug_name contains the base keyword
+        # Find products whose drug_name contains the base keyword,
+        # excluding known non-pharmaceutical products (Item 38)
         result = await session.execute(
             select(Product).where(
-                func.lower(Product.drug_name).contains(base_term)
+                func.lower(Product.drug_name).contains(base_term),
+                Product.is_pharmaceutical.is_not(False),
             )
         )
         products = result.scalars().all()
@@ -188,7 +191,11 @@ async def save_search_results(
 
     normalized_query = query.lower().strip()
     now = datetime.now(tz=UTC)
-    product_ids: list[int] = []
+    all_product_ids: list[int] = []
+    relevant_product_ids: list[int] = []
+
+    # Read the relevance threshold from app settings
+    threshold = await get_setting_float("relevance_threshold", 0.3)
 
     async with async_session() as session:
         for drug in results:
@@ -197,22 +204,34 @@ async def save_search_results(
 
             # Find or create product
             product = await _upsert_product(session, drug, external_id, now)
-            product_ids.append(product.id)
+            all_product_ids.append(product.id)
 
             # Upsert price for this city
             effective_city = city_code or "ALL"
             await _upsert_price(session, product.id, effective_city, drug, now)
 
-        # Upsert search query mapping
+            # Score relevance — only cache relevant product IDs
+            if is_relevant(query, drug.drug_name, drug.drug_class, drug.description, threshold):
+                relevant_product_ids.append(product.id)
+
+        filtered_count = len(all_product_ids) - len(relevant_product_ids)
+        if filtered_count > 0:
+            logger.info(
+                "Relevance filter: %d/%d products filtered out for '%s' (threshold=%.2f)",
+                filtered_count, len(all_product_ids), query, threshold,
+            )
+
+        # Upsert search query mapping with only relevant product IDs
         await _upsert_search_query(
-            session, normalized_query, city_code, product_ids, len(results), now,
+            session, normalized_query, city_code, relevant_product_ids,
+            len(relevant_product_ids), now,
         )
 
         await session.commit()
 
     logger.info(
-        "Saved %d products for '%s' (city=%s)",
-        len(product_ids), query, city_code,
+        "Saved %d relevant products for '%s' (city=%s, %d filtered out)",
+        len(relevant_product_ids), query, city_code, filtered_count,
     )
 
 
@@ -357,6 +376,8 @@ async def _upsert_product(
 
     keywords = _parse_keywords(drug.drug_name)
 
+    pharma = classify_pharmaceutical(drug.drug_class)
+
     if product is None:
         product = Product(
             external_id=external_id,
@@ -371,6 +392,7 @@ async def _upsert_product(
             unit_label=drug.unit_label,
             product_url=drug.url,
             keywords=keywords,
+            is_pharmaceutical=pharma,
         )
         session.add(product)
         await session.flush()  # Get the id
@@ -386,6 +408,7 @@ async def _upsert_product(
         product.unit_label = drug.unit_label
         product.product_url = drug.url
         product.keywords = keywords
+        product.is_pharmaceutical = pharma
         product.updated_at = now.replace(tzinfo=None)
 
     # Mirror the keyword tokens into the indexed product_keywords table so

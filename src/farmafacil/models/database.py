@@ -298,6 +298,10 @@ class Product(Base):
         JSON, nullable=True,
         comment="Lowercase tokens from drug_name split by whitespace, for cross-chain matching",
     )
+    is_pharmaceutical: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=None,
+        comment="True if drug_class is pharma, False if non-pharma, NULL if unknown (Item 38, v0.15.0)",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "farmafacil"
-version = "0.14.2"
+version = "0.15.0"
 description = "Venezuela pharmacy drug finder"
 requires-python = ">=3.11"
 dependencies = [

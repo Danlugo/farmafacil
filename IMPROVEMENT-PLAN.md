@@ -228,6 +228,17 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 38: Search Relevance Filtering — "Learn Once, Serve Fast"
+
+- **Status:** DONE (2026-04-12)
+- **Added:** 2026-04-12
+- **Completed:** 2026-04-12
+- **Problem:** Pharmacy APIs (VTEX, Algolia) return irrelevant products mixed with real drug results. "Acetaminofén" search returns shoe insoles (#1 result), "paracetamol pastillas" returns cleaning tablets (#1 result). User feedback from prod confirms this is a real problem — non-medicine items appear in the product grid images.
+- **Solution implemented:** New `services/relevance.py` module with `compute_relevance()` heuristic scorer (3 signals: token overlap 0.0–0.5, pharmaceutical category +0.3/+0.15/+0.0, active ingredient match +0.2). `NON_PHARMA_CATEGORIES` set curated from production data (food, cleaning, cosmetics, toys). `FORM_WORDS` set strips pharmaceutical form words from queries. New `Product.is_pharmaceutical` column (nullable bool) set during `_upsert_product` via `classify_pharmaceutical()`. Additive migration + startup backfill for existing products. `save_search_results` now filters product_ids by relevance before caching — future cache hits are already clean. `search_drug()` applies relevance filter on ALL results (safety net for pre-v0.15.0 cached data + live scrape). `find_cached_products` excludes `is_pharmaceutical=False`. Admin-tunable `relevance_threshold` AppSetting (default 0.3). Code review: 2 MAJORs fixed (duplicate threshold DB fetch → `get_setting_float` helper; backfill guard → count check before ORM load). Double-filtering architecture documented (cache write + display filter are complementary, not redundant).
+- **Files created:** `src/farmafacil/services/relevance.py`, `tests/test_relevance.py` (37 tests)
+- **Files modified:** `src/farmafacil/services/product_cache.py`, `src/farmafacil/services/search.py`, `src/farmafacil/models/database.py`, `src/farmafacil/db/session.py`, `src/farmafacil/services/settings.py`, `tests/test_search_concurrent.py`
+- **Test count:** 671 → 703 (+32)
+
 ### Item 37: Drug Recommendation Liability Guardrails (Bug #3)
 
 - **Status:** DONE (2026-04-12)

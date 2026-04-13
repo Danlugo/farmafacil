@@ -103,6 +103,12 @@ async def init_db() -> None:
             "BOOLEAN NOT NULL DEFAULT 0",
             "BOOLEAN NOT NULL DEFAULT FALSE",
         ),
+        (
+            "products",
+            "is_pharmaceutical",
+            "BOOLEAN",
+            "BOOLEAN",
+        ),
     ]
 
     async with engine.begin() as conn:
@@ -130,6 +136,10 @@ async def init_db() -> None:
     # populate product_keywords from Product.keywords so find_cross_chain_matches
     # works on existing deployments without requiring a full re-scrape.
     await _backfill_product_keywords()
+
+    # One-shot backfill for is_pharmaceutical (Item 38, v0.15.0).
+    # Score existing products that have a drug_class but no is_pharmaceutical flag.
+    await _backfill_is_pharmaceutical()
 
 
 
@@ -177,6 +187,43 @@ async def _backfill_product_keywords() -> None:
 
         if rows_added:
             await session.commit()
+
+
+async def _backfill_is_pharmaceutical() -> None:
+    """Set ``is_pharmaceutical`` on products that have a ``drug_class`` but NULL flag.
+
+    Idempotent: counts unclassified rows first and returns immediately if zero
+    (same guard pattern as ``_backfill_product_keywords``).  Uses per-row ORM
+    updates rather than bulk SQL to leverage ``classify_pharmaceutical`` which
+    checks the ``NON_PHARMA_CATEGORIES`` set.  Safe for the current catalog
+    size (~300 products); for 10k+ catalogs, convert to a bulk SQL CASE.
+    """
+    from sqlalchemy import func as sql_func, select
+
+    from farmafacil.models.database import Product
+    from farmafacil.services.relevance import classify_pharmaceutical
+
+    async with async_session() as session:
+        # Fast count check — avoid loading ORM objects if nothing to do
+        unclassified = await session.scalar(
+            select(sql_func.count()).select_from(Product).where(
+                Product.is_pharmaceutical.is_(None),
+                Product.drug_class.is_not(None),
+            )
+        )
+        if not unclassified:
+            return
+
+        result = await session.execute(
+            select(Product).where(
+                Product.is_pharmaceutical.is_(None),
+                Product.drug_class.is_not(None),
+            )
+        )
+        for product in result.scalars().all():
+            product.is_pharmaceutical = classify_pharmaceutical(product.drug_class)
+
+        await session.commit()
 
 
 async def close_db() -> None:
