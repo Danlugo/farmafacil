@@ -158,12 +158,30 @@ LLM can also extract profile data mid-conversation:
 
 ---
 
+## Drug Recommendation Policy (v0.14.2, Item 37)
+
+**Liability guardrails** — enforced via AI role rules (highest priority) and system prompt:
+
+| Scenario | Bot behavior |
+|----------|-------------|
+| User describes symptoms, no product name | Empathize → explain cannot recommend drugs → offer to search what doctor prescribed → optionally suggest non-drug products |
+| User names a specific product (with or without symptoms) | Search that product, no medical judgment on appropriateness |
+| User asks "what should I take for X" | Decline → route to doctor/pharmacist |
+| User volunteers a medication they take | Share general interaction/side-effect info (public knowledge) → always end with "consulta con tu médico" |
+| Non-drug products (skincare, vitamins, baby, hygiene, household) | Can freely recommend and search |
+
+**Enforced by:** `no_drug_recommendations` rule (sort_order 1, highest priority), rewritten `no_diagnosis` rule, `symptom_acknowledgment` skill, `drug_interaction_info` skill, system prompt liability warning.
+
+**Admin override:** If `ai_roles.locked_by_admin = True`, the startup seed sync will NOT overwrite the role's prompt/rules/skills — allows manual policy edits via SQLAdmin without them being reverted on the next deploy.
+
+---
+
 ## Drug Search Flow
 
 When intent is `drug_search`:
 
 1. Check user has location (if not → prompt, set step to `awaiting_location`)
-2. **Symptom acknowledgment:** If the AI included a conversational response (e.g., "Entiendo que tienes acidez. Te busco Omeprazol..."), send it as a text message BEFORE the search results. This happens when users describe symptoms instead of naming a specific product.
+2. **Symptom acknowledgment (v0.14.2 policy):** If the AI included a conversational response, send it as a text message BEFORE the search results. **The bot NEVER recommends specific drugs for symptoms** — when a user describes symptoms without naming a product, the AI responds with empathy, explains it cannot recommend medications (liability), and offers to search for whatever their doctor has prescribed. The bot CAN recommend non-drug products (skincare, vitamins, baby, hygiene). If the user volunteers a medication they already take, the bot can share general interaction/side-effect info but always routes to "consulta con tu médico".
 3. **Drug interaction check:** If the user has known medications in their memory (`user_memories`), extract them via `extract_medications_from_memory()`, then query the RxNorm/RxNav API via `check_interactions()`. If interactions are detected, send a ⚠️ warning message before search results.
 4. Call `search_drug(query, city_code, lat, lng, zone_name)`
 3. Format results as text via `format_search_results()`

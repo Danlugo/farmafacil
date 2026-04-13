@@ -97,6 +97,12 @@ async def init_db() -> None:
             "INTEGER NOT NULL DEFAULT 0",
             "INTEGER NOT NULL DEFAULT 0",
         ),
+        (
+            "ai_roles",
+            "locked_by_admin",
+            "BOOLEAN NOT NULL DEFAULT 0",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
     ]
 
     async with engine.begin() as conn:
@@ -124,6 +130,7 @@ async def init_db() -> None:
     # populate product_keywords from Product.keywords so find_cross_chain_matches
     # works on existing deployments without requiring a full re-scrape.
     await _backfill_product_keywords()
+
 
 
 async def _backfill_product_keywords() -> None:

@@ -133,9 +133,12 @@ CAPACIDADES:
 - Buscar medicamentos, productos de cuidado personal, belleza, vitaminas, y cualquier producto de farmacia
 - Comparar precios entre farmacias
 - Mostrar farmacias cercanas con stock
-- Responder preguntas sobre medicamentos (sin diagnosticar)
-- Traducir síntomas a medicamentos comunes
+- Brindar información general sobre medicamentos (sin diagnosticar NI recomendar medicamentos)
+- Recomendar productos NO medicinales (skincare, vitaminas, higiene, bebé, hogar)
+- Si el usuario menciona un medicamento que ya toma, compartir información general de interacciones y efectos secundarios
 - Recordar preferencias y contexto del usuario
+
+⚠️ REGLA DE RESPONSABILIDAD MÉDICA: NUNCA recomiendes un medicamento específico para un síntoma o enfermedad. Eso es responsabilidad de un médico o farmacéutico. Si el usuario pregunta qué tomar para un síntoma, responde con empatía, explica que no puedes recomendar medicamentos, y guíalo a consultar con su médico. Puedes ayudarle a BUSCAR un producto que su médico ya le indicó.
 
 IMPORTANTE: Si el usuario pide CUALQUIER producto que se vende en farmacias, SIEMPRE intenta buscarlo. Solo di que no puedes ayudar si el producto claramente NO se vende en farmacias (electrónicos, ropa, comida, etc.)."""
 
@@ -182,34 +185,46 @@ DEFAULT_ROLES = [
         "system_prompt": _PHARMACY_ADVISOR_PROMPT,
         "rules": [
             {
+                "name": "no_drug_recommendations",
+                "description": "NEVER recommend drugs for symptoms — liability rule",
+                "content": "⚠️ REGLA DE MÁXIMA PRIORIDAD — RESPONSABILIDAD LEGAL.\n\nNUNCA recomiendes un medicamento específico para tratar un síntoma o enfermedad. Esto incluye:\n- NO digas 'te recomiendo [medicamento]' para un síntoma\n- NO digas 'puedes tomar [medicamento]' para una dolencia\n- NO hagas listas de medicamentos asociados a síntomas (ej: 'para dolor de cabeza → Acetaminofén')\n- NO sugieras alternativas medicamentosas por tu cuenta\n\nLo que SÍ puedes hacer:\n- Si el usuario NOMBRA un medicamento específico que ya conoce o que su médico le indicó, búscalo\n- Si el usuario pregunta por un medicamento por nombre, búscalo sin problema\n- Recomendar productos NO medicinales (skincare, vitaminas, higiene, bebé, hogar)\n- Compartir información GENERAL sobre un medicamento que el usuario ya toma (ver skill drug_interaction_info)\n\nCuando el usuario describe síntomas sin nombrar un producto:\n1. Reconoce el síntoma con empatía\n2. Explica que no puedes recomendar medicamentos — eso debe indicarlo un médico o farmacéutico\n3. Ofrece ayudarle a BUSCAR el producto que su médico le indique\n4. Si aplica, ofrece buscar productos NO medicinales relacionados (ej: para gripe → búsqueda de pañuelos, antigripal en general si es OTC conocido que el usuario menciona)\n\nEsta regla tiene precedencia sobre TODAS las demás reglas y skills.",
+                "sort_order": 1,
+            },
+            {
                 "name": "no_dosage_advice",
                 "description": "Never recommend specific dosages",
                 "content": "NUNCA recomiendes dosis específicas de medicamentos. Siempre sugiere 'consulta con tu médico para la dosis adecuada'. Esto aplica incluso si el usuario insiste.",
-                "sort_order": 1,
+                "sort_order": 2,
             },
             {
                 "name": "no_diagnosis",
                 "description": "Never diagnose conditions",
-                "content": "NUNCA diagnostiques condiciones médicas. Si el usuario describe síntomas, sugiere medicamentos comunes de venta libre y recomienda consultar un médico. No digas 'parece que tienes X'.",
-                "sort_order": 2,
+                "content": "NUNCA diagnostiques condiciones médicas. No digas 'parece que tienes X'. Si el usuario describe síntomas, responde con empatía pero NO sugieras medicamentos — indica que debe consultar con su médico o farmacéutico para que le recomienden el tratamiento adecuado.",
+                "sort_order": 3,
+            },
+            {
+                "name": "non_drug_recommendations_ok",
+                "description": "CAN recommend non-drug pharmacy products",
+                "content": "SÍ puedes recomendar productos NO medicinales que se venden en farmacias. Esto incluye: protector solar, cremas hidratantes, shampoo, productos de bebé (pañales, fórmula), vitaminas y suplementos de venta libre, productos de higiene personal, artículos del hogar. Para estos productos, da recomendaciones y busca con confianza. La restricción de 'no recomendar' aplica SOLO a medicamentos (fármacos que tratan enfermedades/síntomas).",
+                "sort_order": 4,
             },
             {
                 "name": "venezuelan_spanish",
                 "description": "Use Venezuelan Spanish",
                 "content": "Responde siempre en español venezolano natural. Usa 'tú' (no 'usted' a menos que el usuario lo use primero). Puedes usar expresiones venezolanas pero mantén la claridad. Sé conciso — esto es WhatsApp.",
-                "sort_order": 3,
+                "sort_order": 5,
             },
             {
                 "name": "prescription_warning",
                 "description": "Warn about prescription medications",
                 "content": "Si un medicamento requiere receta médica, siempre menciónalo. Di algo como 'Este medicamento requiere receta médica. Consulta con tu médico.'",
-                "sort_order": 4,
+                "sort_order": 6,
             },
             {
                 "name": "product_scope",
                 "description": "Always search for pharmacy products, refuse only non-pharmacy items",
                 "content": "REGLA CRÍTICA: Si el usuario pide CUALQUIER producto que se vende en farmacias, SIEMPRE clasifícalo como drug_search y usa el nombre del producto en DRUG. Las farmacias venden: medicamentos, vitaminas, suplementos, productos de skincare/belleza, protector solar, cuidado del cabello, higiene personal, productos para bebé, pañales, fórmula, termómetros, vendas, alcohol, etc. Solo di que no puedes buscar si el producto claramente NO se vende en farmacias (electrónicos, ropa, comida de restaurante, muebles, etc.). En caso de duda, BUSCA — es mejor intentar y no encontrar que rechazar una búsqueda válida.",
-                "sort_order": 5,
+                "sort_order": 7,
             },
         ],
         "skills": [
@@ -224,9 +239,14 @@ DEFAULT_ROLES = [
                 "content": "Puedes mostrar las farmacias más cercanas al usuario sin necesidad de buscar un producto. Cuando el usuario pregunte por la farmacia más cercana, dónde comprar, o qué farmacia queda cerca, clasifica como nearest_store. El sistema consultará la base de datos de ubicaciones de farmacias (Farmatodo, Farmacias SAAS, Locatel) y mostrará las más cercanas con distancia y dirección. NO hagas preguntas de seguimiento — muestra los resultados directamente.",
             },
             {
-                "name": "symptom_translation",
-                "description": "Acknowledge symptoms, suggest medication, then search",
-                "content": "Si el usuario describe síntomas (con o sin producto):\n1. RECONOCE el síntoma con empatía ('Entiendo que tienes...')\n2. Si mencionó un producto, confirma que es buena opción\n3. SIEMPRE menciona 1-2 alternativas que también podrían buscar\n4. RECUERDA consultar al médico si persiste\n5. En general NO hagas preguntas — da información y alternativas directamente\n\n⚠️ EXCEPCIÓN DE SEGURIDAD: Si el usuario menciona que toma OTRO medicamento o tiene una condición (embarazo, diabetes, anticoagulantes, etc.), ADVIERTE sobre posibles interacciones y recomienda FIRMEMENTE consultar con su médico/farmacéutico ANTES de tomar el producto. Busca el producto de todas formas pero con la advertencia clara.\n\nEjemplos de traducción (busca el primero, menciona los otros como alternativas):\n- Dolor de cabeza / fiebre → Aspirina, Acetaminofén, Ibuprofeno\n- Presión alta → Losartán, Enalapril, Amlodipino\n- Diabetes → Metformina\n- Acidez / gastritis → Omeprazol, Ranitidina\n- Gripe → Antigripales, Acetaminofén\n- Alergia → Loratadina, Cetirizina\n- Dolor muscular → Ibuprofeno, Diclofenac\n\nInteracciones comunes a alertar:\n- Anticoagulantes (warfarina, clopidogrel) + Aspirina/Ibuprofeno = riesgo sangrado\n- Embarazo + Ibuprofeno/Aspirina = contraindicado\n- Hipertensión + Ibuprofeno = puede elevar presión\n- Diabetes + corticoides = puede elevar glucosa",
+                "name": "symptom_acknowledgment",
+                "description": "Acknowledge symptoms with empathy, never recommend drugs, route to doctor",
+                "content": "Si el usuario describe síntomas o una enfermedad SIN nombrar un producto específico:\n1. RECONOCE el síntoma con empatía ('Entiendo que tienes...', 'Lamento que te sientas así')\n2. Explica que NO puedes recomendar medicamentos — eso debe hacerlo su médico o farmacéutico\n3. Ofrece buscar el producto que su médico le haya indicado: 'Si tu médico ya te indicó algo, dime el nombre y te busco disponibilidad y precios'\n4. Si aplica, ofrece alternativas NO medicinales: 'Mientras tanto, ¿quieres que te busque [producto no medicinal relacionado]?' (ej: pañuelos, termómetro, gel antibacterial)\n5. Clasifica como question (NO como drug_search — no hay producto que buscar)\n\nSi el usuario describe síntomas Y nombra un producto:\n1. Reconoce el síntoma con empatía\n2. NO evalúes si el producto es adecuado para el síntoma (eso lo decide el médico)\n3. Busca el producto que nombró — clasifica como drug_search con el nombre en DRUG\n4. Recuerda: 'Consulta con tu médico si los síntomas persisten'\n\nEjemplo CORRECTO (síntoma sin producto):\nUsuario: 'Tengo dolor de cabeza, qué me recomiendas'\nRespuesta: 'Entiendo que tienes dolor de cabeza 😔 No puedo recomendarte un medicamento específico — eso tiene que indicarlo tu médico o farmacéutico. Si ya te indicaron algo, dime el nombre y te busco disponibilidad y precios cerca de ti.'\n\nEjemplo CORRECTO (síntoma con producto):\nUsuario: 'Tengo dolor de cabeza, busca acetaminofén'\nRespuesta: 'Entiendo que tienes dolor de cabeza. Te busco acetaminofén.' → drug_search\n\nEjemplo INCORRECTO (NUNCA hagas esto):\n'Te recomiendo Acetaminofén para el dolor de cabeza' ← PROHIBIDO",
+            },
+            {
+                "name": "drug_interaction_info",
+                "description": "Share generic drug info when user volunteers a medication they take",
+                "content": "Si el usuario MENCIONA un medicamento que YA TOMA (no que quiere tomar), puedes compartir INFORMACIÓN GENERAL sobre ese medicamento:\n- Qué es y para qué se usa comúnmente (información pública, no consejo médico)\n- Interacciones conocidas con otros medicamentos comunes\n- Efectos secundarios generales conocidos\n- Advertencias generales (embarazo, conducir, alcohol)\n\nREGLAS ESTRICTAS:\n1. SIEMPRE termina con 'Consulta con tu médico o farmacéutico para información específica sobre tu caso'\n2. NUNCA digas 'deberías dejar de tomar X' ni 'deberías cambiar a Y' — esas decisiones son del médico\n3. NUNCA sugieras un medicamento alternativo o sustituto por tu cuenta\n4. La información es GENERAL y de conocimiento público, no un consejo médico personalizado\n5. Si el usuario pregunta si puede combinar dos medicamentos, da información general sobre la interacción conocida pero SIEMPRE remite al médico para la decisión final\n\nInteracciones comunes (información general pública):\n- Anticoagulantes (warfarina) + antiinflamatorios (ibuprofeno, aspirina) = riesgo aumentado de sangrado — consultar médico\n- Embarazo + ibuprofeno/aspirina = generalmente contraindicado — consultar médico\n- Antihipertensivos + ibuprofeno = puede reducir efecto del antihipertensivo — consultar médico\n- Diabetes + corticoides = puede elevar glucosa — consultar médico\n- Metformina + alcohol = riesgo de acidosis láctica — consultar médico\n\nEjemplo CORRECTO:\nUsuario: 'Tomo warfarina, ¿qué debo saber?'\nRespuesta: 'La warfarina es un anticoagulante. Es importante saber que tiene interacciones con varios medicamentos, especialmente antiinflamatorios como ibuprofeno y aspirina, que pueden aumentar el riesgo de sangrado. También interactúa con algunos alimentos ricos en vitamina K. Consulta con tu médico o farmacéutico antes de tomar cualquier medicamento nuevo.'",
             },
             {
                 "name": "generic_alternatives",
@@ -425,3 +445,152 @@ async def seed_ai_roles() -> int:
     if inserted > 0:
         logger.info("Seeded %d AI roles with rules and skills", inserted)
     return inserted
+
+
+# Rules/skills that existed in prior seed versions but were removed.
+# sync_seeded_roles() will DELETE these from the DB if still present,
+# ensuring stale liability-risk content is cleaned up on deploy.
+# Example: if a rule "old_rule" is renamed to "new_rule", add "old_rule"
+# here so the stale DB row is cleaned up on the next deploy.
+_REMOVED_SEED_RULES: set[str] = set()  # none removed yet (all renamed via upsert)
+
+_REMOVED_SEED_SKILLS: set[str] = {
+    "symptom_translation",  # v0.14.2: replaced by symptom_acknowledgment + drug_interaction_info
+}
+
+
+async def sync_seeded_roles() -> int:
+    """Idempotent updater: sync DEFAULT_ROLES into existing DB rows.
+
+    For each role in DEFAULT_ROLES that already exists in the database:
+    - If ``locked_by_admin`` is True → skip (admin hand-edited via SQLAdmin).
+    - Otherwise → update system_prompt, description, and sync rules/skills.
+
+    Rules/skills sync strategy:
+    - Rules/skills present in seed but missing in DB → INSERT.
+    - Rules/skills present in both → UPDATE content/description/sort_order.
+    - Rules/skills present in DB but NOT in seed → leave untouched (may be
+      admin-created via chat or SQLAdmin).
+
+    Returns:
+        Number of roles updated.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    updated = 0
+    async with async_session() as session:
+        for role_data in DEFAULT_ROLES:
+            result = await session.execute(
+                select(AiRole).where(AiRole.name == role_data["name"])
+            )
+            role = result.scalar_one_or_none()
+            if role is None:
+                continue  # Not yet seeded — seed_ai_roles() will handle it
+
+            if role.locked_by_admin:
+                logger.info(
+                    "Skipping sync for role '%s' — locked_by_admin=True",
+                    role.name,
+                )
+                continue
+
+            # ── Update role-level fields ────────────────────────────────
+            changed = False
+            if role.system_prompt != role_data["system_prompt"]:
+                role.system_prompt = role_data["system_prompt"]
+                changed = True
+            if role.description != role_data["description"]:
+                role.description = role_data["description"]
+                changed = True
+            if role.display_name != role_data["display_name"]:
+                role.display_name = role_data["display_name"]
+                changed = True
+
+            # ── Sync rules ──────────────────────────────────────────────
+            seed_rules = {r["name"]: r for r in role_data.get("rules", [])}
+            existing_rules = {r.name: r for r in role.rules}
+
+            # Remove seeded rules that are no longer in seed
+            # (but keep admin-created rules that were never in seed)
+            for rule_name, db_rule in existing_rules.items():
+                if rule_name not in seed_rules:
+                    # Check if this was a previously-seeded rule that got
+                    # removed from the seed (e.g. symptom_translation).
+                    # We identify these by checking if the rule name was in
+                    # any PRIOR version of DEFAULT_ROLES. For safety, we
+                    # delete rules whose name matches a known-removed seed
+                    # rule.
+                    if rule_name in _REMOVED_SEED_RULES:
+                        await session.execute(
+                            sa_delete(AiRoleRule).where(
+                                AiRoleRule.id == db_rule.id
+                            )
+                        )
+                        changed = True
+
+            for rule_name, seed_rule in seed_rules.items():
+                if rule_name in existing_rules:
+                    db_rule = existing_rules[rule_name]
+                    if (
+                        db_rule.content != seed_rule["content"]
+                        or db_rule.description != seed_rule["description"]
+                        or db_rule.sort_order != seed_rule["sort_order"]
+                    ):
+                        db_rule.content = seed_rule["content"]
+                        db_rule.description = seed_rule["description"]
+                        db_rule.sort_order = seed_rule["sort_order"]
+                        changed = True
+                else:
+                    session.add(AiRoleRule(
+                        role_id=role.id,
+                        name=seed_rule["name"],
+                        description=seed_rule["description"],
+                        content=seed_rule["content"],
+                        sort_order=seed_rule["sort_order"],
+                        is_active=True,
+                    ))
+                    changed = True
+
+            # ── Sync skills ─────────────────────────────────────────────
+            seed_skills = {s["name"]: s for s in role_data.get("skills", [])}
+            existing_skills = {s.name: s for s in role.skills}
+
+            # Remove skills that were in a prior seed but removed
+            for skill_name, db_skill in existing_skills.items():
+                if skill_name not in seed_skills:
+                    if skill_name in _REMOVED_SEED_SKILLS:
+                        await session.execute(
+                            sa_delete(AiRoleSkill).where(
+                                AiRoleSkill.id == db_skill.id
+                            )
+                        )
+                        changed = True
+
+            for skill_name, seed_skill in seed_skills.items():
+                if skill_name in existing_skills:
+                    db_skill = existing_skills[skill_name]
+                    if (
+                        db_skill.content != seed_skill["content"]
+                        or db_skill.description != seed_skill["description"]
+                    ):
+                        db_skill.content = seed_skill["content"]
+                        db_skill.description = seed_skill["description"]
+                        changed = True
+                else:
+                    session.add(AiRoleSkill(
+                        role_id=role.id,
+                        name=seed_skill["name"],
+                        description=seed_skill["description"],
+                        content=seed_skill["content"],
+                        is_active=True,
+                    ))
+                    changed = True
+
+            if changed:
+                updated += 1
+
+        await session.commit()
+
+    if updated:
+        logger.info("Synced %d AI role(s) from seed definitions", updated)
+    return updated

@@ -552,10 +552,11 @@ class AiRoleAdmin(ModelView, model=AiRole):
         AiRole.name,
         AiRole.display_name,
         AiRole.is_active,
+        AiRole.locked_by_admin,
         AiRole.updated_at,
     ]
     column_searchable_list = [AiRole.name, AiRole.display_name]
-    column_sortable_list = [AiRole.id, AiRole.name, AiRole.is_active]
+    column_sortable_list = [AiRole.id, AiRole.name, AiRole.is_active, AiRole.locked_by_admin]
     column_default_sort = "name"
 
     column_labels = {
@@ -564,6 +565,7 @@ class AiRoleAdmin(ModelView, model=AiRole):
         "description": "Description (for router)",
         "system_prompt": "System Prompt",
         "is_active": "Active",
+        "locked_by_admin": "Locked (skip seed sync)",
         "created_at": "Created",
         "updated_at": "Updated",
     }

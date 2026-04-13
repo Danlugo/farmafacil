@@ -441,6 +441,11 @@ class AiRole(Base):
         Text, nullable=False, comment="Base system prompt for this AI persona",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    locked_by_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+        comment="If True, the startup seed updater will NOT overwrite this role's "
+                "prompt/rules/skills. Set via SQLAdmin when you hand-edit a role.",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

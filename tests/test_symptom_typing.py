@@ -87,52 +87,55 @@ class TestSymptomResponseParsing:
 # ── Seed data: symptom_translation skill ──────────────────────────────
 
 
-class TestSymptomTranslationSkill:
-    """Verify the seed data for symptom_translation skill has proper instructions."""
+class TestSymptomAcknowledgmentSkill:
+    """Verify the seed data for symptom_acknowledgment skill (v0.14.2 — replaces symptom_translation)."""
 
     def test_skill_content_includes_acknowledge(self):
-        """Skill should instruct AI to acknowledge symptoms."""
+        """Skill should instruct AI to acknowledge symptoms with empathy."""
         from farmafacil.db.seed import DEFAULT_ROLES
 
         pharmacy_role = next(r for r in DEFAULT_ROLES if r["name"] == "pharmacy_advisor")
         symptom_skill = next(
-            s for s in pharmacy_role["skills"] if s["name"] == "symptom_translation"
+            s for s in pharmacy_role["skills"] if s["name"] == "symptom_acknowledgment"
         )
         content = symptom_skill["content"].lower()
-        assert "reconoce" in content or "reconozca" in content
+        assert "reconoce" in content or "empatía" in content
 
-    def test_skill_content_includes_alternatives_instruction(self):
-        """Skill should instruct AI to mention alternatives."""
+    def test_skill_content_does_not_recommend_drugs(self):
+        """Skill must NOT instruct AI to suggest specific drugs for symptoms."""
         from farmafacil.db.seed import DEFAULT_ROLES
 
         pharmacy_role = next(r for r in DEFAULT_ROLES if r["name"] == "pharmacy_advisor")
         symptom_skill = next(
-            s for s in pharmacy_role["skills"] if s["name"] == "symptom_translation"
+            s for s in pharmacy_role["skills"] if s["name"] == "symptom_acknowledgment"
         )
-        content = symptom_skill["content"].lower()
-        assert "alternativa" in content
+        content = symptom_skill["content"]
+        # Must NOT have symptom→drug mapping tables
+        assert "→ Aspirina" not in content
+        assert "→ Losartán" not in content
+        assert "→ Metformina" not in content
 
     def test_skill_content_mentions_doctor(self):
-        """Skill should remind users to consult a doctor."""
+        """Skill should always route to doctor/pharmacist."""
         from farmafacil.db.seed import DEFAULT_ROLES
 
         pharmacy_role = next(r for r in DEFAULT_ROLES if r["name"] == "pharmacy_advisor")
         symptom_skill = next(
-            s for s in pharmacy_role["skills"] if s["name"] == "symptom_translation"
+            s for s in pharmacy_role["skills"] if s["name"] == "symptom_acknowledgment"
         )
         content = symptom_skill["content"].lower()
         assert "médico" in content
 
     def test_skill_description_updated(self):
-        """Skill description should reflect acknowledge-then-search flow."""
+        """Skill description should reflect the no-recommendation policy."""
         from farmafacil.db.seed import DEFAULT_ROLES
 
         pharmacy_role = next(r for r in DEFAULT_ROLES if r["name"] == "pharmacy_advisor")
         symptom_skill = next(
-            s for s in pharmacy_role["skills"] if s["name"] == "symptom_translation"
+            s for s in pharmacy_role["skills"] if s["name"] == "symptom_acknowledgment"
         )
         desc = symptom_skill["description"].lower()
-        assert "acknowledge" in desc or "suggest" in desc
+        assert "acknowledge" in desc or "never recommend" in desc
 
 
 # ── Classification instructions ───────────────────────────────────────

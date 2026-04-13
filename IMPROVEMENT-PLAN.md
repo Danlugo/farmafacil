@@ -228,6 +228,18 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 37: Drug Recommendation Liability Guardrails (Bug #3)
+
+- **Status:** DONE (2026-04-12)
+- **Added:** 2026-04-12
+- **Completed:** 2026-04-12
+- **Problem:** Bot actively recommends specific drugs for symptoms (e.g., "Tengo dolor de cabeza" → "Te recomiendo Acetaminofén"). Jose confirmed this is a liability. The `symptom_translation` skill, `no_diagnosis` rule, and system prompt all instruct the AI to name drugs for symptoms.
+- **Solution implemented:** (A) Added `no_drug_recommendations` rule (sort_order 1, highest priority) — explicitly prohibits naming drugs for symptoms. (B) Rewritten `no_diagnosis` rule — no longer says "sugiere medicamentos". (C) Added `non_drug_recommendations_ok` rule — explicitly allows recommending non-drug products. (D) Replaced `symptom_translation` skill with `symptom_acknowledgment` (empathize, no drug names, route to doctor) + `drug_interaction_info` (info-only when user volunteers a med they take). (E) Rewritten system prompt — removed "Traducir síntomas a medicamentos", added liability disclaimer. (F) Added `ai_roles.locked_by_admin` column (default False) — when True, startup seed sync skips the role. (G) Added `sync_seeded_roles()` function — idempotent updater that syncs seed definitions into existing DB rows on every startup, ensuring policy changes propagate to production. Called in `lifespan()` after `seed_ai_roles()`. Cleans up deprecated skills via `_REMOVED_SEED_SKILLS` set.
+- **Files modified:** `src/farmafacil/db/seed.py` (prompt/rules/skills rewrite + sync_seeded_roles), `src/farmafacil/db/session.py` (additive migration for locked_by_admin), `src/farmafacil/models/database.py` (locked_by_admin column), `src/farmafacil/api/admin.py` (locked_by_admin in SQLAdmin), `src/farmafacil/api/app.py` (sync call in lifespan)
+- **Files created:** `tests/test_drug_liability.py` (26 tests)
+- **Files updated:** `tests/test_symptom_typing.py` (4 tests renamed from symptom_translation → symptom_acknowledgment)
+- **Code review:** 1 BLOCKER fixed (startup ordering — moved sync from init_db to lifespan after seed), 2 MAJORs fixed (dead test code, forward-reference constants), 1 MINOR fixed (sortable column in admin).
+
 ### Item 36: Product Grid Image Sharpness (v0.14.1)
 
 - **Status:** DONE

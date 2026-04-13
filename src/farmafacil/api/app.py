@@ -14,7 +14,7 @@ from farmafacil.api.limiter import limiter
 from farmafacil.api.routes import router
 from farmafacil.bot.webhook import webhook_router
 from farmafacil.config import LOG_LEVEL
-from farmafacil.db.seed import seed_ai_roles, seed_intents
+from farmafacil.db.seed import seed_ai_roles, seed_intents, sync_seeded_roles
 from farmafacil.db.session import close_db, engine, init_db
 from farmafacil.services.settings import seed_settings
 from farmafacil.services.store_backfill import backfill_stores
@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()
     await seed_intents()
     await seed_ai_roles()
+    await sync_seeded_roles()  # Item 37: sync prompt/rules/skills from seed
     await seed_settings()
     await backfill_stores()
     yield
