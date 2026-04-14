@@ -519,15 +519,58 @@ async def run_scheduled_task(request: Request, task_id: int) -> dict:
     return {"task_id": task_id, "result": result}
 
 
-# ── Conversation Log Threaded Viewer + CSV Export ────────────────────
+# ── Conversation Session Viewer + CSV/DOCX Export ────────────────────
+
+# A "session" is a continuous conversation — messages separated by
+# gaps larger than this are considered separate sessions.
+SESSION_GAP_MINUTES = 30
+
+
+def _group_into_sessions(messages: list) -> list[dict]:
+    """Group ordered messages into sessions by time gap.
+
+    Returns:
+        List of dicts: {start, end, messages: [...], count}
+    """
+    from datetime import timedelta
+
+    if not messages:
+        return []
+
+    sessions = []
+    current: list = [messages[0]]
+
+    for i in range(1, len(messages)):
+        prev_ts = messages[i - 1].created_at
+        curr_ts = messages[i].created_at
+        if prev_ts and curr_ts:
+            gap = curr_ts - prev_ts
+            if gap > timedelta(minutes=SESSION_GAP_MINUTES):
+                sessions.append({
+                    "start": current[0].created_at,
+                    "end": current[-1].created_at,
+                    "messages": current,
+                    "count": len(current),
+                })
+                current = []
+        current.append(messages[i])
+
+    if current:
+        sessions.append({
+            "start": current[0].created_at,
+            "end": current[-1].created_at,
+            "messages": current,
+            "count": len(current),
+        })
+
+    return sessions
 
 
 @router.get("/admin/conversations", response_class=HTMLResponse)
 @limiter.limit("60/minute")
 async def admin_conversations_list(request: Request) -> HTMLResponse:
-    """Render a list of users with conversation links."""
+    """Render a list of users with links to their conversation sessions."""
     async with async_session() as session:
-        # Get distinct phones with message counts and latest message
         result = await session.execute(
             select(
                 ConversationLog.phone_number,
@@ -539,20 +582,26 @@ async def admin_conversations_list(request: Request) -> HTMLResponse:
         )
         phones = result.all()
 
-        # Get user names
         user_result = await session.execute(select(User))
-        users_by_phone = {u.phone_number: u.name or "(sin nombre)" for u in user_result.scalars().all()}
+        users_by_phone = {
+            u.phone_number: u.name or "(sin nombre)"
+            for u in user_result.scalars().all()
+        }
 
     rows = []
     for phone, count, last_msg in phones:
         name = users_by_phone.get(phone, "(desconocido)")
         safe_phone = escape(phone)
         safe_name = escape(name)
+        last_str = last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else ""
         rows.append(
-            f'<tr><td><a href="/admin/conversations/{safe_phone}">{safe_name}</a></td>'
-            f'<td>{safe_phone}</td><td>{count}</td>'
-            f'<td>{last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else ""}</td>'
-            f'<td><a href="/api/v1/conversations/export?phone={safe_phone}">CSV</a></td></tr>'
+            f'<tr>'
+            f'<td><a href="/admin/conversations/{safe_phone}">{safe_name}</a></td>'
+            f'<td>{safe_phone}</td><td>{count}</td><td>{last_str}</td>'
+            f'<td>'
+            f'<a href="/api/v1/conversations/export?phone={safe_phone}&format=csv">CSV</a> · '
+            f'<a href="/api/v1/conversations/export?phone={safe_phone}&format=docx">Word</a>'
+            f'</td></tr>'
         )
 
     html = f"""<!DOCTYPE html>
@@ -568,11 +617,14 @@ a:hover{{text-decoration:underline;}}
 .nav{{margin-bottom:1em;}}
 .nav a{{margin-right:1em;}}
 </style></head><body>
-<div class="nav"><a href="/admin">← Admin</a> <a href="/api/v1/conversations/export">Export all CSV</a></div>
+<div class="nav">
+  <a href="/admin">← Admin</a>
+  <a href="/api/v1/conversations/export?format=csv">Export all (CSV)</a>
+</div>
 <h1>Conversations</h1>
-<p>{len(rows)} users with conversation history.</p>
+<p>{len(rows)} users with conversation history. Click a name to see sessions.</p>
 <table>
-<tr><th>Name</th><th>Phone</th><th>Messages</th><th>Last message</th><th>Export</th></tr>
+<tr><th>Name</th><th>Phone</th><th>Messages</th><th>Last</th><th>Export</th></tr>
 {"".join(rows)}
 </table>
 </body></html>"""
@@ -581,19 +633,17 @@ a:hover{{text-decoration:underline;}}
 
 @router.get("/admin/conversations/{phone}", response_class=HTMLResponse)
 @limiter.limit("60/minute")
-async def admin_conversation_thread(request: Request, phone: str) -> HTMLResponse:
-    """Render a threaded view of a single user's full conversation."""
+async def admin_conversation_sessions(request: Request, phone: str) -> HTMLResponse:
+    """List all sessions for a user, each as a collapsible thread."""
     safe_phone = escape(phone)
 
     async with async_session() as session:
-        # Load user info
         user_result = await session.execute(
             select(User).where(User.phone_number == phone)
         )
         user = user_result.scalar_one_or_none()
         user_name = (user.name if user else None) or "(sin nombre)"
 
-        # Load all messages chronologically
         msg_result = await session.execute(
             select(ConversationLog)
             .where(ConversationLog.phone_number == phone)
@@ -601,81 +651,148 @@ async def admin_conversation_thread(request: Request, phone: str) -> HTMLRespons
         )
         messages = msg_result.scalars().all()
 
-    bubbles = []
-    for msg in messages:
-        ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S") if msg.created_at else ""
-        is_inbound = msg.direction == "inbound"
-        bubble_class = "inbound" if is_inbound else "outbound"
-        label = "👤 User" if is_inbound else "🤖 Bot"
-        if msg.message_type == "admin_out":
-            label = "🛠️ Admin AI"
-            bubble_class = "admin"
-        text = escape(msg.message_text or "")
-        # Preserve newlines
-        text = text.replace("\n", "<br>")
-        bubbles.append(
-            f'<div class="msg {bubble_class}">'
-            f'<div class="meta">{label} • {ts} • {msg.message_type}</div>'
-            f'<div class="text">{text}</div>'
-            f'</div>'
-        )
+    sessions = _group_into_sessions(messages)
+
+    session_html = []
+    for idx, sess in enumerate(reversed(sessions), 1):  # newest first
+        session_num = len(sessions) - idx + 1
+        start = sess["start"].strftime("%Y-%m-%d %H:%M") if sess["start"] else "?"
+        end = sess["end"].strftime("%H:%M") if sess["end"] else "?"
+        duration_min = 0
+        if sess["start"] and sess["end"]:
+            duration_min = round((sess["end"] - sess["start"]).total_seconds() / 60)
+
+        bubbles = []
+        for msg in sess["messages"]:
+            ts = msg.created_at.strftime("%H:%M:%S") if msg.created_at else ""
+            is_inbound = msg.direction == "inbound"
+            bubble_class = "inbound" if is_inbound else "outbound"
+            label = "👤" if is_inbound else "🤖"
+            if msg.message_type == "admin_out":
+                label = "🛠️"
+                bubble_class = "admin"
+            text = escape(msg.message_text or "").replace("\n", "<br>")
+            bubbles.append(
+                f'<div class="msg {bubble_class}">'
+                f'<div class="meta">{label} {ts}</div>'
+                f'<div class="text">{text}</div>'
+                f'</div>'
+            )
+
+        # Session ID is the start timestamp for export link
+        session_ts = sess["start"].strftime("%Y%m%d_%H%M%S") if sess["start"] else f"session_{session_num}"
+        session_iso = sess["start"].isoformat() if sess["start"] else ""
+
+        session_html.append(f"""
+<details {'open' if idx == 1 else ''} class="session">
+<summary>
+  <strong>Sesión {session_num}</strong> — {start} → {end}
+  ({sess["count"]} mensajes, {duration_min} min)
+  <span class="export-links">
+    <a href="/api/v1/conversations/export?phone={safe_phone}&session={session_iso}&format=csv" onclick="event.stopPropagation()">CSV</a> ·
+    <a href="/api/v1/conversations/export?phone={safe_phone}&session={session_iso}&format=docx" onclick="event.stopPropagation()">Word</a>
+  </span>
+</summary>
+<div class="bubbles">
+{"".join(bubbles)}
+</div>
+</details>
+""")
 
     html = f"""<!DOCTYPE html>
-<html><head><title>Conversation — {escape(user_name)}</title>
+<html><head><title>Sesiones — {escape(user_name)}</title>
 <style>
-body{{font-family:system-ui,sans-serif;max-width:800px;margin:2em auto;padding:0 1em;background:#f0f0f0;}}
+body{{font-family:system-ui,sans-serif;max-width:900px;margin:2em auto;padding:0 1em;background:#f0f0f0;}}
 h1{{color:#1a73e8;}}
 .nav{{margin-bottom:1em;}}
-.nav a{{margin-right:1em;color:#1a73e8;}}
-.msg{{margin:.8em 0;padding:.8em 1em;border-radius:12px;max-width:80%;word-wrap:break-word;}}
-.msg.inbound{{background:#fff;border:1px solid #ddd;margin-right:auto;}}
+.nav a{{margin-right:1em;color:#1a73e8;text-decoration:none;}}
+.summary-box{{background:#fff;padding:1em;border-radius:8px;margin-bottom:1em;}}
+.session{{background:#fff;border-radius:8px;margin:1em 0;padding:0;}}
+.session summary{{padding:1em;cursor:pointer;font-size:1em;border-radius:8px;}}
+.session summary:hover{{background:#f5f5f5;}}
+.session[open] summary{{border-bottom:1px solid #ddd;border-radius:8px 8px 0 0;}}
+.export-links{{float:right;font-size:.85em;}}
+.export-links a{{color:#1a73e8;margin:0 .3em;}}
+.bubbles{{padding:1em;}}
+.msg{{margin:.6em 0;padding:.7em 1em;border-radius:12px;max-width:80%;word-wrap:break-word;}}
+.msg.inbound{{background:#e8f0fe;border:1px solid #bbd0f7;margin-right:auto;}}
 .msg.outbound{{background:#d4edda;border:1px solid #c3e6cb;margin-left:auto;}}
 .msg.admin{{background:#fff3cd;border:1px solid #ffeaa7;margin-left:auto;}}
-.meta{{font-size:.75em;color:#666;margin-bottom:.3em;}}
+.meta{{font-size:.7em;color:#666;margin-bottom:.2em;}}
 .text{{font-size:.95em;white-space:pre-wrap;}}
-.summary{{background:#fff;padding:1em;border-radius:8px;margin-bottom:1em;}}
 </style></head><body>
 <div class="nav">
-  <a href="/admin/conversations">← All conversations</a>
-  <a href="/api/v1/conversations/export?phone={safe_phone}">Export this conversation to CSV</a>
+  <a href="/admin/conversations">← All users</a>
+  <a href="/api/v1/conversations/export?phone={safe_phone}&format=csv">Export all sessions (CSV)</a>
+  <a href="/api/v1/conversations/export?phone={safe_phone}&format=docx">Export all (Word)</a>
 </div>
-<div class="summary">
+<div class="summary-box">
   <h1>{escape(user_name)}</h1>
-  <p>Phone: <code>{safe_phone}</code> • {len(messages)} messages</p>
+  <p>Phone: <code>{safe_phone}</code> • {len(messages)} total messages • {len(sessions)} session(s)</p>
+  <p style="color:#666;font-size:.85em;">Sessions group messages within {SESSION_GAP_MINUTES} minutes of each other.</p>
 </div>
-{"".join(bubbles)}
+{"".join(session_html)}
 </body></html>"""
     return HTMLResponse(html)
 
 
+def _filter_session_messages(messages: list, session_iso: str) -> list:
+    """Filter messages to the specific session starting at the given timestamp."""
+    from datetime import datetime, timedelta
+
+    try:
+        target_start = datetime.fromisoformat(session_iso)
+    except ValueError:
+        return messages
+
+    # Find the session that starts at or near target_start
+    sessions = _group_into_sessions(messages)
+    for sess in sessions:
+        if sess["start"] and abs((sess["start"] - target_start).total_seconds()) < 2:
+            return sess["messages"]
+
+    return []
+
+
 @router.get("/api/v1/conversations/export")
 @limiter.limit("10/minute")
-async def export_conversations_csv(
+async def export_conversations(
     request: Request,
-    phone: str | None = Query(None, description="Filter by phone number"),
+    phone: str | None = Query(None),
+    session: str | None = Query(None, description="ISO timestamp of session start"),
+    format: str = Query("csv", pattern="^(csv|docx)$"),
 ) -> StreamingResponse:
-    """Export conversation logs as CSV.
+    """Export conversations as CSV or Word document.
 
     Args:
-        phone: Optional filter — export only this user's conversations.
-
-    Returns:
-        CSV file stream.
+        phone: Optional — filter to a single user.
+        session: Optional — ISO timestamp of a specific session's start.
+        format: 'csv' or 'docx'.
     """
-    async with async_session() as session:
+    async with async_session() as session_db:
         stmt = select(ConversationLog)
         if phone:
             stmt = stmt.where(ConversationLog.phone_number == phone)
         stmt = stmt.order_by(ConversationLog.created_at.asc())
-        result = await session.execute(stmt)
+        result = await session_db.execute(stmt)
         messages = result.scalars().all()
 
-        # Get user names for readability
-        user_result = await session.execute(select(User))
+        user_result = await session_db.execute(select(User))
         users_by_phone = {
             u.phone_number: u.name or "" for u in user_result.scalars().all()
         }
 
+    if session:
+        messages = _filter_session_messages(messages, session)
+
+    if format == "docx":
+        return _export_as_docx(messages, users_by_phone, phone, session)
+
+    return _export_as_csv(messages, users_by_phone, phone, session)
+
+
+def _export_as_csv(messages, users_by_phone, phone, session_iso):
+    """Produce a CSV export."""
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
@@ -695,9 +812,76 @@ async def export_conversations_csv(
         ])
 
     buffer.seek(0)
-    filename = f"conversations_{phone}.csv" if phone else "conversations_all.csv"
+    suffix = f"_{phone}" if phone else "_all"
+    if session_iso:
+        suffix += f"_session_{session_iso.replace(':', '').replace('-', '')[:15]}"
+    filename = f"conversations{suffix}.csv"
+
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _export_as_docx(messages, users_by_phone, phone, session_iso):
+    """Produce a Word document export with chat-transcript styling."""
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+
+    doc = Document()
+    title = "FarmaFacil Conversation"
+    if phone:
+        name = users_by_phone.get(phone, "")
+        title += f" — {name} ({phone})" if name else f" — {phone}"
+    doc.add_heading(title, level=1)
+
+    if session_iso:
+        doc.add_paragraph(f"Session: {session_iso}").italic = True
+
+    doc.add_paragraph(f"Total messages: {len(messages)}").italic = True
+    doc.add_paragraph("")
+
+    for msg in messages:
+        ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S") if msg.created_at else ""
+        is_inbound = msg.direction == "inbound"
+        name = users_by_phone.get(msg.phone_number, "")
+
+        if msg.message_type == "admin_out":
+            label = "🛠️ Admin AI"
+            color = RGBColor(0xB3, 0x7F, 0x00)  # amber
+        elif is_inbound:
+            label = f"👤 {name or msg.phone_number}"
+            color = RGBColor(0x1A, 0x73, 0xE8)  # blue
+        else:
+            label = "🤖 FarmaFacil Bot"
+            color = RGBColor(0x2E, 0x7D, 0x32)  # green
+
+        # Header paragraph
+        header = doc.add_paragraph()
+        header_run = header.add_run(f"{label} — {ts}")
+        header_run.bold = True
+        header_run.font.color.rgb = color
+        header_run.font.size = Pt(9)
+
+        # Message body
+        body = doc.add_paragraph(msg.message_text or "")
+        for run in body.runs:
+            run.font.size = Pt(11)
+
+        doc.add_paragraph("")  # spacer
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    suffix = f"_{phone}" if phone else "_all"
+    if session_iso:
+        suffix += f"_session_{session_iso.replace(':', '').replace('-', '')[:15]}"
+    filename = f"conversations{suffix}.docx"
+
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
