@@ -1,9 +1,11 @@
 """API route definitions."""
 
+import csv
+import io
 from html import escape
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import func, select
 
 from farmafacil import __version__
@@ -515,3 +517,187 @@ async def run_scheduled_task(request: Request, task_id: int) -> dict:
 
     result = await run_task_now(task_id)
     return {"task_id": task_id, "result": result}
+
+
+# ── Conversation Log Threaded Viewer + CSV Export ────────────────────
+
+
+@router.get("/admin/conversations", response_class=HTMLResponse)
+@limiter.limit("60/minute")
+async def admin_conversations_list(request: Request) -> HTMLResponse:
+    """Render a list of users with conversation links."""
+    async with async_session() as session:
+        # Get distinct phones with message counts and latest message
+        result = await session.execute(
+            select(
+                ConversationLog.phone_number,
+                func.count(ConversationLog.id).label("msg_count"),
+                func.max(ConversationLog.created_at).label("last_msg"),
+            )
+            .group_by(ConversationLog.phone_number)
+            .order_by(func.max(ConversationLog.created_at).desc())
+        )
+        phones = result.all()
+
+        # Get user names
+        user_result = await session.execute(select(User))
+        users_by_phone = {u.phone_number: u.name or "(sin nombre)" for u in user_result.scalars().all()}
+
+    rows = []
+    for phone, count, last_msg in phones:
+        name = users_by_phone.get(phone, "(desconocido)")
+        safe_phone = escape(phone)
+        safe_name = escape(name)
+        rows.append(
+            f'<tr><td><a href="/admin/conversations/{safe_phone}">{safe_name}</a></td>'
+            f'<td>{safe_phone}</td><td>{count}</td>'
+            f'<td>{last_msg.strftime("%Y-%m-%d %H:%M") if last_msg else ""}</td>'
+            f'<td><a href="/api/v1/conversations/export?phone={safe_phone}">CSV</a></td></tr>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html><head><title>Conversations</title>
+<style>
+body{{font-family:system-ui,sans-serif;max-width:1000px;margin:2em auto;padding:0 1em;}}
+h1{{color:#1a73e8;}}
+table{{width:100%;border-collapse:collapse;margin-top:1em;}}
+th,td{{padding:.5em;text-align:left;border-bottom:1px solid #ddd;}}
+th{{background:#f5f5f5;}}
+a{{color:#1a73e8;text-decoration:none;}}
+a:hover{{text-decoration:underline;}}
+.nav{{margin-bottom:1em;}}
+.nav a{{margin-right:1em;}}
+</style></head><body>
+<div class="nav"><a href="/admin">← Admin</a> <a href="/api/v1/conversations/export">Export all CSV</a></div>
+<h1>Conversations</h1>
+<p>{len(rows)} users with conversation history.</p>
+<table>
+<tr><th>Name</th><th>Phone</th><th>Messages</th><th>Last message</th><th>Export</th></tr>
+{"".join(rows)}
+</table>
+</body></html>"""
+    return HTMLResponse(html)
+
+
+@router.get("/admin/conversations/{phone}", response_class=HTMLResponse)
+@limiter.limit("60/minute")
+async def admin_conversation_thread(request: Request, phone: str) -> HTMLResponse:
+    """Render a threaded view of a single user's full conversation."""
+    safe_phone = escape(phone)
+
+    async with async_session() as session:
+        # Load user info
+        user_result = await session.execute(
+            select(User).where(User.phone_number == phone)
+        )
+        user = user_result.scalar_one_or_none()
+        user_name = (user.name if user else None) or "(sin nombre)"
+
+        # Load all messages chronologically
+        msg_result = await session.execute(
+            select(ConversationLog)
+            .where(ConversationLog.phone_number == phone)
+            .order_by(ConversationLog.created_at.asc())
+        )
+        messages = msg_result.scalars().all()
+
+    bubbles = []
+    for msg in messages:
+        ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S") if msg.created_at else ""
+        is_inbound = msg.direction == "inbound"
+        bubble_class = "inbound" if is_inbound else "outbound"
+        label = "👤 User" if is_inbound else "🤖 Bot"
+        if msg.message_type == "admin_out":
+            label = "🛠️ Admin AI"
+            bubble_class = "admin"
+        text = escape(msg.message_text or "")
+        # Preserve newlines
+        text = text.replace("\n", "<br>")
+        bubbles.append(
+            f'<div class="msg {bubble_class}">'
+            f'<div class="meta">{label} • {ts} • {msg.message_type}</div>'
+            f'<div class="text">{text}</div>'
+            f'</div>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html><head><title>Conversation — {escape(user_name)}</title>
+<style>
+body{{font-family:system-ui,sans-serif;max-width:800px;margin:2em auto;padding:0 1em;background:#f0f0f0;}}
+h1{{color:#1a73e8;}}
+.nav{{margin-bottom:1em;}}
+.nav a{{margin-right:1em;color:#1a73e8;}}
+.msg{{margin:.8em 0;padding:.8em 1em;border-radius:12px;max-width:80%;word-wrap:break-word;}}
+.msg.inbound{{background:#fff;border:1px solid #ddd;margin-right:auto;}}
+.msg.outbound{{background:#d4edda;border:1px solid #c3e6cb;margin-left:auto;}}
+.msg.admin{{background:#fff3cd;border:1px solid #ffeaa7;margin-left:auto;}}
+.meta{{font-size:.75em;color:#666;margin-bottom:.3em;}}
+.text{{font-size:.95em;white-space:pre-wrap;}}
+.summary{{background:#fff;padding:1em;border-radius:8px;margin-bottom:1em;}}
+</style></head><body>
+<div class="nav">
+  <a href="/admin/conversations">← All conversations</a>
+  <a href="/api/v1/conversations/export?phone={safe_phone}">Export this conversation to CSV</a>
+</div>
+<div class="summary">
+  <h1>{escape(user_name)}</h1>
+  <p>Phone: <code>{safe_phone}</code> • {len(messages)} messages</p>
+</div>
+{"".join(bubbles)}
+</body></html>"""
+    return HTMLResponse(html)
+
+
+@router.get("/api/v1/conversations/export")
+@limiter.limit("10/minute")
+async def export_conversations_csv(
+    request: Request,
+    phone: str | None = Query(None, description="Filter by phone number"),
+) -> StreamingResponse:
+    """Export conversation logs as CSV.
+
+    Args:
+        phone: Optional filter — export only this user's conversations.
+
+    Returns:
+        CSV file stream.
+    """
+    async with async_session() as session:
+        stmt = select(ConversationLog)
+        if phone:
+            stmt = stmt.where(ConversationLog.phone_number == phone)
+        stmt = stmt.order_by(ConversationLog.created_at.asc())
+        result = await session.execute(stmt)
+        messages = result.scalars().all()
+
+        # Get user names for readability
+        user_result = await session.execute(select(User))
+        users_by_phone = {
+            u.phone_number: u.name or "" for u in user_result.scalars().all()
+        }
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "id", "timestamp", "phone", "name", "direction",
+        "message_type", "message_text", "wa_message_id",
+    ])
+    for msg in messages:
+        writer.writerow([
+            msg.id,
+            msg.created_at.isoformat() if msg.created_at else "",
+            msg.phone_number,
+            users_by_phone.get(msg.phone_number, ""),
+            msg.direction,
+            msg.message_type,
+            msg.message_text or "",
+            msg.wa_message_id or "",
+        ])
+
+    buffer.seek(0)
+    filename = f"conversations_{phone}.csv" if phone else "conversations_all.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
