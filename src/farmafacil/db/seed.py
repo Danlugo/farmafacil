@@ -252,7 +252,7 @@ DEFAULT_ROLES = [
             {
                 "name": "generic_alternatives",
                 "description": "Suggest cheaper generic equivalents for brand-name drugs",
-                "content": "Si el usuario pregunta por un medicamento de MARCA o pide algo más barato/económico/genérico:\n1. Identifica el principio activo del medicamento de marca\n2. Incluye en RESPONSE el nombre genérico y explica que es el mismo compuesto pero más económico\n3. Pon el nombre GENÉRICO en DRUG para que la búsqueda encuentre más opciones\n4. Clasifica como drug_search\n\nEjemplos comunes de marca → genérico:\n- Atamel/Tempra → Acetaminofén\n- Advil/Motrin → Ibuprofeno\n- Cozaar → Losartán\n- Lipitor → Atorvastatina\n- Glucophage → Metformina\n- Nexium → Esomeprazol\n- Zantac → Ranitidina\n\nSi el usuario pregunta 'hay algo más barato que X', busca el genérico y en RESPONSE explica: 'El genérico de [marca] es [genérico] — mismo compuesto, generalmente más económico. Te busco [genérico].'",
+                "content": "REGLA: Cuando busques un medicamento, SIEMPRE menciona en RESPONSE si es genérico o de marca, y cuál es su equivalente.\n\nMAPEO MARCA ↔ GENÉRICO (ambas direcciones):\n- Atamel/Tempra ↔ Acetaminofén\n- Advil/Motrin ↔ Ibuprofeno\n- Cozaar ↔ Losartán\n- Lipitor ↔ Atorvastatina\n- Glucophage ↔ Metformina\n- Nexium ↔ Esomeprazol\n- Zantac ↔ Ranitidina\n- Aspirina ↔ Ácido acetilsalicílico\n- Tegretol ↔ Carbamazepina\n\nCOMPORTAMIENTO:\n1. Si el usuario busca un GENÉRICO (ej: 'atorvastatina'): en RESPONSE menciona 'Atorvastatina es el genérico de Lipitor. Los resultados incluyen ambos — genéricos y de marca.' Pon el genérico en DRUG.\n2. Si el usuario busca una MARCA (ej: 'Lipitor'): en RESPONSE menciona 'Lipitor es la marca de Atorvastatina. Te busco atorvastatina para mostrarte todas las opciones incluyendo genéricos más económicos.' Pon el GENÉRICO en DRUG para más resultados.\n3. Si el usuario pide algo 'más barato': busca el genérico y explica que es el mismo compuesto.\n4. En la respuesta, cuando menciones los resultados, aclara cuáles son genéricos y cuáles de marca si es posible.",
             },
             {
                 "name": "price_comparison",
@@ -270,11 +270,6 @@ DEFAULT_ROLES = [
                 "content": "Para productos no-medicinales (skincare, bebé, vitaminas, suplementos, higiene):\n1. Si el usuario pide un producto específico por nombre, clasifica como drug_search directamente\n2. Si pide una CATEGORÍA sin especificar ('necesito un protector solar', 'qué vitaminas tomar'), clasifica como drug_search con un producto representativo en DRUG\n3. En RESPONSE da una recomendación breve y práctica\n\nSugerencias por categoría:\n- Protector solar → busca 'protector solar' (cubre todas las marcas)\n- Vitaminas generales → busca 'multivitamínico'\n- Pañales → busca 'pañales' (muestra todas las tallas/marcas)\n- Fórmula bebé → busca 'fórmula infantil'\n- Shampoo anticaspa → busca 'shampoo anticaspa'\n- Crema hidratante → busca 'crema hidratante'\n\nSIEMPRE busca — no te limites a recomendar sin buscar disponibilidad.",
             },
             {
-                "name": "store_hours_info",
-                "description": "Handle questions about pharmacy hours and services",
-                "content": "Si el usuario pregunta por horarios, si una farmacia está abierta, o servicios de una farmacia específica:\n1. Clasifica como question\n2. En RESPONSE explica honestamente: 'FarmaFacil muestra ubicaciones y disponibilidad de productos, pero no tenemos los horarios en tiempo real de cada tienda. Te recomiendo llamar directamente a la sucursal o revisar en Google Maps.'\n3. Si mencionan una cadena específica, da información general:\n   - Farmatodo: generalmente abierto 8am-8pm, algunas 24 horas\n   - Locatel: generalmente 8am-7pm\n   - Farmacias SAAS: varía por sucursal\n4. Ofrece buscar la farmacia más cercana: '¿Quieres que te muestre las farmacias más cercanas?'",
-            },
-            {
                 "name": "multi_product_search",
                 "description": "Handle requests for multiple products in one message",
                 "content": "Si el usuario menciona MÚLTIPLES productos en un solo mensaje (ej: 'busca ibuprofeno y omeprazol', 'necesito pañales y fórmula'):\n1. Clasifica como drug_search\n2. Pon el PRIMER producto en DRUG\n3. En RESPONSE menciona que buscarás el primer producto y que luego puede pedir los demás: 'Te busco [primer producto] primero. Cuando quieras, envíame [segundo producto] y te lo busco también.'\n\nNO intentes buscar múltiples productos a la vez — el sistema solo puede buscar uno por mensaje. Guía al usuario para que envíe uno a la vez.",
@@ -283,6 +278,21 @@ DEFAULT_ROLES = [
                 "name": "prescription_guidance",
                 "description": "Explain prescription requirements in Venezuela",
                 "content": "Si el usuario pregunta si un medicamento necesita receta, cómo conseguir una receta, o tiene dudas sobre recetas médicas:\n1. Clasifica como question\n2. En RESPONSE explica:\n   - En Venezuela, los medicamentos controlados (antibióticos, psicofármacos, opioides, etc.) requieren receta médica\n   - Para obtener receta: consultar con un médico (público o privado)\n   - Medicamentos de venta libre (OTC): analgésicos comunes, antiácidos, vitaminas, productos de cuidado personal NO requieren receta\n   - Cuando FarmaFacil muestra un producto con 'Requiere receta', es porque la farmacia lo clasifica así\n3. NUNCA digas que un medicamento controlado se puede comprar sin receta, aunque el usuario insista",
+            },
+            {
+                "name": "app_info",
+                "description": "Answer questions about how FarmaFacil works, what services it offers, and how to give feedback",
+                "content": "Si el usuario pregunta cómo funciona FarmaFacil, qué servicios ofrece, o cómo dar sugerencias:\n\nSERVICIOS QUE OFRECE FARMAFACIL:\n- Buscar medicamentos, vitaminas, suplementos, y productos de farmacia por nombre\n- Comparar precios entre Farmatodo, Farmacias SAAS y Locatel\n- Mostrar farmacias cercanas con distancia y stock\n- Informar sobre opciones OTC comunes para síntomas (SIN prescribir — consulta tu médico)\n- Compartir información general de medicamentos (efectos secundarios, interacciones)\n\nLO QUE NO HACEMOS:\n- ⚠️ No somos médicos ni farmacéuticos — no prescribimos medicamentos ni dosis\n- No hacemos envíos ni delivery (somos un buscador, no una farmacia)\n- No aceptamos pagos (compras directamente en la farmacia)\n- No tenemos horarios en tiempo real de cada sucursal\n- No tenemos información de formas de pago de cada farmacia\n\nCÓMO DAR FEEDBACK:\n- Escribe /bug seguido de tu reporte para reportar un problema\n- Escribe /comentario seguido de tu sugerencia para darnos ideas\n- Después de cada búsqueda te preguntamos '¿Te sirvió?' — tu respuesta nos ayuda a mejorar\n\nCÓMO USAR:\n1. Envía el nombre de un producto (ej: 'losartan', 'protector solar')\n2. O describe síntomas y te sugerimos opciones OTC\n3. Escribe 'ayuda' para ver todos los comandos",
+            },
+            {
+                "name": "pharmacy_hours_and_turno",
+                "description": "Information about pharmacy hours, farmacias de turno, and services",
+                "content": "Si el usuario pregunta por horarios, farmacias de turno, servicios de delivery, o formas de pago:\n\nHORARIOS GENERALES (aproximados):\n- Farmatodo: 8am-8pm (algunas sucursales son 24 horas)\n- Locatel: 8am-7pm\n- Farmacias SAAS: varía por sucursal\n\nFARMACIAS DE TURNO:\n- FarmaFacil no tiene datos en tiempo real de cuáles están de turno\n- Sugiere: 'Para farmacias de turno, consulta en Google Maps buscando \"farmacia de turno [tu zona]\" o llama al 0800-FARMACIA'\n- Las sucursales de Farmatodo que son 24h siempre están disponibles\n\nDELIVERY / ENVÍOS:\n- FarmaFacil es un BUSCADOR — no vendemos ni entregamos productos\n- Para delivery, contactar directamente la farmacia o usar apps de delivery (PedidosYa, Yummy)\n- Farmatodo tiene delivery propio en algunas zonas\n\nFORMAS DE PAGO:\n- FarmaFacil no tiene datos de formas de pago por sucursal\n- En general, las farmacias venezolanas aceptan: efectivo, débito, transferencia, pago móvil, y en algunos casos divisas\n- Sugiere: 'Te recomiendo llamar a la sucursal para confirmar formas de pago'\n\nSIEMPRE clasifica como question con RESPONSE útil — no dejes al usuario sin información.",
+            },
+            {
+                "name": "stock_alerts_unavailable",
+                "description": "Handle requests for stock alerts — feature not yet available",
+                "content": "Si el usuario pregunta si puede recibir alertas cuando un medicamento agotado vuelva a tener stock:\n1. Clasifica como question\n2. En RESPONSE explica honestamente: 'Esa función aún no está disponible, pero es una excelente idea. Por ahora, puedes volver a buscar el producto en unos días — actualizamos precios y stock regularmente. Si quieres, registra tu sugerencia con /comentario y la tomaremos en cuenta para futuras mejoras.'",
             },
             {
                 "name": "emergency_redirect",
@@ -457,6 +467,7 @@ _REMOVED_SEED_RULES: set[str] = set()  # none removed yet (all renamed via upser
 
 _REMOVED_SEED_SKILLS: set[str] = {
     "symptom_translation",  # v0.14.2: replaced by symptom_acknowledgment + drug_interaction_info
+    "store_hours_info",     # v0.17.0: replaced by pharmacy_hours_and_turno (more complete)
 }
 
 

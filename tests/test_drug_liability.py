@@ -517,8 +517,8 @@ class TestRuleCounts:
         assert len(rules) == 7
 
     @pytest.mark.asyncio
-    async def test_pharmacy_advisor_has_12_skills(self):
-        """pharmacy_advisor has 12 skills after seeding (11 original - symptom_translation + symptom_acknowledgment + drug_interaction_info)."""
+    async def test_pharmacy_advisor_has_14_skills(self):
+        """pharmacy_advisor has 14 skills after seeding."""
         from sqlalchemy import delete, select
 
         async with async_session() as session:
@@ -537,9 +537,13 @@ class TestRuleCounts:
             skills = result.scalars().all()
         skill_names = {s.name for s in skills}
         assert "symptom_translation" not in skill_names
+        assert "store_hours_info" not in skill_names  # replaced by pharmacy_hours_and_turno
         assert "symptom_acknowledgment" in skill_names
         assert "drug_interaction_info" in skill_names
-        assert len(skills) == 12
+        assert "app_info" in skill_names
+        assert "pharmacy_hours_and_turno" in skill_names
+        assert "stock_alerts_unavailable" in skill_names
+        assert len(skills) == 14
 
 
 # ── Three-layer consistency tests ─────────────────────────────────────
