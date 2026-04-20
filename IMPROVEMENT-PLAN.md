@@ -228,6 +228,16 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P2 — Medium
 
+### Item 42: Fix All 16 User-Reported Bugs (Jose's Testing)
+
+- **Status:** DONE (2026-04-20)
+- **Added:** 2026-04-20
+- **Completed:** 2026-04-20
+- **Problem:** Jose (prod user, Los Naranjos) submitted 16 bug reports via `/bug` command during testing. Issues ranged from wrong store distances, missing AI knowledge (delivery, payment, hours), generic/brand confusion, to feature requests (stock alerts).
+- **Solution implemented:** (A) 3 new AI skills: `app_info` (how FarmaFacil works, services, feedback commands), `pharmacy_hours_and_turno` (hours, turno, delivery, payment — honest answers with alternatives), `stock_alerts_unavailable` (redirects to /comentario). (B) Rewrote `generic_alternatives` skill: bidirectional brand↔generic lookup — searching "atorvastatina" mentions Lipitor and vice versa; AI labels generic vs brand in responses. (C) Removed old `store_hours_info` skill (replaced by more complete `pharmacy_hours_and_turno`). (D) Store distances already fixed earlier (haversine recalculation). (E) OTC suggestions already fixed earlier. (F) All 16 bugs marked reviewed in `user_feedback` table with notes.
+- **Files modified:** `src/farmafacil/db/seed.py` (3 new skills, 1 removed, 1 rewritten), `tests/test_drug_liability.py` (skill count 12→14)
+- **Bug disposition:** 8 fixed with code, 5 already fixed earlier this session, 2 responses were correct (no action needed), 1 logged as future feature (stock alerts)
+
 ### Item 41: Background Task Scheduler with Admin UI
 
 - **Status:** DONE (2026-04-13)
