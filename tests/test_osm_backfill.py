@@ -216,6 +216,49 @@ class TestDetectChain:
         assert detect_chain("FARMACIAS SAAS") == "Farmacias SAAS"
 
 
+class TestDetectChainWordBoundary:
+    """v0.19.1 (Item 49) — names must match on word boundaries only.
+
+    The pre-fix logic did a naive substring match against
+    ``name + brand + operator``, which classified any independent whose
+    name happened to contain a chain substring (e.g., "Farmacia La
+    Farmatodita") as that chain. The fix:
+
+    1. Trust ``brand`` / ``operator`` substring matches — those tags are
+       intentional declarations.
+    2. For a ``name``-only match, require ``\\b<pattern>\\b`` so embedded
+       substrings inside longer words are rejected.
+    """
+
+    def test_name_substring_inside_word_is_independiente(self):
+        # "Farmatodita" embeds "farmatodo" but is not the chain.
+        assert detect_chain("Farmacia La Farmatodita") == INDEPENDIENTE_CHAIN
+
+    def test_locatel_substring_inside_word_is_independiente(self):
+        # "Locatelyx" embeds "locatel" but is not the chain.
+        assert detect_chain("Farmacia Locatelyx") == INDEPENDIENTE_CHAIN
+
+    def test_brand_wins_over_generic_name(self):
+        # Brand is intentional — even a generic name should classify.
+        assert detect_chain(
+            "Farmacia Local", brand="Farmatodo", operator=None,
+        ) == "Farmatodo"
+
+    def test_operator_wins_over_unrelated_name(self):
+        assert detect_chain(
+            "Algo raro", brand=None, operator="Farmacias SAAS",
+        ) == "Farmacias SAAS"
+
+    def test_uppercase_name_word_boundary_still_matches(self):
+        # Existing v0.18.0 regression coverage — must keep working.
+        assert detect_chain("FARMATODO LA UNION") == "Farmatodo"
+
+    def test_locatel_inside_longer_name_with_word_boundary(self):
+        # "Farmacia Locatel del Hatillo" — "Locatel" is a separate token,
+        # so it should still classify as Locatel.
+        assert detect_chain("Farmacia Locatel del Hatillo") == "Locatel"
+
+
 # ── is_24h_from_hours ─────────────────────────────────────────────────
 
 

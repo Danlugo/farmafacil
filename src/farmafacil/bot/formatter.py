@@ -284,8 +284,22 @@ def format_nearby_stores(
         # First line: chain prefix unless this is an independent — Item 46.
         # The user explicitly asked for no "(Independiente)" suffix, so we
         # just lead with the pharmacy name when there's no real chain.
-        is_independent = (chain or "").lower() == "independiente"
-        title = name if is_independent else f"{chain} {name}"
+        #
+        # v0.19.1 (Item 49): also skip the chain prefix when the store name
+        # already begins with the chain — OSM names like "Farmatodo" and the
+        # original chain-API rows like "FARMATODO LA UNION" both contain the
+        # chain word, so prepending it again produced "Farmatodo Farmatodo"
+        # and "Farmatodo FARMATODO LA UNION". Match is case-insensitive on
+        # the leading characters after stripping surrounding whitespace.
+        chain_clean = (chain or "").strip()
+        name_clean = (name or "").strip()
+        is_independent = chain_clean.lower() == "independiente"
+        if is_independent or not chain_clean:
+            title = name_clean
+        elif name_clean.lower().startswith(chain_clean.lower()):
+            title = name_clean  # name already contains the chain — no duplicate
+        else:
+            title = f"{chain_clean} {name_clean}"
 
         line = f"*{i}. {title}*"
 

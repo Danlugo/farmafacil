@@ -155,3 +155,66 @@ class TestFormatNearbyStoresAttributes:
         assert "07:00-23:00" in out
         assert "+58-212-555-0100" in out
         assert "farmatodo.com.ve" in out
+
+
+# ── v0.19.1 (Item 49) — chain prefix dedup ────────────────────────────
+
+
+class TestChainPrefixDedup:
+    """The title line must NOT duplicate the chain word when ``store_name``
+    already starts with it.
+
+    Bug background: OSM-sourced rows often have ``name="Farmatodo"`` AND
+    ``pharmacy_chain="Farmatodo"``, so the old ``f"{chain} {name}"`` rendered
+    "Farmatodo Farmatodo". Original chain-API rows whose names are
+    uppercased (e.g., ``"FARMATODO LA UNION"``) had the same problem.
+    """
+
+    def test_chain_equals_name_renders_once(self):
+        # OSM result: name and chain are both "Farmatodo".
+        stores = [_make_store(pharmacy_chain="Farmatodo", store_name="Farmatodo")]
+        out = format_nearby_stores(stores)
+        assert "Farmatodo Farmatodo" not in out
+        # The numbered title line must contain "Farmatodo" exactly once.
+        # We assert against the exact bold-formatted title segment to avoid
+        # false matches against the section header.
+        assert "*1. Farmatodo*" in out
+
+    def test_uppercased_name_with_chain_inside_renders_once(self):
+        # Existing chain-API rows often store ALL-CAPS names that contain
+        # the chain word. The chain prefix would otherwise produce a noisy
+        # "Farmatodo FARMATODO LA UNION".
+        stores = [_make_store(
+            pharmacy_chain="Farmatodo", store_name="FARMATODO LA UNION",
+        )]
+        out = format_nearby_stores(stores)
+        assert "Farmatodo FARMATODO LA UNION" not in out
+        assert "FARMATODO LA UNION" in out
+
+    def test_name_without_chain_keeps_chain_prefix(self):
+        # Pin the existing behavior for the (rare) case where the chain
+        # word is missing from the name — we still want the chain prefix.
+        stores = [_make_store(
+            pharmacy_chain="Farmatodo", store_name="Farmacia Los Geranios",
+        )]
+        out = format_nearby_stores(stores)
+        assert "Farmatodo Farmacia Los Geranios" in out
+
+    def test_independiente_branch_unchanged(self):
+        # Regression for Item 46: independents must never carry a chain marker.
+        stores = [_make_store(
+            pharmacy_chain="Independiente", store_name="Botiquería",
+        )]
+        out = format_nearby_stores(stores)
+        assert "Independiente" not in out
+        assert "Botiquería" in out
+
+    def test_multi_word_chain_dedup(self):
+        # "Farmacias SAAS Tepuy" already starts with the chain — no prefix.
+        stores = [_make_store(
+            pharmacy_chain="Farmacias SAAS", store_name="Farmacias SAAS Tepuy",
+        )]
+        out = format_nearby_stores(stores)
+        # The chain word must appear exactly once (not "Farmacias SAAS Farmacias SAAS Tepuy").
+        assert "Farmacias SAAS Farmacias SAAS" not in out
+        assert "Farmacias SAAS Tepuy" in out

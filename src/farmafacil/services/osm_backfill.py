@@ -216,15 +216,39 @@ def detect_chain(
 ) -> str:
     """Map an OSM pharmacy to one of our known chains, or Independiente.
 
-    Checks name + brand + operator in turn against a curated substring
-    list. Case-insensitive. Returns the canonical chain name our scrapers
-    use (e.g., "Farmacias SAAS" not "SAAS"), or ``INDEPENDIENTE_CHAIN``
-    when nothing matches.
+    v0.19.1 (Item 49) — chain detection is now two-tiered:
+
+    1. **brand / operator** — these OSM tags exist specifically to declare
+       chain affiliation, so a substring match on them is sufficient. If
+       either matches a ``_CHAIN_PATTERNS`` entry, we accept the chain.
+    2. **name** — names are noisier (e.g., "Farmacia La Farmatodita" or
+       "Farmacia Locatelyx" contain a chain substring but are independents),
+       so a name-only match REQUIRES a word-boundary match. We use
+       ``\\b<pattern>\\b`` with ``re.IGNORECASE`` against the lowercased
+       name. "FARMATODO LA UNION" → matches; "Farmatodita" → does not.
+
+    No unicode normalization here — Spanish names commonly contain accents
+    and the chain patterns themselves are accent-free Latin tokens, so
+    ``re.IGNORECASE`` on the raw lowercased haystack is sufficient.
+
+    Returns the canonical chain name our scrapers use (e.g.,
+    "Farmacias SAAS" not "SAAS"), or ``INDEPENDIENTE_CHAIN`` when nothing
+    matches.
     """
-    haystack = " ".join(s for s in (name, brand, operator) if s).lower()
-    for pattern, canonical in _CHAIN_PATTERNS:
-        if pattern in haystack:
-            return canonical
+    # Tier 1 — brand/operator substring match (intentional chain tags).
+    declared = " ".join(s for s in (brand, operator) if s).lower()
+    if declared:
+        for pattern, canonical in _CHAIN_PATTERNS:
+            if pattern in declared:
+                return canonical
+
+    # Tier 2 — name word-boundary match (noisier signal).
+    name_lc = (name or "").lower()
+    if name_lc:
+        for pattern, canonical in _CHAIN_PATTERNS:
+            if re.search(rf"\b{re.escape(pattern)}\b", name_lc):
+                return canonical
+
     return INDEPENDIENTE_CHAIN
 
 
