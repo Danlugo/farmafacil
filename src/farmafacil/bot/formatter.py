@@ -5,8 +5,60 @@ from decimal import Decimal
 
 from farmafacil.models.schemas import DrugResult, SearchResponse
 
+import re
+
 MAX_PRODUCTS = 8
 MAX_STORES_PER_PHARMACY = 3
+# Truncate raw OSM opening_hours strings to keep WhatsApp lines short.
+# Full OSM strings can be 80+ chars (e.g., "Mo-Fr 08:00-20:00; Sa 09:00-18:00; Su 10:00-14:00").
+HOURS_DISPLAY_MAXLEN = 40
+URL_DISPLAY_MAXLEN = 40
+
+# Strip control characters and bidi-override codepoints from user-generated
+# OSM tag values before rendering. WhatsApp plain-text has no XSS surface,
+# but stray LTR/RTL overrides or zero-width chars can garble lines or
+# confuse downstream parsers. (From v0.18.0 code-review finding #3.)
+_OSM_STRIP_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f​-‍‪-‮]")
+
+
+def _sanitize_osm_text(value: str | None) -> str | None:
+    """Remove control / bidi-override characters from OSM-sourced strings."""
+    if value is None:
+        return None
+    cleaned = _OSM_STRIP_PATTERN.sub("", value)
+    return cleaned or None
+
+
+def _short_hours(opening_hours: str) -> str:
+    """Compact an OSM opening_hours string for WhatsApp display.
+
+    OSM hours can be verbose ("Mo-Fr 08:00-20:00; Sa 09:00-18:00; Su 10:00-14:00").
+    For chat display we keep the first segment and append an ellipsis if
+    truncation occurred — users who need full hours can tap through to
+    Google Maps via the address.
+    """
+    s = opening_hours.strip()
+    if len(s) <= HOURS_DISPLAY_MAXLEN:
+        return s
+    # Keep up to the first ';' or comma — a single weekday range is usually
+    # informative enough.
+    head = s.split(";", 1)[0].strip()
+    if len(head) <= HOURS_DISPLAY_MAXLEN:
+        return head + " ..."
+    return head[: HOURS_DISPLAY_MAXLEN - 3] + "..."
+
+
+def _short_url(url: str) -> str:
+    """Strip protocol prefix and trailing slash for compact display."""
+    s = url.strip()
+    for prefix in ("https://", "http://"):
+        if s.lower().startswith(prefix):
+            s = s[len(prefix):]
+            break
+    s = s.rstrip("/")
+    if len(s) <= URL_DISPLAY_MAXLEN:
+        return s
+    return s[: URL_DISPLAY_MAXLEN - 3] + "..."
 
 
 def _group_by_product(results: list[DrugResult]) -> list[tuple[str, list[DrugResult]]]:
@@ -223,10 +275,41 @@ def format_nearby_stores(
         name = store["store_name"]
         dist = store["distance_km"]
         address = store["address"]
+        zone = _sanitize_osm_text(store.get("zone_name"))
+        hours = _sanitize_osm_text(store.get("opening_hours"))
+        is_24h = store.get("is_24h", False)
+        phone = _sanitize_osm_text(store.get("phone"))
+        website = _sanitize_osm_text(store.get("website"))
 
-        line = f"*{i}. {name}*\n   \U0001f4cd {chain} — {dist:.1f} km"
+        # First line: chain prefix unless this is an independent — Item 46.
+        # The user explicitly asked for no "(Independiente)" suffix, so we
+        # just lead with the pharmacy name when there's no real chain.
+        is_independent = (chain or "").lower() == "independiente"
+        title = name if is_independent else f"{chain} {name}"
+
+        line = f"*{i}. {title}*"
+
+        # Location line — zone (if known) + distance
+        loc_bits = []
+        if zone:
+            loc_bits.append(zone)
+        loc_bits.append(f"{dist:.1f} km")
+        line += f"\n   \U0001f4cd {' — '.join(loc_bits)}"
+
         if address:
             line += f"\n   {address}"
+
+        # Hours: prefer the 24h flag (compact) over the raw hours string.
+        if is_24h:
+            line += "\n   \U0001f319 24 horas"
+        elif hours:
+            line += f"\n   \U0001f550 {_short_hours(hours)}"
+
+        if phone:
+            line += f"\n   \U0001f4de {phone}"
+        if website:
+            line += f"\n   \U0001f310 {_short_url(website)}"
+
         lines.append(line)
 
     lines.append(

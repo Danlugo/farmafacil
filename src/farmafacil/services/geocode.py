@@ -228,6 +228,37 @@ async def reverse_geocode(lat: float, lng: float) -> dict | None:
     }
 
 
+async def reverse_geocode_zone(lat: float, lng: float) -> str | None:
+    """Reverse-geocode coordinates to a neighborhood/zone name only.
+
+    Thin wrapper around ``reverse_geocode`` that returns just the
+    ``zone_name`` string. Used by the v0.18.0 zone backfill task to label
+    pharmacy_locations rows with their neighborhood (e.g., "Las Mercedes",
+    "Chuao") so the bot can show useful context like "Farmatodo TEPUY —
+    Las Mercedes — 5.6 km".
+
+    Returns the literal "Ubicación compartida" sentinel from
+    ``reverse_geocode`` only when no specific neighborhood/town field was
+    populated by Nominatim — callers should treat that as "no useful zone"
+    and fall back to NULL in the DB.
+
+    Args:
+        lat: Latitude in decimal degrees.
+        lng: Longitude in decimal degrees.
+
+    Returns:
+        Zone/neighborhood name, or None if reverse geocoding failed or
+        returned only the fallback sentinel.
+    """
+    result = await reverse_geocode(lat, lng)
+    if not result:
+        return None
+    zone = result.get("zone_name")
+    if not zone or zone == "Ubicación compartida":
+        return None
+    return zone
+
+
 def _extract_city_code(hit: dict) -> str:
     """Extract Farmatodo city code from Nominatim address details.
 

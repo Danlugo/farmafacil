@@ -95,6 +95,12 @@ async def get_nearby_chain_stores(
             address=loc.address or "",
             distance_km=round(dist, 1),
             price_bs=None,
+            pharmacy_chain=loc.pharmacy_chain,
+            zone_name=loc.zone_name,
+            opening_hours=loc.opening_hours,
+            is_24h=loc.is_24h,
+            phone=loc.phone,
+            website=loc.website,
         )
         for loc, dist in stores_with_distance[:max_stores]
     ]
@@ -151,6 +157,11 @@ async def get_all_nearby_stores(
             "address": loc.address or "",
             "distance_km": round(dist, 1),
             "pharmacy_chain": loc.pharmacy_chain,
+            "zone_name": loc.zone_name,
+            "opening_hours": loc.opening_hours,
+            "is_24h": loc.is_24h,
+            "phone": loc.phone,
+            "website": loc.website,
         }
         for loc, dist in stores_with_distance[:max_stores]
     ]

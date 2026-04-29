@@ -168,13 +168,19 @@ class PharmacyLocationAdmin(ModelView, model=PharmacyLocation):
         PharmacyLocation.pharmacy_chain,
         PharmacyLocation.name,
         PharmacyLocation.city_code,
+        PharmacyLocation.zone_name,
         PharmacyLocation.address,
+        PharmacyLocation.opening_hours,
+        PharmacyLocation.is_24h,
+        PharmacyLocation.phone,
+        PharmacyLocation.website,
         PharmacyLocation.is_active,
     ]
     column_searchable_list = [
         PharmacyLocation.name,
         PharmacyLocation.pharmacy_chain,
         PharmacyLocation.city_code,
+        PharmacyLocation.zone_name,
         PharmacyLocation.address,
     ]
     column_sortable_list = [

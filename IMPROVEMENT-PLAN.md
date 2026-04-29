@@ -228,6 +228,64 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P0 — Critical
 
+### Item 46: OpenStreetMap Backfill — Independent Pharmacies + Rich Attributes (Hours, Website, Phone)
+
+- **Status:** DONE (2026-04-28, v0.18.0)
+- **Added:** 2026-04-28
+- **Completed:** 2026-04-28
+- **Priority:** P0
+- **Problem:** `pharmacy_locations` only covers the 3 chain pharmacies we scrape (Farmatodo, SAAS, Locatel) — 77 stores total. Real Venezuela has thousands. Even worse, our existing rows are missing key attributes: `phone` is empty, no opening hours, no website, no 24h flag. So users can't tell when a pharmacy is open or how to contact it.
+- **Solution plan:** One-time + monthly backfill from OpenStreetMap via Overpass API, querying `[amenity=pharmacy]` in Venezuela's bounding box. Capture the full OSM tag set: name, location, **opening_hours, website, phone, email, brand, operator, dispensing flag, wheelchair access, 24/7 status**. OSM is community-mapped, free, no auth. Estimated yield: 300–800 new pharmacies + rich attributes for ~30% of existing rows.
+- **Schema additions** (`pharmacy_locations`):
+  - `opening_hours VARCHAR(255)` — raw OSM format, e.g., `"Mo-Fr 08:00-20:00; Sa 09:00-18:00"` or `"24/7"`
+  - `is_24h BOOLEAN DEFAULT FALSE` — derived flag for fast `/turno` queries
+  - `website VARCHAR(500)`
+  - `email VARCHAR(255)`
+  - **`phone`** column already exists — backfill from OSM where currently NULL
+- **Implementation steps:**
+  1. New service `src/farmafacil/services/osm_backfill.py`:
+     - Overpass QL query: `node[amenity=pharmacy](area.searchArea); way[amenity=pharmacy](area.searchArea); relation[amenity=pharmacy](area.searchArea); out tags center;`
+     - Tag extraction: `name`, `opening_hours`, `phone`/`contact:phone`, `website`/`contact:website`, `email`/`contact:email`, `addr:*`, `brand`, `operator`
+     - 24h detection: `opening_hours == "24/7"` OR `is_24_7 == "yes"`
+     - Dedup vs existing rows: skip if any existing row is within 100m AND name token-set similarity ≥ 0.7
+     - Chain detection from name+brand+operator: matches "Farmatodo"/"Farmacias SAAS"/"SAAS"/"Locatel"/"Farmarebajas" → existing chain, else `Independiente`
+     - Update existing rows: where attributes are NULL/empty, fill from OSM if matched on coords+name
+  2. New scheduled task `osm_backfill_task` (runs monthly, ~60s execution)
+  3. Trigger once-after-deploy via admin task UI
+  4. Update `format_nearby_stores` to show: name, zone, distance, hours snippet ("Abre 8am" or "🌙 24h"), phone if present
+  5. Drug search must skip `Independiente` rows during store enrichment (no stock API)
+- **Files to create:** `src/farmafacil/services/osm_backfill.py`, `tests/test_osm_backfill.py`
+- **Files to modify:** `src/farmafacil/models/database.py` (5 new columns), `src/farmafacil/models/schemas.py` (NearbyStore extended), `src/farmafacil/services/scheduler.py` (register task), `src/farmafacil/services/store_locations.py` (filter Independiente, return new fields), `src/farmafacil/bot/formatter.py` (display hours/phone), `src/farmafacil/api/admin.py` (column visibility)
+- **Migration SQL:**
+  ```sql
+  ALTER TABLE pharmacy_locations ADD COLUMN opening_hours VARCHAR(255);
+  ALTER TABLE pharmacy_locations ADD COLUMN is_24h BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE pharmacy_locations ADD COLUMN website VARCHAR(500);
+  ALTER TABLE pharmacy_locations ADD COLUMN email VARCHAR(255);
+  ```
+- **Risks:** OSM data may have stale entries (closed pharmacies), name spelling variations. Dedup must be tolerant. Rate-limit: Overpass enforces 2 req/min per IP — single backfill is one query so fine.
+- **Effort:** 1.5 days
+
+### Item 45: Pharmacy Zone Name Backfill — Better Display + Zone-Based Search
+
+- **Status:** DONE (2026-04-28, v0.18.0 — bundled with Item 46)
+- **Added:** 2026-04-28
+- **Completed:** 2026-04-28
+- **Priority:** P0
+- **Problem:** `pharmacy_locations` rows have lat/lng + city_code (CCS, MCBO, ...) but no neighborhood/zone. When the bot shows "Farmatodo TEPUY — 5.6 km" the user has no sense of *where* TEPUY is. And the user can't say "farmacias en Chacao" and get zone-matched results.
+- **Solution plan:** Add `zone_name VARCHAR(100)` column to `pharmacy_locations`. Backfill via Nominatim reverse-geocoding (we already use Nominatim for forward geocoding via `geocode_zone`). Update display: "Farmatodo TEPUY — Las Mercedes — 5.6 km". Update nearest_store path to do exact-zone match before haversine fallback when user types a known zone.
+- **Implementation steps:**
+  1. ALTER TABLE migration (Postgres prod + SQLAlchemy model)
+  2. New helper `reverse_geocode_zone(lat, lng)` in `services/geocode.py`
+  3. New scheduled task `zone_backfill_task` — runs daily, processes any pharmacy_locations rows with NULL zone_name (rate-limited to 1 req/sec per Nominatim ToS)
+  4. Update `format_nearby_stores` to include zone_name when present
+  5. Update `_handle_nearest_store` to prefer zone_name exact-match before geo-radius
+- **Files to create:** None
+- **Files to modify:** `src/farmafacil/models/database.py` (zone_name column), `src/farmafacil/services/geocode.py` (reverse helper), `src/farmafacil/services/scheduler.py` (register task), `src/farmafacil/services/store_locations.py` (zone-aware queries), `src/farmafacil/bot/formatter.py` (display), `src/farmafacil/api/admin.py` (column visible)
+- **Migration SQL:** `ALTER TABLE pharmacy_locations ADD COLUMN zone_name VARCHAR(100);`
+- **Risks:** Nominatim rate limit (1 req/sec, free tier) means full 77-row backfill takes ~80s — acceptable. Once we add OSM (Item 46) the 300–800 new rows take ~10 minutes of background work spread across days.
+- **Effort:** 0.5 day
+
 ### Item 44: AI-First Discipline — Clarify Before Pharmacy APIs + Farmatodo Store Enrichment Resilience
 
 - **Status:** DONE (2026-04-28, v0.17.2)

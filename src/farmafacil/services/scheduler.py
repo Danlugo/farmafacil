@@ -96,6 +96,29 @@ async def _rescore_products(task: ScheduledTask) -> str:
     return f"Checked {len(products)} products, reclassified {changed}"
 
 
+async def _osm_backfill(task: ScheduledTask) -> str:
+    """Item 46 — pull pharmacies from OpenStreetMap, dedupe, insert/update."""
+    from farmafacil.services.osm_backfill import backfill_from_osm
+
+    summary = await backfill_from_osm()
+    return (
+        f"OSM backfill: +{summary['inserted']} new, "
+        f"~{summary['updated']} updated, ={summary['skipped']} unchanged, "
+        f"x{summary['rejected']} rejected"
+    )
+
+
+async def _zone_backfill(task: ScheduledTask) -> str:
+    """Item 45 — reverse-geocode pharmacy_locations rows missing zone_name."""
+    from farmafacil.services.store_backfill import backfill_zone_names
+
+    summary = await backfill_zone_names()
+    return (
+        f"Zone backfill: processed {summary['processed']}, "
+        f"updated {summary['updated']}, failed {summary['failed']}"
+    )
+
+
 async def _cleanup_old_logs(task: ScheduledTask) -> str:
     """Delete conversation_logs older than 90 days."""
     from sqlalchemy import delete as sa_delete
@@ -124,6 +147,8 @@ TASK_REGISTRY: dict[str, TaskFunc] = {
     "backfill_stores": _backfill_stores,
     "rescore_products": _rescore_products,
     "cleanup_old_logs": _cleanup_old_logs,
+    "osm_backfill": _osm_backfill,
+    "zone_backfill": _zone_backfill,
 }
 
 # Default tasks seeded on first startup.
@@ -133,6 +158,10 @@ DEFAULT_TASKS: list[tuple[str, str, int, bool]] = [
     ("Refresh store locations", "backfill_stores", 1440, True),
     ("Re-score product categories", "rescore_products", 1440, True),
     ("Cleanup old conversation logs", "cleanup_old_logs", 10080, True),
+    # v0.18.0 Item 46 — monthly because Overpass API has no urgency
+    ("OSM pharmacy backfill", "osm_backfill", 43200, True),
+    # v0.18.0 Item 45 — daily because Nominatim is rate-limited at 1 req/sec
+    ("Pharmacy zone backfill", "zone_backfill", 1440, True),
 ]
 
 

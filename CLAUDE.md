@@ -48,7 +48,8 @@ docker compose logs -f app
 - **Locatel VTEX API** for drug search (shared VTEXScraper base)
 - **WhatsApp Business Cloud API** (Meta) for bot
 - **Claude Haiku** for AI role-based responses and intent classification
-- **OpenStreetMap Nominatim** for geocoding zones
+- **OpenStreetMap Nominatim** for geocoding zones (forward + reverse)
+- **OpenStreetMap Overpass API** for pharmacy discovery (v0.18.0 — independents + rich attributes)
 - **Pillow** for product grid image generation
 
 ## Key Paths
@@ -61,11 +62,12 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (741 tests) |
+| `tests/` | pytest test suite (814 tests) |
 | `src/farmafacil/services/media.py` | WhatsApp media download, Vision encoding, PDF/DOCX extraction |
 | `src/farmafacil/services/web_search.py` | Brave Search API client (admin-only) |
 | `src/farmafacil/services/scheduler.py` | Background task scheduler with DB-driven intervals |
 | `src/farmafacil/services/file_manager.py` | Per-user file CRUD with path traversal protection |
+| `src/farmafacil/services/osm_backfill.py` | OpenStreetMap pharmacy discovery (Overpass API) — v0.18.0 |
 | `docs/` | Project documentation (see below) |
 
 ## Database Tables
@@ -74,7 +76,7 @@ docker compose logs -f app
 |-------|---------|
 | `users` | Phone, name, location, display preference, response mode override, chat debug override, last search log ID, cumulative token counters, per-model token/call counters (haiku, sonnet, admin), `chat_admin` (UI-only flag), `admin_mode_active` (per-session toggle via `/admin`), onboarding step, awaiting_clarification_context, awaiting_category_search |
 | `intent_keywords` | Bot keyword→action mappings (admin-editable) |
-| `pharmacy_locations` | Physical store locations (generic, multi-chain) |
+| `pharmacy_locations` | Physical store locations (generic, multi-chain). v0.18.0: added `zone_name`, `opening_hours`, `is_24h`, `website`, `email` columns; backfilled from OpenStreetMap + Nominatim reverse-geocode |
 | `products` | Permanent product catalog (never deleted, only upserted), `is_pharmaceutical` flag for relevance filtering |
 | `product_prices` | Per-location pricing with refresh timestamps (FK → products) |
 | `product_keywords` | Inverted index of keyword tokens per product (FK → products CASCADE) for fast cross-chain matching (v0.12.6) |

@@ -262,6 +262,19 @@ class PharmacyLocation(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # v0.18.0 Item 45 — Nominatim-derived neighborhood (e.g., "Las Mercedes")
+    zone_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # v0.18.0 Item 46 — OSM tags
+    opening_hours: Mapped[str | None] = mapped_column(
+        String(255), nullable=True,
+        comment="Raw OSM opening_hours format, e.g., 'Mo-Fr 08:00-20:00'",
+    )
+    is_24h: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="Derived: True if opening_hours == '24/7'",
+    )
+    website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

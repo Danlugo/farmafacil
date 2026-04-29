@@ -13,6 +13,13 @@ class NearbyStore(BaseModel):
     address: str
     distance_km: float
     price_bs: Decimal | None = None
+    # v0.18.0 — display attributes from pharmacy_locations (Item 45/46)
+    pharmacy_chain: str | None = None
+    zone_name: str | None = None
+    opening_hours: str | None = None
+    is_24h: bool = False
+    phone: str | None = None
+    website: str | None = None
 
 
 class DrugResult(BaseModel):

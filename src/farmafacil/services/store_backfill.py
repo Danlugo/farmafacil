@@ -324,6 +324,68 @@ def _map_vtex_city(city_name: str) -> str:
     return city_map.get(city_lower, "CCS")
 
 
+async def backfill_zone_names(batch_size: int = 50) -> dict[str, int]:
+    """Reverse-geocode pharmacy_locations rows that lack a ``zone_name``.
+
+    Implementation note — Nominatim's free tier asks for ≤1 req/sec.
+    We process up to ``batch_size`` rows per invocation and sleep 1.1s
+    between requests to stay safely under the limit. The scheduled task
+    runs daily; spreading 800 rows across daily batches of 50 means a
+    full backfill completes in ~16 days, well under any urgency bar.
+
+    Args:
+        batch_size: Maximum number of rows to process this run.
+
+    Returns:
+        Dict with ``processed`` (rows attempted), ``updated`` (rows that
+        got a zone_name), ``failed`` (Nominatim returned nothing useful).
+    """
+    import asyncio
+
+    from farmafacil.services.geocode import reverse_geocode_zone
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(PharmacyLocation)
+            .where(
+                PharmacyLocation.zone_name.is_(None),
+                PharmacyLocation.latitude.isnot(None),
+                PharmacyLocation.longitude.isnot(None),
+                PharmacyLocation.is_active.is_(True),
+            )
+            .limit(batch_size)
+        )
+        rows = result.scalars().all()
+
+    if not rows:
+        logger.info("No pharmacy_locations rows need zone backfill")
+        return {"processed": 0, "updated": 0, "failed": 0}
+
+    logger.info("Zone backfill: processing %d rows", len(rows))
+    updated = 0
+    failed = 0
+    for i, row in enumerate(rows):
+        # Re-open the session per row so a single bad commit can't poison
+        # the rest of the batch. Cheap because the row count is small.
+        zone = await reverse_geocode_zone(row.latitude, row.longitude)
+        if zone:
+            async with async_session() as session:
+                obj = await session.get(PharmacyLocation, row.id)
+                if obj is not None:
+                    obj.zone_name = zone
+                    await session.commit()
+                    updated += 1
+        else:
+            failed += 1
+        # Don't rate-limit the very last call — saves up to 1.1s per cycle.
+        if i < len(rows) - 1:
+            await asyncio.sleep(1.1)
+
+    summary = {"processed": len(rows), "updated": updated, "failed": failed}
+    logger.info("Zone backfill complete: %s", summary)
+    return summary
+
+
 async def lookup_store(name: str, chain: str | None = None) -> PharmacyLocation | None:
     """Look up a pharmacy location by store name (case-insensitive).
 
