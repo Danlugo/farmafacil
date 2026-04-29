@@ -63,6 +63,11 @@ class Intent:
     clarify_context: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # Concrete model id used for the AI fallback (empty string when the
+    # intent was resolved purely from keyword cache, since no LLM ran).
+    # Threaded through so the handler can route token usage to the correct
+    # per-model bucket. (v0.19.2, Item 49.)
+    model: str = ""
 
 
 HELP_MESSAGE = (
@@ -162,6 +167,7 @@ async def classify_intent_ai(
         clarify_context=ai_result.clarify_context,
         input_tokens=ai_result.input_tokens,
         output_tokens=ai_result.output_tokens,
+        model=ai_result.model,
     )
 
 

@@ -204,6 +204,37 @@ async def set_default_model(alias: str) -> str:
     return normalized
 
 
+async def resolve_user_model() -> str:
+    """Return the full Anthropic model name for user-facing AI calls.
+
+    Reads the ``default_model`` alias from ``app_settings`` and maps it to
+    the concrete model id via ``config.MODEL_ALIASES``. This is the SINGLE
+    source of truth for which model the bot uses for intent classification
+    and pharmacy-advisor responses.
+
+    Used by ``ai_responder.classify_with_ai``, ``ai_responder._call_llm``,
+    ``ai_responder.refine_clarified_query``, ``user_memory.auto_update_memory``,
+    and the vision/document drug-extraction helpers in ``bot.handler``.
+
+    The admin AI (``run_admin_turn``) does NOT use this resolver — it is
+    hardcoded to Opus by design (admin reasoning benefits from Opus, admin
+    cost is tracked in its own bucket, and admin work must not be affected
+    by user-facing model changes).
+
+    Returns:
+        Full model id, e.g. ``"claude-haiku-4-5-20251001"`` or
+        ``"claude-sonnet-4-20250514"``. Falls back to the haiku id if the
+        stored alias is missing or somehow not in MODEL_ALIASES.
+    """
+    # Local import to avoid a cycle: config -> services.settings is fine,
+    # but importing config at module top would couple settings imports to
+    # env-var loading order in tests.
+    from farmafacil.config import LLM_MODEL, MODEL_ALIASES
+
+    alias = await get_default_model()
+    return MODEL_ALIASES.get(alias, LLM_MODEL)
+
+
 def resolve_chat_debug(user_debug: str | None, global_debug: str) -> bool:
     """Resolve whether chat debug is enabled for a user.
 

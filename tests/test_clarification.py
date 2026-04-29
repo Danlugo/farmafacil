@@ -158,10 +158,14 @@ class TestRefineClarifiedQueryUnit:
                 "gomitas, adulto",
             )
 
-        refined, tin, tout = result
+        refined, tin, tout, model = result
         assert refined == "ginkgo gomitas adulto"
         assert tin == 85
         assert tout == 6
+        # v0.19.2: refine_clarified_query now returns the model used so the
+        # handler can route token usage to the correct per-model bucket.
+        assert isinstance(model, str)
+        assert model  # non-empty when an LLM call was made
 
     @pytest.mark.asyncio
     async def test_refiner_strips_quotes_and_punctuation(self):
@@ -180,7 +184,7 @@ class TestRefineClarifiedQueryUnit:
         with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
             mock_anthropic.Anthropic.return_value = fake_client
-            refined, _, _ = await ai_responder.refine_clarified_query(
+            refined, _, _, _ = await ai_responder.refine_clarified_query(
                 "algo para dormir", "pastillas",
             )
 
@@ -203,7 +207,7 @@ class TestRefineClarifiedQueryUnit:
         with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
             mock_anthropic.Anthropic.return_value = fake_client
-            refined, tin, tout = await ai_responder.refine_clarified_query(
+            refined, tin, tout, _ = await ai_responder.refine_clarified_query(
                 "vitaminas", "para niño bebible",
             )
 
@@ -225,13 +229,15 @@ class TestRefineClarifiedQueryUnit:
         with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
             mock_anthropic.Anthropic.return_value = fake_client
-            refined, tin, tout = await ai_responder.refine_clarified_query(
+            refined, tin, tout, model = await ai_responder.refine_clarified_query(
                 "medicinas para la memoria", "gomitas adulto",
             )
 
         assert refined == "gomitas adulto"
         assert tin == 0
         assert tout == 0
+        # On exception we couldn't determine which model was used — empty string.
+        assert model == ""
 
     @pytest.mark.asyncio
     async def test_refiner_no_api_key_falls_back(self):
@@ -240,13 +246,15 @@ class TestRefineClarifiedQueryUnit:
         from farmafacil.services import ai_responder
 
         with patch.object(ai_responder, "ANTHROPIC_API_KEY", ""):
-            refined, tin, tout = await ai_responder.refine_clarified_query(
+            refined, tin, tout, model = await ai_responder.refine_clarified_query(
                 "vitaminas", "gomitas niños",
             )
 
         assert refined == "gomitas niños"
         assert tin == 0
         assert tout == 0
+        # No API call was made → model field should be empty.
+        assert model == ""
 
     def test_refiner_system_prompt_has_rules_and_examples(self):
         """The refiner system prompt must contain the hard rules and at least
@@ -461,7 +469,8 @@ async def test_clarify_answer_refines_and_dispatches_search(clarify_user):
 
     async def fake_refine(context, answer):
         refiner_calls.append((context, answer))
-        return ("ginkgo gomitas adulto", 80, 12)
+        # v0.19.2: returns (refined, tin, tout, model). Use a stub model id.
+        return ("ginkgo gomitas adulto", 80, 12, "claude-haiku-test")
 
     with patch.object(handler, "send_text_message", new=AsyncMock(side_effect=fake_send_text)), \
          patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \
@@ -523,8 +532,9 @@ async def test_refiner_failure_falls_back_to_user_answer(clarify_user):
         )
 
     async def fake_refine(context, answer):
-        # Simulate LLM failure fallback — returns the user's answer, 0 tokens
-        return (answer.strip(), 0, 0)
+        # Simulate LLM failure fallback — returns the user's answer, 0 tokens,
+        # empty model (no LLM call was made). v0.19.2 4-tuple shape.
+        return (answer.strip(), 0, 0, "")
 
     with patch.object(handler, "send_text_message", AsyncMock()), \
          patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \

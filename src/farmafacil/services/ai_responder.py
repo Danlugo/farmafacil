@@ -17,11 +17,12 @@ import anthropic
 from anthropic import APIConnectionError, APIError
 from sqlalchemy import select
 
-from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL, LLM_MODEL_OPUS
+from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL_OPUS
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.ai_router import DEFAULT_ROLE, route_to_role
+from farmafacil.services.settings import resolve_user_model
 from farmafacil.services.user_memory import get_memory
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,13 @@ class AiResponse:
     clarify_context: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # Concrete model name actually used for this call (e.g.
+    # ``claude-sonnet-4-20250514``). Threaded through so the chat debug
+    # footer can render the live model and ``increment_token_usage`` can
+    # route tokens to the correct per-model bucket. Empty string means
+    # "no LLM call was made" (e.g. fallback path with no API key).
+    # (v0.19.2, Item 49 — admin set_default_model now actually takes effect.)
+    model: str = ""
 
 
 @dataclass
@@ -184,7 +192,7 @@ async def generate_response(
         logger.warning("No AI roles in DB — using hardcoded fallback prompt")
 
     # 5. Call the LLM
-    response_text, input_tokens, output_tokens = await _call_llm(
+    response_text, input_tokens, output_tokens, model_used = await _call_llm(
         system_prompt, message, user_name
     )
 
@@ -196,6 +204,7 @@ async def generate_response(
         role_used=role_used,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        model=model_used,
     )
 
 
@@ -269,20 +278,28 @@ async def classify_with_ai(
         else:
             messages.append({"role": "user", "content": message})
 
+        # Resolve the user-facing model from app_settings.default_model so
+        # the admin /model command (and admin chat tool set_default_model)
+        # actually changes which model the bot uses. (v0.19.2, Item 49.)
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=500,
             system=system_prompt,
             messages=messages,
         )
         reply = response.content[0].text.strip()
-        logger.info("AI classify for '%s': %s", message[:50], reply[:200])
+        logger.info(
+            "AI classify (model=%s) for '%s': %s",
+            resolved_model, message[:50], reply[:200],
+        )
 
         parsed = _parse_structured_response(reply)
         parsed.role_used = role.name if role else "fallback"
         parsed.input_tokens = response.usage.input_tokens
         parsed.output_tokens = response.usage.output_tokens
+        parsed.model = resolved_model
         return parsed
 
     except (APIError, APIConnectionError) as exc:
@@ -307,7 +324,7 @@ async def classify_with_ai(
 
 async def _call_llm(
     system_prompt: str, message: str, user_name: str,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, str]:
     """Make the LLM call with the assembled prompt.
 
     Args:
@@ -316,16 +333,25 @@ async def _call_llm(
         user_name: The user's display name (for context).
 
     Returns:
-        Tuple of (response_text, input_tokens, output_tokens).
+        Tuple of (response_text, input_tokens, output_tokens, model_used).
+        ``model_used`` is the concrete model id resolved from
+        ``app_settings.default_model``, or "" if no API call was made.
     """
     if not ANTHROPIC_API_KEY:
         logger.warning("No ANTHROPIC_API_KEY — cannot generate AI response")
-        return ("Lo siento, no puedo responder en este momento. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
+        return (
+            "Lo siento, no puedo responder en este momento. "
+            "Enviame el nombre de un producto de farmacia para buscar.",
+            0, 0, "",
+        )
 
     try:
+        # Resolve the user-facing model from app_settings.default_model.
+        # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before.)
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=500,
             system=system_prompt,
             messages=[
@@ -339,16 +365,25 @@ async def _call_llm(
             response.content[0].text.strip(),
             response.usage.input_tokens,
             response.usage.output_tokens,
+            resolved_model,
         )
 
     except (APIError, APIConnectionError) as exc:
         logger.error("LLM call — Anthropic API error: %s", exc)
-        return ("Lo siento, tuve un error. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
+        return (
+            "Lo siento, tuve un error. "
+            "Enviame el nombre de un producto de farmacia para buscar.",
+            0, 0, "",
+        )
     except Exception:
         # Last-resort: unexpected response shape / parsing issue. Still
         # return a safe fallback rather than crashing the caller.
         logger.error("LLM call — unexpected error", exc_info=True)
-        return ("Lo siento, tuve un error. Enviame el nombre de un producto de farmacia para buscar.", 0, 0)
+        return (
+            "Lo siento, tuve un error. "
+            "Enviame el nombre de un producto de farmacia para buscar.",
+            0, 0, "",
+        )
 
 
 # ── Clarified-query refiner ────────────────────────────────────────────
@@ -383,7 +418,7 @@ Vaga: "kit dental" / Respuesta: "adulto cepillo y pasta" -> kit dental adulto"""
 
 async def refine_clarified_query(
     original_context: str, user_answer: str,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, str]:
     """Distill a vague query + clarifying answer into a concrete search term.
 
     Takes the original vague query that triggered the clarification and the
@@ -399,11 +434,15 @@ async def refine_clarified_query(
         user_answer: The user's clarifying answer, e.g. "gomitas adulto".
 
     Returns:
-        Tuple of (refined_query, input_tokens, output_tokens).
+        Tuple of ``(refined_query, input_tokens, output_tokens, model_used)``.
+        ``model_used`` is the concrete model id resolved from
+        ``app_settings.default_model``, or "" if no API call was made.
+        (v0.19.2 added the model field so callers can route token usage to
+        the correct per-model bucket.)
     """
     if not ANTHROPIC_API_KEY:
         logger.warning("refine_clarified_query: no API key, falling back to answer")
-        return (user_answer.strip(), 0, 0)
+        return (user_answer.strip(), 0, 0, "")
 
     user_message = (
         f"Pregunta vaga: {original_context}\n"
@@ -412,9 +451,12 @@ async def refine_clarified_query(
     )
 
     try:
+        # Resolve the user-facing model from app_settings.default_model.
+        # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before.)
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=40,
             system=_REFINER_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
@@ -427,22 +469,28 @@ async def refine_clarified_query(
                 "refine_clarified_query: empty LLM response, falling back. "
                 "context=%r answer=%r", original_context, user_answer,
             )
-            return (user_answer.strip(), response.usage.input_tokens, response.usage.output_tokens)
+            return (
+                user_answer.strip(),
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                resolved_model,
+            )
         logger.info(
-            "refine_clarified_query: %r + %r -> %r",
-            original_context, user_answer, refined,
+            "refine_clarified_query (model=%s): %r + %r -> %r",
+            resolved_model, original_context, user_answer, refined,
         )
         return (
             refined,
             response.usage.input_tokens,
             response.usage.output_tokens,
+            resolved_model,
         )
     except (APIError, APIConnectionError) as exc:
         logger.error(
             "refine_clarified_query — Anthropic API error: %s "
             "(falling back to raw answer)", exc,
         )
-        return (user_answer.strip(), 0, 0)
+        return (user_answer.strip(), 0, 0, "")
     except Exception:
         # Last-resort: unexpected error should still fall back so the user
         # always gets a search dispatched.
@@ -450,7 +498,7 @@ async def refine_clarified_query(
             "refine_clarified_query — unexpected error, "
             "falling back to raw answer", exc_info=True,
         )
-        return (user_answer.strip(), 0, 0)
+        return (user_answer.strip(), 0, 0, "")
 
 
 # ── App Admin chat turn runner ────────────────────────────────────────

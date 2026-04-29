@@ -17,7 +17,7 @@ from anthropic import APIConnectionError, APIError
 from sqlalchemy import select, func
 from sqlalchemy.exc import SQLAlchemyError
 
-from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+from farmafacil.config import ANTHROPIC_API_KEY
 from farmafacil.db.session import async_session
 from farmafacil.models.database import SearchLog, User, UserMemory
 
@@ -144,9 +144,16 @@ async def auto_update_memory(
     user_context = await _get_user_context(user_id)
 
     try:
+        # Resolve the user-facing model from app_settings.default_model.
+        # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before, so
+        # admin set_default_model didn't change which model maintained
+        # user memory either.)
+        from farmafacil.services.settings import resolve_user_model
+
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=500,
             system=(
                 "You maintain a memory file for a pharmacy product search bot user "

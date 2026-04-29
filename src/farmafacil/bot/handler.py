@@ -596,7 +596,8 @@ async def _extract_drug_name_from_image(
     """
     import anthropic
 
-    from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+    from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.settings import resolve_user_model
 
     if not ANTHROPIC_API_KEY:
         return None
@@ -615,14 +616,17 @@ async def _extract_drug_name_from_image(
     content.append({"type": "text", "text": user_text})
 
     try:
+        # Resolve from app_settings so admin /model takes effect on Vision
+        # too. (v0.19.2, Item 49.)
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=100,
             messages=[{"role": "user", "content": content}],
         )
         reply = response.content[0].text.strip()
-        logger.info("Vision drug extraction: %s", reply[:100])
+        logger.info("Vision drug extraction (model=%s): %s", resolved_model, reply[:100])
 
         if reply.upper() == "NONE" or len(reply) > 100:
             return None
@@ -637,7 +641,8 @@ async def _extract_drug_name_from_text(text: str) -> str | None:
     """Use AI to extract a drug name from document text."""
     import anthropic
 
-    from farmafacil.config import ANTHROPIC_API_KEY, LLM_MODEL
+    from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.settings import resolve_user_model
 
     if not ANTHROPIC_API_KEY:
         return None
@@ -646,9 +651,12 @@ async def _extract_drug_name_from_text(text: str) -> str | None:
     snippet = text[:2000]
 
     try:
+        # Resolve from app_settings so admin /model takes effect on document
+        # extraction too. (v0.19.2, Item 49.)
+        resolved_model = await resolve_user_model()
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             max_tokens=100,
             messages=[{
                 "role": "user",
@@ -664,7 +672,10 @@ async def _extract_drug_name_from_text(text: str) -> str | None:
             }],
         )
         reply = response.content[0].text.strip()
-        logger.info("Document drug extraction: %s", reply[:100])
+        logger.info(
+            "Document drug extraction (model=%s): %s",
+            resolved_model, reply[:100],
+        )
 
         if reply.upper() == "NONE" or len(reply) > 100:
             return None
@@ -1135,15 +1146,18 @@ async def handle_incoming_message(
         # Clear the pending context BEFORE dispatching so that a failure
         # downstream cannot leave the user trapped in the clarify state.
         await set_awaiting_clarification(sender, None)
-        # Ask Claude Haiku to distill the vague context + the user's answer
-        # into a concrete 2-5 word search term. Without this step the scraper
-        # would receive a 15-word natural-language sentence that no product
-        # catalog can match (regression from v0.12.3, fixed in v0.12.4).
-        refined_query, r_in, r_out = await refine_clarified_query(
+        # Ask the user-facing default model (admin-controlled) to distill
+        # the vague context + the user's answer into a concrete 2-5 word
+        # search term. Without this step the scraper would receive a
+        # 15-word natural-language sentence that no product catalog can
+        # match (regression from v0.12.3, fixed in v0.12.4).
+        refined_query, r_in, r_out, r_model = await refine_clarified_query(
             pending_context, text,
         )
         if r_in or r_out:
-            await increment_token_usage(user.id, r_in, r_out, model=LLM_MODEL)
+            await increment_token_usage(
+                user.id, r_in, r_out, model=r_model or LLM_MODEL,
+            )
         logger.info(
             "Clarification refinement for %s: %r + %r -> %r",
             sender, pending_context, text, refined_query,
@@ -1217,7 +1231,10 @@ async def handle_incoming_message(
     if step == "awaiting_name":
         # Always use AI here to distinguish greetings from actual names
         ai_result = await classify_with_ai(text, user.id, user.name or "")
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
 
         # If it's just a greeting (hi, hola), re-ask for name
         if ai_result.action == "greeting" and not ai_result.detected_name:
@@ -1363,11 +1380,16 @@ async def handle_incoming_message(
     # ── Special commands (available in all modes) ──────────────────────
     if text_lower == "/stats":
         if debug_on:
+            from farmafacil.services.settings import resolve_user_model
+
             stats = await get_user_stats(sender, user.id)
             from farmafacil import __version__
             from farmafacil.services.chat_debug import estimate_cost_breakdown
+            # Show + price by the CURRENT default model, not the hardcoded
+            # haiku constant. (v0.19.2, Item 49.)
+            current_model = await resolve_user_model()
             last_cost = estimate_cost(
-                stats["last_tokens_in"], stats["last_tokens_out"], LLM_MODEL
+                stats["last_tokens_in"], stats["last_tokens_out"], current_model
             )
             user_costs = estimate_cost_breakdown(stats)
             g_stats = {
@@ -1380,7 +1402,7 @@ async def handle_incoming_message(
             msg = (
                 "\U0001f4ca *FarmaFacil Stats*\n\n"
                 f"app version: *{__version__}*\n"
-                f"ai model: *{LLM_MODEL}*\n\n"
+                f"ai model: *{current_model}*\n\n"
                 f"\U0001f464 *Mi cuenta ({display_name}):*\n"
                 f"  preguntas: {stats['total_questions']}\n"
                 f"  busquedas exitosas: {stats['total_success']}\n\n"
@@ -1409,7 +1431,10 @@ async def handle_incoming_message(
     if mode == "ai_only":
         logger.info("AI-only mode for %s — routing to AI classifier", sender)
         ai_result = await classify_with_ai(text, user.id, display_name)
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
         logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
 
         # If AI detects a medical emergency, send response immediately — no search
@@ -1483,7 +1508,10 @@ async def handle_incoming_message(
             tokens_ai = ai_result
         else:
             full_result = await generate_response(text, user.id, display_name)
-            await increment_token_usage(user.id, full_result.input_tokens, full_result.output_tokens, model=LLM_MODEL)
+            await increment_token_usage(
+                user.id, full_result.input_tokens, full_result.output_tokens,
+                model=full_result.model or LLM_MODEL,
+            )
             reply = full_result.text
             tokens_ai = full_result
 
@@ -1525,7 +1553,10 @@ async def handle_incoming_message(
 
     # Classify intent (keywords first, AI fallback)
     intent = await classify_intent(text, user.id, user.name or "", sender)
-    await increment_token_usage(user.id, intent.input_tokens, intent.output_tokens, model=LLM_MODEL)
+    await increment_token_usage(
+        user.id, intent.input_tokens, intent.output_tokens,
+        model=intent.model or LLM_MODEL,
+    )
 
     # Auto-update profile if LLM detected new info
     if intent.detected_name and intent.detected_name != user.name:
@@ -1625,7 +1656,10 @@ async def handle_incoming_message(
         else:
             # Use AI responder for complex questions
             ai_result = await generate_response(text, user.id, display_name)
-            await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
+            await increment_token_usage(
+                user.id, ai_result.input_tokens, ai_result.output_tokens,
+                model=ai_result.model or LLM_MODEL,
+            )
             logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
             reply = ai_result.text
             if debug_on:
@@ -1636,7 +1670,10 @@ async def handle_incoming_message(
     else:
         # Unknown intent — try AI responder before giving up
         ai_result = await generate_response(text, user.id, display_name)
-        await increment_token_usage(user.id, ai_result.input_tokens, ai_result.output_tokens, model=LLM_MODEL)
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
         logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
         reply = ai_result.text
         if debug_on:
@@ -1903,10 +1940,19 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
     Returns:
         Formatted debug footer string.
     """
+    from farmafacil.services.settings import resolve_user_model
+
     stats = await get_user_stats(sender, user_id)
     role = getattr(ai_result, "role_used", "keyword") if ai_result else "keyword"
     in_tok = getattr(ai_result, "input_tokens", 0) if ai_result else 0
     out_tok = getattr(ai_result, "output_tokens", 0) if ai_result else 0
+    # Prefer the model actually used for THIS call (set by ai_responder /
+    # intent / refine when an LLM ran). Fall back to the current default
+    # so the footer never lies — previously it always showed LLM_MODEL
+    # (haiku) regardless of what the admin had set as default.
+    # (v0.19.2, Item 49.)
+    call_model = getattr(ai_result, "model", "") if ai_result else ""
+    model_for_footer = call_model or await resolve_user_model()
     return build_debug_footer(
         role_used=role,
         input_tokens=in_tok,
@@ -1917,7 +1963,7 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
         total_tokens_out=stats["total_tokens_out"],
         global_tokens_in=stats["global_tokens_in"],
         global_tokens_out=stats["global_tokens_out"],
-        model_used=getattr(ai_result, "model", "") if ai_result else "",
+        model_used=model_for_footer,
         calls_haiku=stats["calls_haiku"],
         calls_sonnet=stats["calls_sonnet"],
         global_calls_haiku=stats["global_calls_haiku"],
