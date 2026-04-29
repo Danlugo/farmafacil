@@ -7,10 +7,11 @@ common zones to avoid redundant API calls.
 
 import logging
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
+# Public URLs kept here for callers that still reference them (test
+# fixtures patch on these). The actual HTTP calls live in
+# ``services.location._nominatim_search`` / ``_nominatim_reverse``.
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 
@@ -78,7 +79,11 @@ STATE_TO_CITY_CODE: dict[str, str] = {
 async def geocode_zone(zone_text: str) -> dict | None:
     """Resolve a zone/neighborhood name to coordinates and city code.
 
-    Uses OpenStreetMap Nominatim to geocode any Venezuelan location.
+    Thin wrapper over ``services.location.resolve`` (v0.19.0). Kept as a
+    separate function with the legacy dict shape for back-compat with
+    handler.py and the rest of the codebase. New callers should use
+    ``services.location.resolve`` directly to access confidence and
+    alternatives.
 
     Args:
         zone_text: User-provided zone name (e.g., "La Boyera", "El Cafetal").
@@ -86,51 +91,24 @@ async def geocode_zone(zone_text: str) -> dict | None:
     Returns:
         Dict with lat, lng, city, zone_name — or None if not found.
     """
-    query = f"{zone_text}, Venezuela"
-    params = {
-        "q": query,
-        "format": "json",
-        "limit": 1,
-        "countrycodes": "ve",
-        "addressdetails": 1,
-    }
-    headers = {
-        "User-Agent": "FarmaFacil/0.1 (farmafacil-pharmacy-finder)",
-    }
+    from farmafacil.services.location import resolve
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(NOMINATIM_URL, params=params, headers=headers)
-            response.raise_for_status()
-            results = response.json()
-    except httpx.RequestError as exc:
-        logger.error("Nominatim geocode failed for '%s': %s", zone_text, exc)
+    result = await resolve(zone_text)
+    if result is None:
+        logger.warning("Geocode returned no result for '%s'", zone_text)
         return None
-
-    if not results:
-        logger.warning("Nominatim returned no results for '%s'", zone_text)
-        return None
-
-    hit = results[0]
-    lat = float(hit["lat"])
-    lng = float(hit["lon"])
-
-    # Extract a human-readable zone name
-    zone_name = hit.get("name") or zone_text.strip().title()
-
-    # Determine Farmatodo city code from the address details
-    city_code = _extract_city_code(hit)
 
     logger.info(
-        "Geocoded '%s' → %s (%.4f, %.4f) city=%s",
-        zone_text, zone_name, lat, lng, city_code,
+        "Geocoded '%s' → %s (%.4f, %.4f) city=%s confidence=%.2f source=%s",
+        zone_text, result.zone_name, result.lat, result.lng,
+        result.city_code, result.confidence, result.source,
     )
 
     return {
-        "lat": lat,
-        "lng": lng,
-        "city": city_code,
-        "zone_name": zone_name,
+        "lat": result.lat,
+        "lng": result.lng,
+        "city": result.city_code,
+        "zone_name": result.zone_name,
     }
 
 
@@ -138,62 +116,23 @@ async def reverse_geocode(lat: float, lng: float) -> dict | None:
     """Reverse-geocode a (latitude, longitude) pair into a city + zone name.
 
     Used when a user shares their WhatsApp location pin during onboarding
-    instead of typing a city name (Item 24, v0.13.0). Returns the same
-    shape as ``geocode_zone`` so the two code paths can share the
-    ``update_user_location`` call.
+    (Item 24, v0.13.0). Thin wrapper over ``services.location.reverse``
+    (v0.19.0) — kept with the legacy dict shape for back-compat. Falls
+    back to the "Ubicación compartida" sentinel when no specific zone
+    field was returned, so existing UX strings keep working.
 
-    Args:
-        lat: Latitude in decimal degrees.
-        lng: Longitude in decimal degrees.
-
-    Returns:
-        Dict with ``lat``, ``lng``, ``city`` (Farmatodo code), and
-        ``zone_name`` — or ``None`` if the coordinates cannot be resolved
-        (unreachable Nominatim, outside Venezuela, malformed response).
+    Returns ``None`` for non-Venezuelan coordinates or when Nominatim
+    returns nothing usable.
     """
-    params = {
-        "lat": f"{lat}",
-        "lon": f"{lng}",
-        "format": "json",
-        "addressdetails": 1,
-        "zoom": 14,  # neighborhood-level detail
-    }
-    headers = {
-        "User-Agent": "FarmaFacil/0.1 (farmafacil-pharmacy-finder)",
-    }
+    from farmafacil.services.location import _nominatim_reverse, reverse
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                NOMINATIM_REVERSE_URL, params=params, headers=headers,
-            )
-            response.raise_for_status()
-            hit = response.json()
-    except httpx.RequestError as exc:
-        logger.error(
-            "Nominatim reverse geocode failed for (%.4f, %.4f): %s",
-            lat, lng, exc,
-        )
+    # Country-code guard: we still need to reject obviously-non-VE
+    # coordinates explicitly because location.reverse trusts whatever
+    # Nominatim sends back. Cheap precheck via the raw adapter.
+    raw = await _nominatim_reverse(lat, lng)
+    if raw is None:
         return None
-    except ValueError as exc:
-        logger.error(
-            "Nominatim reverse geocode returned invalid JSON for "
-            "(%.4f, %.4f): %s",
-            lat, lng, exc,
-        )
-        return None
-
-    if not isinstance(hit, dict) or "address" not in hit:
-        logger.warning(
-            "Nominatim reverse geocode returned no address for (%.4f, %.4f)",
-            lat, lng,
-        )
-        return None
-
-    # Guard: only accept Venezuelan coordinates. Users outside VE fall
-    # through to the "location not found" path so they can type a city.
-    address = hit.get("address", {})
-    country_code = (address.get("country_code") or "").lower()
+    country_code = ((raw.get("address") or {}).get("country_code") or "").lower()
     if country_code and country_code != "ve":
         logger.warning(
             "Reverse geocode rejected — (%.4f, %.4f) is in %s, not Venezuela",
@@ -201,29 +140,19 @@ async def reverse_geocode(lat: float, lng: float) -> dict | None:
         )
         return None
 
-    # Pick a human-readable zone name from the most specific field available.
-    zone_name = (
-        address.get("suburb")
-        or address.get("neighbourhood")
-        or address.get("village")
-        or address.get("town")
-        or address.get("city")
-        or address.get("county")
-        or address.get("state")
-        or "Ubicación compartida"
-    )
+    result = await reverse(lat, lng)
+    if result is None:
+        return None
 
-    city_code = _extract_city_code(hit)
-
+    zone_name = result.zone_name or "Ubicación compartida"
     logger.info(
-        "Reverse-geocoded (%.4f, %.4f) → %s city=%s",
-        lat, lng, zone_name, city_code,
+        "Reverse-geocoded (%.4f, %.4f) → %s city=%s source=%s",
+        lat, lng, zone_name, result.city_code, result.source,
     )
-
     return {
         "lat": lat,
         "lng": lng,
-        "city": city_code,
+        "city": result.city_code,
         "zone_name": zone_name,
     }
 

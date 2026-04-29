@@ -1258,21 +1258,63 @@ async def handle_incoming_message(
         return
 
     if step == "awaiting_location":
-        # Try to geocode — but also check if AI can extract location
+        # Try to geocode — but also check if AI can extract location.
         intent = await classify_intent(text, user.id, user.name or "", sender)
         location_text = intent.detected_location or text
 
-        location = await geocode_zone(location_text)
-        if location:
+        # v0.19.0 Item 47 — use location.resolve directly so we can read
+        # confidence + alternatives. Daniel's "La Boyera → La Hoyadita"
+        # silent miss happened because the legacy `geocode_zone` swallowed
+        # the confidence signal.
+        from farmafacil.services.location import (
+            DEFAULT_MIN_CONFIDENCE,
+            resolve as _resolve_location,
+        )
+
+        result = await _resolve_location(location_text)
+        if result is None:
+            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
+            return
+
+        # Confidence guard — if Nominatim returned a low-confidence hit
+        # AND the display_name doesn't include the user's input tokens,
+        # we suspect a wrong-place match. Tell the user what we found and
+        # ask them to share their location pin instead.
+        from farmafacil.services.location import _name_matches_query
+        name_ok = _name_matches_query(location_text, result.display_name)
+        confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
+        if not (name_ok and confidence_ok):
+            logger.warning(
+                "Onboarding geocode low-confidence: query=%r → display=%r confidence=%.2f",
+                location_text, result.display_name, result.confidence,
+            )
+            await send_text_message(
+                sender,
+                f"⚠️ No estoy 100% seguro de tu ubicación. "
+                f"Encontré *{result.display_name}* — ¿es correcto?\n\n"
+                f"Si NO, compárteme tu ubicación por WhatsApp "
+                f"(toca el clíp \U0001f4ce → Ubicación) o escribe la zona "
+                f"con más detalle (ej: \"La Boyera, Caracas\").",
+            )
+            # Still persist the best guess so the user has SOME location
+            # rather than being stuck — the warning above tells them how
+            # to fix if it's wrong.
             user = await update_user_location(
-                sender, location["lat"], location["lng"],
-                location["zone_name"], location["city"],
+                sender, result.lat, result.lng,
+                result.zone_name, result.city_code,
             )
             await send_text_message(
                 sender, MSG_READY.format(name=user.name or "amigo")
             )
-        else:
-            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
+            return
+
+        user = await update_user_location(
+            sender, result.lat, result.lng,
+            result.zone_name, result.city_code,
+        )
+        await send_text_message(
+            sender, MSG_READY.format(name=user.name or "amigo")
+        )
         return
 
     if step == "awaiting_preference":

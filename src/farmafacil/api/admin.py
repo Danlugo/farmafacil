@@ -17,6 +17,7 @@ from farmafacil.models.database import (
     AppSetting,
     ConversationLog,
     DrugListing,
+    GeocodeCache,
     IntentKeyword,
     Pharmacy,
     PharmacyLocation,
@@ -811,6 +812,40 @@ class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
     ]
 
 
+class GeocodeCacheAdmin(ModelView, model=GeocodeCache):
+    """v0.19.0 — geocode cache rows for diagnostics."""
+
+    name = "Geocode Cache"
+    name_plural = "Geocode Cache"
+    icon = "fa-solid fa-map-pin"
+
+    column_list = [
+        GeocodeCache.id,
+        GeocodeCache.source,
+        GeocodeCache.query_text,
+        GeocodeCache.zone_name,
+        GeocodeCache.city_code,
+        GeocodeCache.confidence,
+        GeocodeCache.latitude,
+        GeocodeCache.longitude,
+        GeocodeCache.fetched_at,
+    ]
+    column_sortable_list = [
+        GeocodeCache.fetched_at,
+        GeocodeCache.confidence,
+        GeocodeCache.source,
+    ]
+    column_searchable_list = [
+        GeocodeCache.query_text,
+        GeocodeCache.zone_name,
+        GeocodeCache.display_name,
+    ]
+    column_default_sort = ("fetched_at", True)
+    can_create = False
+    can_edit = False  # rows are managed by services.location only
+    page_size = 50
+
+
 ADMIN_VIEWS = [
     UserAdmin,
     UserFeedbackAdmin,
@@ -829,6 +864,7 @@ ADMIN_VIEWS = [
     SearchQueryAdmin,
     AppSettingAdmin,
     ScheduledTaskAdmin,
+    GeocodeCacheAdmin,
 ]
 
 

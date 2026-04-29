@@ -706,3 +706,43 @@ class ScheduledTask(Base):
     def __repr__(self) -> str:
         status = "enabled" if self.enabled else "paused"
         return f"{self.name} ({status})"
+
+
+class GeocodeCache(Base):
+    """v0.19.0 — Cache Nominatim forward and reverse geocode results.
+
+    Key insight: pharmacies do not move; user-typed zone names do not
+    change either. Caching trims our Nominatim free-tier usage from
+    ~1500 req per OSM cycle to a few dozen, and onboarding latency from
+    ~1s to 0ms on repeat zones (e.g., everyone in Caracas typing
+    \"La Boyera\").
+    """
+
+    __tablename__ = "geocode_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True,
+        comment="sha256 of normalized query + source — see services.location",
+    )
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False,
+        comment="forward (text\u2192coords) or reverse (coords\u2192zone)",
+    )
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="Nominatim importance score 0\u20131 \u2014 used for low-confidence rejection",
+    )
+    city_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    zone_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True,
+        comment="Used by cache TTL and the geocode_cache_cleanup task",
+    )
+
+    def __repr__(self) -> str:
+        return f"GeocodeCache({self.source}: {self.query_text} \u2192 {self.latitude}, {self.longitude})"

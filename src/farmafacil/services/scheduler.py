@@ -119,6 +119,14 @@ async def _zone_backfill(task: ScheduledTask) -> str:
     )
 
 
+async def _geocode_cache_cleanup(task: ScheduledTask) -> str:
+    """Item 47 — drop expired geocode_cache rows."""
+    from farmafacil.services.location import cleanup_expired_cache
+
+    deleted = await cleanup_expired_cache(older_than_days=90)
+    return f"Pruned {deleted} expired geocode_cache rows"
+
+
 async def _cleanup_old_logs(task: ScheduledTask) -> str:
     """Delete conversation_logs older than 90 days."""
     from sqlalchemy import delete as sa_delete
@@ -149,6 +157,7 @@ TASK_REGISTRY: dict[str, TaskFunc] = {
     "cleanup_old_logs": _cleanup_old_logs,
     "osm_backfill": _osm_backfill,
     "zone_backfill": _zone_backfill,
+    "geocode_cache_cleanup": _geocode_cache_cleanup,
 }
 
 # Default tasks seeded on first startup.
@@ -162,6 +171,8 @@ DEFAULT_TASKS: list[tuple[str, str, int, bool]] = [
     ("OSM pharmacy backfill", "osm_backfill", 43200, True),
     # v0.18.0 Item 45 — daily because Nominatim is rate-limited at 1 req/sec
     ("Pharmacy zone backfill", "zone_backfill", 1440, True),
+    # v0.19.0 Item 47 — weekly is fine; cache rows do no harm just sitting there
+    ("Geocode cache cleanup", "geocode_cache_cleanup", 10080, True),
 ]
 
 

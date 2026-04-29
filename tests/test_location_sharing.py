@@ -98,7 +98,7 @@ class TestReverseGeocodeUnit:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value=payload)
 
-        with patch("farmafacil.services.geocode.httpx.AsyncClient") as mc:
+        with patch("farmafacil.services.location.httpx.AsyncClient") as mc:
             instance = mc.return_value.__aenter__.return_value
             instance.get = AsyncMock(return_value=mock_response)
             result = await reverse_geocode(10.4806, -66.8794)
@@ -124,7 +124,7 @@ class TestReverseGeocodeUnit:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value=payload)
 
-        with patch("farmafacil.services.geocode.httpx.AsyncClient") as mc:
+        with patch("farmafacil.services.location.httpx.AsyncClient") as mc:
             instance = mc.return_value.__aenter__.return_value
             instance.get = AsyncMock(return_value=mock_response)
             result = await reverse_geocode(4.7110, -74.0721)
@@ -134,7 +134,7 @@ class TestReverseGeocodeUnit:
     @pytest.mark.asyncio
     async def test_network_failure_returns_none(self):
         """httpx.RequestError on Nominatim returns None."""
-        with patch("farmafacil.services.geocode.httpx.AsyncClient") as mc:
+        with patch("farmafacil.services.location.httpx.AsyncClient") as mc:
             instance = mc.return_value.__aenter__.return_value
             instance.get = AsyncMock(
                 side_effect=httpx.RequestError("connection refused")
@@ -150,7 +150,7 @@ class TestReverseGeocodeUnit:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value={"lat": "0", "lon": "0"})
 
-        with patch("farmafacil.services.geocode.httpx.AsyncClient") as mc:
+        with patch("farmafacil.services.location.httpx.AsyncClient") as mc:
             instance = mc.return_value.__aenter__.return_value
             instance.get = AsyncMock(return_value=mock_response)
             result = await reverse_geocode(0.0, 0.0)
@@ -167,7 +167,7 @@ class TestReverseGeocodeUnit:
         mock_response.raise_for_status = MagicMock()
         mock_response.json = MagicMock(return_value=payload)
 
-        with patch("farmafacil.services.geocode.httpx.AsyncClient") as mc:
+        with patch("farmafacil.services.location.httpx.AsyncClient") as mc:
             instance = mc.return_value.__aenter__.return_value
             instance.get = AsyncMock(return_value=mock_response)
             result = await reverse_geocode(10.64, -71.61)

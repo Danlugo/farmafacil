@@ -228,9 +228,44 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P0 — Critical
 
+### Item 48: Unified Location Service + Admin Chat Tools (v0.19.0)
+
+- **Status:** DONE (2026-04-28, v0.19.0)
+- **Added:** 2026-04-28
+- **Completed:** 2026-04-28
+- **Priority:** P0
+- **Problem:** Geocoding was scattered across services.geocode, called every onboarding + every backfill row, with no caching, no confidence checks, and no admin-side fix tools. Daniel's "La Boyera → La Hoyadita" coordinate bug had no in-product remediation path — admin had to SSH into prod and run raw SQL UPDATE.
+- **Solution implemented:**
+  1. New `services/location.py` — single front door wrapping Nominatim with: SHA-256 keyed cache (TTL 30d), confidence + name-token validation, structured `LocationResult` dataclass with alternatives, admin helpers (`set_user_location`, `set_pharmacy_location`, `geocode_health`).
+  2. New `geocode_cache` table (5 ALTER + CREATE TABLE migration on prod). Cleaned weekly by new `geocode_cache_cleanup` scheduled task; rows older than 90 days dropped.
+  3. `services/geocode.py` refactored to delegate (back-compat preserved — `geocode_zone` and `reverse_geocode` keep their existing dict shape).
+  4. 5 new admin chat tools registered in `admin_chat.TOOLS`: `geocode_query`, `geocode_reverse`, `set_user_location`, `set_pharmacy_location`, `geocode_health`. Admin can now say `/admin set Daniel coords to La Boyera` and it re-resolves + persists.
+  5. Onboarding `awaiting_location` step now uses `location.resolve` directly so it can read confidence + display_name. When confidence < 0.3 OR display_name doesn't share tokens with user input, the bot warns "⚠️ No estoy 100% seguro de tu ubicación. Encontré X — ¿es correcto?" and persists best-guess so the user is not stuck.
+  6. New SQLAdmin view for `geocode_cache` (read-only — managed by location service only).
+- **Schema:**
+  ```sql
+  CREATE TABLE geocode_cache (
+      id SERIAL PRIMARY KEY,
+      query_hash VARCHAR(64) NOT NULL UNIQUE,
+      query_text TEXT NOT NULL,
+      source VARCHAR(20) NOT NULL,
+      latitude DOUBLE PRECISION NOT NULL,
+      longitude DOUBLE PRECISION NOT NULL,
+      display_name TEXT,
+      confidence DOUBLE PRECISION,
+      city_code VARCHAR(10),
+      zone_name VARCHAR(100),
+      fetched_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );
+  ```
+- **Files created:** `src/farmafacil/services/location.py`, `tests/test_location.py` (38 tests), `tests/test_admin_geocode_tools.py` (15 tests)
+- **Files modified:** `src/farmafacil/models/database.py` (GeocodeCache), `src/farmafacil/services/geocode.py` (delegate to location), `src/farmafacil/services/admin_chat.py` (5 new tools), `src/farmafacil/bot/handler.py` (confidence guard in onboarding), `src/farmafacil/services/scheduler.py` (cleanup task), `src/farmafacil/api/admin.py` (SQLAdmin view), `tests/test_location_sharing.py` (patch path updated for refactor)
+- **Code review applied:** finding #1 (`geocode_health` SQL counts not Python filter), #2 (race condition in `_cache_put` → `try/except IntegrityError`), #3 (`_NAME_NOISE` tightened to articles only), #4 (`set_pharmacy_location` Venezuela bbox guard).
+- **Tests:** 55 new, all pass. 1 flaky pre-existing test in handler suite (test isolation issue with shared SQLite, not related to v0.19.0).
+
 ### Item 47: Nominatim Onboarding Accuracy + Missing Chain Stores
 
-- **Status:** PENDING
+- **Status:** DONE (2026-04-28, v0.19.0 — partial: validation + admin tools shipped; chain-API gap follow-up tracked separately)
 - **Added:** 2026-04-28
 - **Priority:** P0
 - **Problem:** User Daniel (id=1, La Boyera) was geocoded at onboarding to `10.3555, -66.8467` — which is "La Hoyadita", a suburb 7.8 km south of actual La Boyera (`10.4258, -66.8422`). Result: every "farmacias cerca" query returned stores 7+ km away when real pharmacies in La Boyera are 0.3 km. Manually corrected on 2026-04-28 by `UPDATE users SET latitude=10.4258, longitude=-66.8422 WHERE id=1`. Nominatim today returns the correct coords for "La Boyera, Venezuela" — likely the user typed something subtly different at onboarding, OR Nominatim ranking drifted. **Second issue discovered**: Farmatodo La Boyera (CC Trinalta, Av. Intercomunal Baruta-Hatillo) is one of the most famous Farmatodos in southeastern Caracas, has phone (0212) 944-7201, but is MISSING from our `pharmacy_locations` table — neither in the Farmatodo store backfill (chain API) nor in OSM. Worth investigating both.
