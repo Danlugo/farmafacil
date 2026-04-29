@@ -210,8 +210,17 @@ async def save_search_results(
             effective_city = city_code or "ALL"
             await _upsert_price(session, product.id, effective_city, drug, now)
 
-            # Score relevance — only cache relevant product IDs
-            if is_relevant(query, drug.drug_name, drug.drug_class, drug.description, threshold):
+            # Score relevance — only cache relevant product IDs.
+            # `brand` is passed so the Q6 token-overlap floor (v0.20.1) can
+            # use the brand field as a fallback target.
+            if is_relevant(
+                query,
+                drug.drug_name,
+                drug.drug_class,
+                drug.description,
+                threshold,
+                brand=drug.brand,
+            ):
                 relevant_product_ids.append(product.id)
 
         filtered_count = len(all_product_ids) - len(relevant_product_ids)

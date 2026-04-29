@@ -251,7 +251,14 @@ async def search_drug(
         before_count = len(all_results)
         all_results = [
             r for r in all_results
-            if is_relevant(query, r.drug_name, r.drug_class, r.description, relevance_threshold)
+            if is_relevant(
+                query,
+                r.drug_name,
+                r.drug_class,
+                r.description,
+                relevance_threshold,
+                brand=r.brand,
+            )
         ]
         filtered = before_count - len(all_results)
         if filtered > 0:

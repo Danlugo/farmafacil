@@ -130,10 +130,20 @@ def compute_relevance(
     drug_name: str,
     drug_class: str | None = None,
     description: str | None = None,
+    brand: str | None = None,
 ) -> float:
     """Score how relevant a product is to a search query.
 
-    Returns a float in [0.0, 1.0].  The score is built from three signals:
+    Returns a float in [0.0, 1.0].  The score is built from three signals,
+    gated by a hard floor on token overlap (Q6 fix, v0.20.1):
+
+    0. **Token-overlap floor (Q6, v0.20.1)**: at least one normalized query
+       token must appear as a *whole token* in the product's ``drug_name``
+       OR ``brand``. Without overlap the score is 0.0 — even when the
+       pharmaceutical category alone would otherwise be a positive signal.
+       This kills upstream-API fuzzy/prefix matches like Algolia returning
+       "Aspirador Nasal" for query "Aspirina" (different whole tokens, no
+       overlap), or "Tiotropio Spiriva" for the same query.
 
     1. **Token overlap** (0.0–0.5): fraction of query tokens found in the
        product name.  Uses normalized, accent-stripped tokens.
@@ -151,6 +161,10 @@ def compute_relevance(
         drug_name: Product name from the pharmacy API.
         drug_class: Product category from the API (may be None).
         description: Product description (used for tie-breaking).
+        brand: Product brand/manufacturer (used as a fallback target for
+            the token-overlap floor — covers the bidirectional brand↔
+            generic case where the brand field carries the recognizable
+            name even though the drug_name is the generic compound).
 
     Returns:
         Relevance score between 0.0 and 1.0.
@@ -161,11 +175,27 @@ def compute_relevance(
     if not query_tokens or not name_tokens:
         return 0.0
 
+    # Signal 0 (Q6 floor): at least one query token must appear as a whole
+    # token in the product name OR brand. Without it, return 0.0 even when
+    # the drug_class is pharma — this stops Algolia/VTEX fuzzy hits
+    # ("Aspirador Nasal" for "Aspirina") from squeaking through at exactly
+    # the threshold via the category bonus alone.
+    brand_tokens = _tokenize(brand) if brand else set()
+    name_overlap = query_tokens & name_tokens
+    brand_overlap = query_tokens & brand_tokens
+    if not name_overlap and not brand_overlap:
+        return 0.0
+
     score = 0.0
 
-    # Signal 1: Token overlap (0.0 – 0.5)
-    overlap = query_tokens & name_tokens
-    score += 0.5 * len(overlap) / len(query_tokens)
+    # Signal 1: Token overlap (0.0 – 0.5). Use whichever of name/brand
+    # gives the larger overlap — typing the brand should score as well as
+    # typing the generic name.
+    if len(name_overlap) >= len(brand_overlap):
+        effective_overlap = name_overlap
+    else:
+        effective_overlap = brand_overlap
+    score += 0.5 * len(effective_overlap) / len(query_tokens)
 
     # Signal 2: Pharmaceutical category (0.0 or 0.3)
     pharma = classify_pharmaceutical(drug_class)
@@ -178,7 +208,9 @@ def compute_relevance(
     # Signal 3: Active ingredient match (0.0 or 0.2)
     # Strip form words to isolate the active ingredient
     ingredient_tokens = query_tokens - FORM_WORDS
-    if ingredient_tokens and ingredient_tokens & name_tokens:
+    if ingredient_tokens and (
+        (ingredient_tokens & name_tokens) or (ingredient_tokens & brand_tokens)
+    ):
         score += 0.2
 
     return min(score, 1.0)
@@ -190,6 +222,7 @@ def is_relevant(
     drug_class: str | None = None,
     description: str | None = None,
     threshold: float = 0.3,
+    brand: str | None = None,
 ) -> bool:
     """Check if a product meets the relevance threshold for a query.
 
@@ -199,11 +232,16 @@ def is_relevant(
         drug_class: Product category.
         description: Product description.
         threshold: Minimum score to be considered relevant.
+        brand: Optional brand/manufacturer field — see
+            :func:`compute_relevance` for how it's used.
 
     Returns:
         True if the product is relevant to the query.
     """
-    return compute_relevance(query, drug_name, drug_class, description) >= threshold
+    return (
+        compute_relevance(query, drug_name, drug_class, description, brand=brand)
+        >= threshold
+    )
 
 
 def classify_pharmaceutical(drug_class: str | None) -> bool | None:

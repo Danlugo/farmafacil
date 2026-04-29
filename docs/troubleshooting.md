@@ -171,6 +171,34 @@ Some drugs may not be carried by Farmatodo. Try searching on `farmatodo.com.ve` 
 
 ---
 
+## Product Search Returns Unrelated Products (e.g., "Aspirina" → "Aspirador Nasal")
+
+### Symptom
+User searches for a drug and the result list includes products that share a prefix or are loosely related but are not the drug they asked for. Examples seen in production:
+- Query "Aspirina" returned "Aspirador Nasal Infantil Kerful" and "Tiotropio Spiriva" (Daniel, 2026-04-29 — Q6).
+- Query "Aspirina" on Locatel returned "ASPRINIL 81 MG" (typo-tolerance hit on a different brand).
+
+### Root Cause
+Pharmacy APIs (Algolia for Farmatodo, VTEX intelligent-search for SAAS/Locatel) all use fuzzy/prefix/typo-tolerant matching. They will return products that share a prefix with the query even when no whole token matches. The relevance filter has to compensate.
+
+Pre-v0.20.1, a result with zero token overlap could still pass the 0.3 threshold purely from the pharmaceutical-category bonus (+0.30). "Aspirador Nasal Infantil" with `drug_class="APARATO P/SALUD"` (not in `NON_PHARMA_CATEGORIES`) scored exactly 0.30.
+
+### Solution
+v0.20.1 added a **token-overlap floor** to `compute_relevance` in `services/relevance.py`: at least one normalized query token must appear as a *whole token* in the product `drug_name` OR `brand`. With no overlap the score is 0.0 regardless of category.
+
+To verify the filter is working:
+
+```python
+from farmafacil.services.relevance import compute_relevance
+# Should be 0.0 (was 0.30 pre-fix)
+compute_relevance("Aspirina", "Aspirador Nasal Infantil Kerful", drug_class="APARATO P/SALUD")
+```
+
+### Known Residual (Q8 in queue)
+"Aspirina 500" can still pass through against "Vitamina C 500 mg" because the digit "500" overlaps. This is tracked as Q8 — a follow-up tightening (require ≥1 alphabetic token overlap, not just digits). Expected to be subsumed by the Q7 curated drug-keyword library work.
+
+---
+
 ## Database Connection Errors (Production)
 
 ### Symptom

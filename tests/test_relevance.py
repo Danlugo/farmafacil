@@ -214,6 +214,163 @@ class TestComputeRelevance:
         assert score < 0.3, f"Expected < 0.3, got {score}"
 
 
+# ── Unit Tests: Q6 token-overlap floor (v0.20.1) ────────────────────────
+
+
+class TestQ6TokenOverlapFloor:
+    """Q6 fix (v0.20.1): no token overlap → score is 0 even if drug_class is pharma.
+
+    Repro from Daniel 2026-04-29: query "Aspirina" returned "Aspirador
+    Nasal Infantil Kerful" (drug_class "APARATO P/SALUD", not in
+    NON_PHARMA_CATEGORIES) at exactly 0.30 because the pharma category
+    bonus alone tipped it over the threshold. The floor closes that gap.
+    """
+
+    def test_aspirina_rejects_aspirador_nasal_infantil(self):
+        """Daniel's exact bug: 'Aspirina' must not match 'Aspirador Nasal Infantil'."""
+        score = compute_relevance(
+            "Aspirina",
+            "Aspirador Nasal Infantil Kerful",
+            drug_class="APARATO P/SALUD",
+        )
+        assert score == 0.0, f"Expected 0.0 (no token overlap), got {score}"
+
+    def test_aspirina_rejects_aspirador_nasal_baby(self):
+        """Daniel's exact bug, second card: 'Aspirador Nasal Baby Babuh'."""
+        score = compute_relevance(
+            "Aspirina",
+            "Aspirador Nasal Baby Babuh",
+            drug_class="ACCESORIOS BEBE",
+        )
+        assert score == 0.0, f"Expected 0.0 (no token overlap), got {score}"
+
+    def test_aspirina_rejects_unrelated_inhaler(self):
+        """Algolia also returned a Tiotropio inhaler for 'Aspirina' — same fix."""
+        score = compute_relevance(
+            "Aspirina",
+            "Tiotropio 2.5 mcg Spiriva Respimat Boehringer Inhalador x 30 Dosis",
+            drug_class="ANTIASMATICOS",
+        )
+        assert score == 0.0, f"Expected 0.0 (no token overlap), got {score}"
+
+    def test_aspirina_accepts_real_aspirin_with_overlap(self):
+        """Legitimate match: 'Aspirina' is a whole token in the product name."""
+        score = compute_relevance(
+            "Aspirina",
+            "Ácido Acetilsalicílico 100 mg Aspirina Bayer Caja x 28 Tabletas",
+            drug_class="ANTITROMBOTICOS RX",
+        )
+        assert score >= 0.5, f"Expected >= 0.5, got {score}"
+
+    def test_aspirina_accepts_via_brand_fallback(self):
+        """Brand fallback: query token in `brand` even if not in name."""
+        score = compute_relevance(
+            "Aspirina",
+            "Ácido Acetilsalicílico 100 mg Bayer x 28 Tabletas",
+            drug_class="ANTITROMBOTICOS RX",
+            brand="Aspirina Bayer",
+        )
+        # name overlap = 0, brand overlap = 1 — should still pass the floor
+        assert score >= 0.5, f"Expected >= 0.5 (brand fallback), got {score}"
+
+    def test_aspirador_query_still_returns_aspirators(self):
+        """Inverse case: when the user IS searching for an aspirator, results must come back."""
+        score = compute_relevance(
+            "aspirador",
+            "Aspirador Nasal Infantil Kerful",
+            drug_class="APARATO P/SALUD",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (inverse case), got {score}"
+
+    def test_zero_overlap_pharma_category_no_longer_passes(self):
+        """Regression guard: zero overlap + pharma class no longer scores 0.30.
+
+        Pre-v0.20.1 this scored 0.30 (just the pharma bonus). Post-fix it
+        must be 0.0 — no overlap means the product is not relevant
+        regardless of category.
+        """
+        score = compute_relevance(
+            "ibuprofeno",
+            "Tiotropio 2.5 mcg Spiriva Respimat",
+            drug_class="ANTIASMATICOS",
+        )
+        assert score == 0.0, f"Expected 0.0 (was 0.30 pre-fix), got {score}"
+
+    def test_brand_only_match_no_double_count(self):
+        """Brand match alone counts the same as a name match — no double-counting."""
+        score_name = compute_relevance(
+            "Bayer",
+            "Aspirina Bayer 100mg",
+            drug_class="ANTITROMBOTICOS OTC",
+        )
+        score_brand = compute_relevance(
+            "Bayer",
+            "Aspirina 100mg",
+            drug_class="ANTITROMBOTICOS OTC",
+            brand="Bayer",
+        )
+        # Both should pass — brand fallback gives parity.
+        assert score_name >= 0.5
+        assert score_brand >= 0.5
+
+    def test_aspirina_500_still_matches_real_aspirin_500mg(self):
+        """Multi-token query: 'Aspirina 500' against legitimate Aspirina 500mg."""
+        score = compute_relevance(
+            "Aspirina 500",
+            "Aspirina 500 mg Bayer Caja x 20 Tabletas",
+            drug_class="ANTITROMBOTICOS OTC",
+        )
+        assert score >= 0.5, f"Expected >= 0.5, got {score}"
+
+    def test_brand_none_safe(self):
+        """Passing brand=None is safe (default) — does not crash."""
+        score = compute_relevance(
+            "Aspirina",
+            "Aspirina Bayer 100mg",
+            drug_class="ANTITROMBOTICOS OTC",
+            brand=None,
+        )
+        assert score >= 0.5
+
+    def test_brand_empty_string_safe(self):
+        """Empty-string brand is treated like missing brand."""
+        score = compute_relevance(
+            "Aspirina",
+            "Aspirador Nasal",
+            drug_class="APARATO P/SALUD",
+            brand="",
+        )
+        assert score == 0.0
+
+
+class TestQ6IsRelevantBrandPlumbing:
+    """is_relevant must accept and use the brand parameter."""
+
+    def test_is_relevant_passes_brand_through(self):
+        """is_relevant(..., brand=...) gates correctly via compute_relevance."""
+        # Without brand: name-only floor, no overlap → False
+        assert not is_relevant(
+            "Aspirina",
+            "Ácido Acetilsalicílico 100 mg Bayer",
+            drug_class="ANTITROMBOTICOS RX",
+        )
+        # With brand="Aspirina Bayer": brand overlap saves it → True
+        assert is_relevant(
+            "Aspirina",
+            "Ácido Acetilsalicílico 100 mg Bayer",
+            drug_class="ANTITROMBOTICOS RX",
+            brand="Aspirina Bayer",
+        )
+
+    def test_is_relevant_rejects_aspirador_nasal_with_brand_none(self):
+        """The exact production bug: rejected with default brand=None."""
+        assert not is_relevant(
+            "Aspirina",
+            "Aspirador Nasal Infantil Kerful",
+            drug_class="APARATO P/SALUD",
+        )
+
+
 # ── Unit Tests: is_relevant ─────────────────────────────────────────────
 
 

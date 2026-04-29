@@ -228,6 +228,22 @@ On cache hit, `get_cached_results()`:
 
 Products are never deleted. Prices refresh on every real search. This gives a growing historical catalog.
 
+## Search Relevance Filter (Item 38, hardened in v0.20.1)
+
+Pharmacy APIs (Algolia, VTEX) return products by text similarity, not medical relevance. Without filtering, query "Aspirina" can come back with "Aspirador Nasal Infantil" because both share the prefix "aspir-" under typo tolerance. `services/relevance.py` is the post-filter that gates results:
+
+`compute_relevance(query, name, drug_class, description, brand)` returns 0.0–1.0 from four signals (in evaluation order):
+
+1. **Token-overlap floor (Q6, v0.20.1)** — at least one normalized query token must appear as a *whole token* in the product `drug_name` OR `brand`. No overlap → score 0.0 regardless of category. This is the gate that stopped Algolia returning baby aspirators for "Aspirina".
+2. **Token overlap (0.0–0.5)** — fraction of query tokens present in name (or brand, whichever is larger).
+3. **Pharmaceutical category (+0.3 / +0.15 / +0.0)** — bonus from `drug_class`; non-pharma classes in `NON_PHARMA_CATEGORIES` (cleaning, food, diapers, etc.) get nothing.
+4. **Active ingredient match (+0.2)** — query tokens minus form words ("pastillas", "jarabe", etc.) intersect with name/brand.
+
+`is_relevant(...)` thresholds at `app_settings.relevance_threshold` (default 0.3). Called from two places:
+
+- `services/search.py` — final filter on results before they're returned to the user (covers cached AND fresh data).
+- `services/product_cache.py` — gates which product IDs get cached in `search_queries` per query string.
+
 ## Startup Sequence
 
 On application start (`lifespan` in `app.py`):
