@@ -8,6 +8,7 @@ from markupsafe import Markup
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
+from wtforms import SelectField
 
 from farmafacil.config import ADMIN_PASSWORD, ADMIN_SECRET_KEY, ADMIN_USERNAME
 from farmafacil.models.database import (
@@ -30,6 +31,130 @@ from farmafacil.models.database import (
     UserFeedback,
     UserMemory,
 )
+from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES
+from farmafacil.services.store_backfill import FARMATODO_CITIES
+
+
+# --- UserAdmin form constants ---------------------------------------------
+# Single source of truth for the constrained value sets used by the UserAdmin
+# edit form. These are pulled from canonical locations in the codebase so a
+# future change to (e.g.) FARMATODO_CITIES automatically updates the dropdown.
+# A unit test in tests/test_admin_user_form.py asserts each constant matches
+# its canonical source.
+
+# city_code: pulled from store_backfill.FARMATODO_CITIES (the same dict the
+# stores service uses for nearest-store lookups)
+USER_CITY_CODE_CHOICES: list[tuple[str, str]] = [
+    (code, code) for code in sorted(FARMATODO_CITIES.keys())
+]
+
+# display_preference: NOT NULL on the model, default "grid". Code references
+# "grid", "detail", and "image" (see services/users.py and tests). Onboarding
+# no longer asks for this post-v0.15.2 but the column remains for compat.
+USER_DISPLAY_PREFERENCE_CHOICES: list[tuple[str, str]] = [
+    ("grid", "grid"),
+    ("detail", "detail"),
+    ("image", "image"),
+]
+
+# response_mode: nullable on the model. NULL = use global app setting.
+# Valid non-null values come from settings._VALID_MODES.
+USER_RESPONSE_MODE_CHOICES: list[tuple[str, str]] = [
+    ("", "— use global —"),
+    *[(v, v) for v in sorted(_VALID_MODES)],
+]
+
+# chat_debug: nullable on the model. NULL = use global app setting.
+# Valid non-null values come from settings._VALID_DEBUG.
+USER_CHAT_DEBUG_CHOICES: list[tuple[str, str]] = [
+    ("", "— use global —"),
+    *[(v, v) for v in sorted(_VALID_DEBUG)],
+]
+
+# onboarding_step: nullable. NULL = onboarding complete. Non-null values are
+# the steps set by bot/handler.py and services/users.py. See:
+#   services/users.py: "welcome" (initial)
+#   bot/handler.py: "awaiting_name", "awaiting_location",
+#                   "awaiting_feedback", "awaiting_feedback_detail"
+# (services/users.py also references "awaiting_preference" in the validation
+# branch for legacy rows; keep it as a selectable value so admins can repair
+# stuck rows.)
+USER_ONBOARDING_STEP_CHOICES: list[tuple[str, str]] = [
+    ("", "— complete (NULL) —"),
+    ("welcome", "welcome"),
+    ("awaiting_name", "awaiting_name"),
+    ("awaiting_location", "awaiting_location"),
+    ("awaiting_preference", "awaiting_preference (legacy)"),
+    ("awaiting_feedback", "awaiting_feedback"),
+    ("awaiting_feedback_detail", "awaiting_feedback_detail"),
+]
+
+# Counter / log-pointer fields rendered as readonly inputs in the edit form.
+# Visible (so admins can see usage in context) but not editable from the UI —
+# these are written by the bot, never by humans.
+USER_READONLY_FIELDS: tuple[str, ...] = (
+    "total_tokens_in",
+    "total_tokens_out",
+    "last_tokens_in",
+    "last_tokens_out",
+    "tokens_in_haiku",
+    "tokens_out_haiku",
+    "calls_haiku",
+    "tokens_in_sonnet",
+    "tokens_out_sonnet",
+    "calls_sonnet",
+    "tokens_in_admin",
+    "tokens_out_admin",
+    "calls_admin",
+    "last_search_query",
+    "last_search_log_id",
+    "created_at",
+    "updated_at",
+)
+
+# Tooltip / help-text mapping for free-text fields. The text is fed to the
+# wtforms Field constructor as ``description`` (via form_args, NOT
+# form_widget_args) so SQLAdmin's _macros.html renders it as
+# ``<small class="text-muted">…</small>`` below the input.
+USER_FORM_TOOLTIPS: dict[str, str] = {
+    "phone_number": (
+        "WhatsApp E.164 phone number, no plus. Required and unique. "
+        "Acts as the natural key — avoid changing on existing users."
+    ),
+    "latitude": (
+        "GPS decimal degrees. Venezuela bbox: lat 0.6 to 12.2, "
+        "lng -73.4 to -59.8. Caracas ≈ 10.48, -66.86."
+    ),
+    "longitude": (
+        "GPS decimal degrees. Venezuela bbox: lat 0.6 to 12.2, "
+        "lng -73.4 to -59.8. Caracas ≈ 10.48, -66.86."
+    ),
+    "zone_name": (
+        "Neighborhood name (e.g., 'La Boyera'). Set automatically by "
+        "Nominatim reverse-geocode when the user shares a location pin."
+    ),
+    "awaiting_clarification_context": (
+        "Set by the bot when waiting for the user to clarify an ambiguous "
+        "drug query. Set to NULL (clear field) to unstick a stuck session."
+    ),
+    "awaiting_category_search": (
+        "Category slug set by the bot when waiting for the user to choose "
+        "a category from the menu. Set to NULL to clear stuck state."
+    ),
+}
+
+
+def _coerce_optional_str(value: object) -> str | None:
+    """WTForms coerce that maps empty submissions to NULL.
+
+    SQLAdmin's SelectField submits the empty string when the "— use global —"
+    or "— complete —" placeholder is selected; we want that to round-trip to
+    a true Python None so it lands as NULL in the database.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 class UserAdmin(ModelView, model=User):
@@ -86,14 +211,24 @@ class UserAdmin(ModelView, model=User):
         "chat_debug": "Chat Debug",
         "chat_admin": "Chat Admin (UI-only)",
         "admin_mode_active": "Admin Mode Active",
-        "total_tokens_in": "Tokens In",
-        "total_tokens_out": "Tokens Out",
+        "total_tokens_in": "Tokens In (total)",
+        "total_tokens_out": "Tokens Out (total)",
+        "last_tokens_in": "Tokens In (last call)",
+        "last_tokens_out": "Tokens Out (last call)",
+        "tokens_in_haiku": "Haiku Tokens In",
+        "tokens_out_haiku": "Haiku Tokens Out",
         "calls_haiku": "Haiku Calls",
+        "tokens_in_sonnet": "Sonnet Tokens In",
+        "tokens_out_sonnet": "Sonnet Tokens Out",
         "calls_sonnet": "Sonnet Calls",
         "calls_admin": "Admin Calls",
         "tokens_in_admin": "Admin Tokens In",
         "tokens_out_admin": "Admin Tokens Out",
         "onboarding_step": "Onboarding Step",
+        "awaiting_clarification_context": "Awaiting Clarification Context",
+        "awaiting_category_search": "Awaiting Category Search",
+        "last_search_query": "Last Search Query",
+        "last_search_log_id": "Last Search Log ID",
         "created_at": "Created",
         "updated_at": "Updated",
     }
@@ -117,6 +252,149 @@ class UserAdmin(ModelView, model=User):
     column_details_exclude_list = []
     page_size = 25
     page_size_options = [10, 25, 50, 100]
+
+    # ------------------------------------------------------------------
+    # Edit-form configuration (Q3, v0.20.0)
+    #
+    # Goals (driven by https://github.com/.../q3 — admin Daniel reported
+    # the form let him type garbage into status/enum columns and edit
+    # counter columns that should be bot-only):
+    #
+    #   1. Render constrained fields as <select> dropdowns whose choices
+    #      come from canonical sources in the codebase. The choices are
+    #      defined as module-level constants above and verified by
+    #      tests/test_admin_user_form.py to stay in sync.
+    #   2. Render counter / log-pointer fields as readonly inputs so
+    #      they're visible in context but cannot be edited by humans.
+    #      (Approach (c) from the Q3 plan — keep them visible while
+    #      editing other fields.)
+    #   3. Add tooltip help text on free-text fields whose meaning isn't
+    #      obvious (lat/lng range, awaiting_* state recovery, etc).
+    #
+    # NOTE on ``chat_admin``: this column is the security gate for admin
+    # chat mode (see CLAUDE.md "Admin Chat Mode"). It MUST remain
+    # editable from this UI (it is the only sanctioned way to grant
+    # admin chat access) but it MUST NOT be added to the read-only set,
+    # exposed via any chat-side tool, or otherwise weakened. SQLAdmin
+    # auto-renders Boolean columns as checkboxes which is the current
+    # behaviour — we do not override it here.
+    # ------------------------------------------------------------------
+    form_columns = [
+        # Identity
+        User.phone_number,
+        User.name,
+        # Location
+        User.latitude,
+        User.longitude,
+        User.zone_name,
+        User.city_code,
+        # Display + bot behaviour
+        User.display_preference,
+        User.response_mode,
+        User.chat_debug,
+        # Onboarding / stuck-state recovery
+        User.onboarding_step,
+        User.awaiting_clarification_context,
+        User.awaiting_category_search,
+        # Admin gates (booleans → auto-rendered as checkboxes)
+        User.chat_admin,
+        User.admin_mode_active,
+        # Read-only counters (kept in the form so admins see them in
+        # context, but rendered with readonly=True so they cannot be
+        # edited from the UI — they are written exclusively by the bot).
+        User.total_tokens_in,
+        User.total_tokens_out,
+        User.last_tokens_in,
+        User.last_tokens_out,
+        User.tokens_in_haiku,
+        User.tokens_out_haiku,
+        User.calls_haiku,
+        User.tokens_in_sonnet,
+        User.tokens_out_sonnet,
+        User.calls_sonnet,
+        User.tokens_in_admin,
+        User.tokens_out_admin,
+        User.calls_admin,
+        User.last_search_query,
+        User.last_search_log_id,
+    ]
+
+    form_overrides = {
+        "city_code": SelectField,
+        "display_preference": SelectField,
+        "response_mode": SelectField,
+        "chat_debug": SelectField,
+        "onboarding_step": SelectField,
+    }
+
+    # IMPORTANT — wtforms vs. HTML attribute split:
+    #
+    #   * ``form_args`` is passed to the wtforms Field *constructor*. The
+    #     ``description`` kwarg here is what SQLAdmin's
+    #     ``templates/sqladmin/_macros.html`` renders as the
+    #     ``<small class="text-muted">…</small>`` help-text node below the
+    #     input. This is the ONLY way to get visible tooltip text.
+    #   * ``form_widget_args`` is passed to the wtforms widget as
+    #     ``render_kw`` — every key/value becomes an HTML attribute on the
+    #     rendered ``<input>``. So ``readonly: True`` belongs here (it
+    #     becomes ``readonly`` on the element), but ``description: "…"``
+    #     does NOT — it would render as a non-standard ``description``
+    #     attribute that browsers ignore.
+    form_args = {
+        # --- SelectField dropdowns ---
+        # city_code is nullable on the model — allow blank to clear it.
+        "city_code": {
+            "choices": [("", "— none —"), *USER_CITY_CODE_CHOICES],
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        # display_preference is NOT NULL with a default of "grid", so we
+        # do not offer a blank option here.
+        "display_preference": {
+            "choices": USER_DISPLAY_PREFERENCE_CHOICES,
+            "coerce": str,
+            "validate_choice": False,
+        },
+        "response_mode": {
+            "choices": USER_RESPONSE_MODE_CHOICES,
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        "chat_debug": {
+            "choices": USER_CHAT_DEBUG_CHOICES,
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        "onboarding_step": {
+            "choices": USER_ONBOARDING_STEP_CHOICES,
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        # --- Tooltip help text (rendered as <small class="text-muted">) ---
+        **{
+            field: {"description": tooltip}
+            for field, tooltip in USER_FORM_TOOLTIPS.items()
+        },
+        # --- Read-only counters: also get an explanatory tooltip ---
+        **{
+            field: {
+                "description": (
+                    "Read-only — written by the bot. "
+                    "View full breakdown via the 📊 link on the listing page."
+                ),
+            }
+            for field in USER_READONLY_FIELDS
+        },
+    }
+
+    form_widget_args = {
+        # Read-only counter / log-pointer fields. ``readonly`` becomes the
+        # HTML ``readonly`` attribute on the input (greyed out, not
+        # editable). The browser still submits the value with the form,
+        # but SQLAdmin will write it back unchanged.
+        field: {"readonly": True}
+        for field in USER_READONLY_FIELDS
+    }
 
 
 class IntentKeywordAdmin(ModelView, model=IntentKeyword):

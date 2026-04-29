@@ -1,6 +1,6 @@
 # FarmaFacil — API Reference
 
-> Last Updated: 2026-04-10
+> Last Updated: 2026-04-29
 > Base URL (production): `https://amparo-chromophoric-christia.ngrok-free.dev`
 > Base URL (local dev): `http://localhost:8000`
 > Base URL (server direct): `http://10.0.0.116:8100`
@@ -382,6 +382,23 @@ Built with SQLAdmin. Provides a web UI to browse and edit all database tables:
 - Conversation logs
 - Products and prices
 - User feedback (`/bug` and `/comentario` submissions — review-only workflow)
+
+### Users edit form (v0.20.0)
+
+The Users edit form enforces value constraints so admins can't accidentally type garbage into status columns:
+
+| Field | Input type | Source of valid values |
+|-------|-----------|------------------------|
+| `city_code` | dropdown | `services/store_backfill.FARMATODO_CITIES` (18 codes) |
+| `display_preference` | dropdown | `grid` / `detail` / `image` |
+| `response_mode` | dropdown | `services/settings._VALID_MODES` + blank for "use global" |
+| `chat_debug` | dropdown | `services/settings._VALID_DEBUG` + blank for "use global" |
+| `onboarding_step` | dropdown | bot states + blank for "complete (NULL)" |
+| `chat_admin` / `admin_mode_active` | checkbox | bool |
+| `total_tokens_in`, `tokens_in_haiku`, `calls_*`, `last_search_*`, … | read-only | written by the bot only |
+| `latitude`, `longitude`, `zone_name`, `awaiting_*`, `phone_number` | text + tooltip | free text with help text under the input |
+
+The valid-values lists live as module-level constants in `farmafacil.api.admin` and are verified against their canonical sources by `tests/test_admin_user_form.py` so a future change to (e.g.) `FARMATODO_CITIES` automatically updates the dropdown.
 
 See [deployment.md](deployment.md) for default credentials.
 

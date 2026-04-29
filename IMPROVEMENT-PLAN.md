@@ -228,6 +228,25 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P0 — Critical
 
+### Item Q3: SQLAdmin Users Edit Form — Constrained Inputs (v0.20.0)
+
+- **Status:** DONE (2026-04-29, v0.20.0)
+- **Added:** 2026-04-29
+- **Completed:** 2026-04-29
+- **Priority:** P0
+- **Problem:** Admin Users edit page rendered every column as a free-text input — including columns with constrained value sets (`response_mode`, `chat_debug`, `onboarding_step`, `city_code`, `display_preference`) and counters that should be bot-only (`tokens_in_*`, `calls_*`, `last_search_*`). Admins (Daniel) could type garbage into status fields, breaking analytics and bot logic; counters could be edited away by accident.
+- **Solution implemented:**
+  1. Restructured `UserAdmin` (`src/farmafacil/api/admin.py`) with explicit `form_columns`, `form_overrides`, `form_args`, `form_widget_args`.
+  2. Five `SelectField` dropdowns whose choices come from canonical sources: `FARMATODO_CITIES` (city_code), `_VALID_MODES` (response_mode), `_VALID_DEBUG` (chat_debug), known onboarding states (onboarding_step), and `grid`/`detail`/`image` (display_preference).
+  3. Nullable-aware coerce (`_coerce_optional_str`) so the blank "— use global —" / "— complete —" options write a true `NULL` to the DB instead of an empty string.
+  4. 17 read-only counter / log-pointer fields rendered with HTML `readonly` attribute via `form_widget_args` — visible in context but not editable.
+  5. 6 free-text fields (`phone_number`, `latitude`, `longitude`, `zone_name`, `awaiting_clarification_context`, `awaiting_category_search`) get `<small class="text-muted">` help-text via wtforms `description` (in `form_args`, NOT `form_widget_args` — putting it in widget args produced a useless non-standard HTML attribute, regression caught during smoke test).
+  6. SECURITY INVARIANT preserved: `chat_admin` and `admin_mode_active` remain editable (the SQLAdmin UI is the only sanctioned channel for granting admin chat access).
+- **Files modified:** `src/farmafacil/api/admin.py` (new module-level constants + extended UserAdmin class), `src/farmafacil/__init__.py` (version bump), `pyproject.toml` (version bump), `docs/api-reference.md` (admin dashboard section).
+- **Files created:** `tests/test_admin_user_form.py` (42 tests asserting dropdown choices match canonical sources, readonly fields are correctly wired, tooltip text lives in the right config dict, form_columns ordering, security invariants on `chat_admin`).
+- **Tests:** 42 new, all pass. Full suite: 942 pass (up from 913 baseline, +42 new — diff vs. expected +40 is one extra readonly-explanation test and one regression-guard test for the form_args/form_widget_args split). 1 pre-existing flaky integration test in `test_drug_interactions.py` (RxNav 404, unrelated).
+- **Smoke-tested:** Started uvicorn on port 8101, logged into `/admin`, edited a synthetic user (id=34): dropdowns rendered with correct preselected values + 18 city codes + nullable blanks; readonly fields rendered with HTML `readonly` attribute; 21 `<small class="text-muted">` tooltips rendered; POSTed the form and verified that `response_mode=""` round-tripped to `NULL`, `city_code=MCBO` saved correctly, `total_tokens_in=12345` was preserved unchanged.
+
 ### Item 48: Unified Location Service + Admin Chat Tools (v0.19.0)
 
 - **Status:** DONE (2026-04-28, v0.19.0)
