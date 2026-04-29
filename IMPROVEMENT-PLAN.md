@@ -228,6 +228,21 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ## P0 — Critical
 
+### Item 47: Nominatim Onboarding Accuracy + Missing Chain Stores
+
+- **Status:** PENDING
+- **Added:** 2026-04-28
+- **Priority:** P0
+- **Problem:** User Daniel (id=1, La Boyera) was geocoded at onboarding to `10.3555, -66.8467` — which is "La Hoyadita", a suburb 7.8 km south of actual La Boyera (`10.4258, -66.8422`). Result: every "farmacias cerca" query returned stores 7+ km away when real pharmacies in La Boyera are 0.3 km. Manually corrected on 2026-04-28 by `UPDATE users SET latitude=10.4258, longitude=-66.8422 WHERE id=1`. Nominatim today returns the correct coords for "La Boyera, Venezuela" — likely the user typed something subtly different at onboarding, OR Nominatim ranking drifted. **Second issue discovered**: Farmatodo La Boyera (CC Trinalta, Av. Intercomunal Baruta-Hatillo) is one of the most famous Farmatodos in southeastern Caracas, has phone (0212) 944-7201, but is MISSING from our `pharmacy_locations` table — neither in the Farmatodo store backfill (chain API) nor in OSM. Worth investigating both.
+- **Solution plan:**
+  1. **Geocode confidence guard** in `geocode_zone`: after Nominatim returns a result, verify `display_name` contains the user's input string (case-insensitive, accent-folded). If not → reject and ask user to clarify or share location pin instead. Prevents future "La Boyera → La Hoyadita" silent mismatches.
+  2. **Geocode multi-result preview**: when Nominatim returns >1 result and the top two have similar names, show the user "¿Te refieres a *La Boyera, El Hatillo* o *La Boyera, Caracas Centro*?" and let them pick.
+  3. **Investigate Farmatodo backfill gap**: the `backfill_stores` task seeds 18 city centers and queries Farmatodo's `/stores/nearby` for each. La Boyera is in Caracas (CCS) but the Farmatodo La Boyera store isn't being returned. Possible causes: API pagination not exhausted, or the store's `cityId` is something other than CCS, or the geo-radius around the CCS center misses it. Add explicit lat/lng for La Boyera + El Hatillo + Baruta to the seeded city centers.
+  4. **Health check**: a daily admin alert if any of the 5 known-popular Caracas pharmacies (Farmatodo La Boyera, Farmatodo Las Mercedes, Locatel La Castellana, etc.) drop out of the DB — would catch backfill regressions early.
+- **Files to modify:** `src/farmafacil/services/geocode.py` (confidence guard), `src/farmafacil/services/store_backfill.py` (add city centers), `src/farmafacil/bot/handler.py` (multi-result clarification flow)
+- **Tests:** geocode rejection on display_name mismatch; multi-result clarification round-trip; pharmacy_locations health check
+- **Effort:** 1 day
+
 ### Item 46: OpenStreetMap Backfill — Independent Pharmacies + Rich Attributes (Hours, Website, Phone)
 
 - **Status:** DONE (2026-04-28, v0.18.0)
