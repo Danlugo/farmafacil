@@ -95,6 +95,52 @@ class TestParseOsmElement:
         assert row is not None
         assert row["phone"] == "+58-212-111-2222"
 
+    def test_multi_number_phone_keeps_first_only(self):
+        # OSM phone tags often pack multiple numbers — pharmacy_locations
+        # phone column is VARCHAR(30), so keep the first only. Regression
+        # for the v0.18.0 production crash on 2026-04-28.
+        element = {
+            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
+            "tags": {
+                "name": "X",
+                "phone": "+58 212-8724131; +58 414-1234567; +58 416-9876543",
+            },
+        }
+        row = parse_osm_element(element)
+        assert row is not None
+        assert row["phone"] == "+58 212-8724131"
+        assert len(row["phone"]) <= 30
+
+    def test_phone_truncated_to_30_chars(self):
+        element = {
+            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
+            "tags": {"name": "X", "phone": "+58 212-555-6789-extension-12345-too-long"},
+        }
+        row = parse_osm_element(element)
+        assert row is not None
+        assert len(row["phone"]) <= 30
+
+    def test_long_name_truncated_to_100_chars(self):
+        element = {
+            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
+            "tags": {"name": "Farmacia " + "x" * 200},
+        }
+        row = parse_osm_element(element)
+        assert row is not None
+        assert len(row["name"]) <= 100
+
+    def test_long_opening_hours_truncated(self):
+        element = {
+            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
+            "tags": {
+                "name": "X",
+                "opening_hours": "Mo-Fr 08:00-20:00; " * 30,
+            },
+        }
+        row = parse_osm_element(element)
+        assert row is not None
+        assert len(row["opening_hours"]) <= 255
+
     def test_canonical_phone_wins_over_contact_namespace(self):
         element = {
             "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,

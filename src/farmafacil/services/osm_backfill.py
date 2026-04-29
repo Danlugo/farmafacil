@@ -163,11 +163,32 @@ def parse_osm_element(element: dict[str, Any]) -> dict[str, Any] | None:
     address = ", ".join(address_parts) if address_parts else None
 
     # Phone, website, email — both canonical and contact:* namespaces.
-    phone = tags.get("phone") or tags.get("contact:phone")
+    # OSM phone tags often pack multiple numbers separated by `;` or `,`
+    # (e.g., "+58 212-8724131; +58 414-1234567"). The pharmacy_locations
+    # column is VARCHAR(30) so we keep the FIRST number only and truncate
+    # defensively. Other text fields are clamped to their column lengths
+    # too — OSM data quality varies and we'd rather drop tail bytes than
+    # crash the entire backfill cycle.
+    phone_raw = tags.get("phone") or tags.get("contact:phone")
+    phone = None
+    if phone_raw:
+        first = re.split(r"[;,]", phone_raw, maxsplit=1)[0].strip()
+        phone = first[:30] or None
+
     website = tags.get("website") or tags.get("contact:website")
+    if website:
+        website = website.strip()[:500] or None
     email = tags.get("email") or tags.get("contact:email")
+    if email:
+        email = email.strip()[:255] or None
 
     opening_hours = (tags.get("opening_hours") or "").strip() or None
+    if opening_hours and len(opening_hours) > 255:
+        opening_hours = opening_hours[:255]
+
+    # name and name_lower are VARCHAR(100). Pharmacy names rarely exceed
+    # this but a few OSM entries include the full address in the name.
+    name = name[:100]
 
     chain = detect_chain(
         name=name,
@@ -176,9 +197,9 @@ def parse_osm_element(element: dict[str, Any]) -> dict[str, Any] | None:
     )
 
     return {
-        "external_id": f"osm-{osm_type}-{osm_id}",
+        "external_id": f"osm-{osm_type}-{osm_id}"[:150],
         "name": name,
-        "pharmacy_chain": chain,
+        "pharmacy_chain": chain[:100],
         "latitude": float(lat),
         "longitude": float(lng),
         "address": address,
