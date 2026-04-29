@@ -645,3 +645,86 @@ class TestThreeLayerConsistency:
         assert "OTC" in skill or "opciones" in skill.lower(), "Skill doesn't mention OTC options"
         assert "OTC" in instructions or "opciones" in instructions.lower(), \
             "Classify doesn't mention OTC options"
+
+
+# ── Item 44: Clarify-before-pharmacy-API discipline ──────────────────────
+# Jose tested "necesito condones" 2026-04-28 23:31 — AI classified as
+# drug_search and the bot fired 3 pharmacy API calls + a Farmatodo
+# stores/nearby call (which 409'd and crashed the turn). The user only
+# saw the conversational ack with no follow-up. These tests lock in the
+# fix: vague multi-brand/multi-type categories must trigger clarify_needed
+# in the classify layer AND the seed `product_guidance` rule must defer
+# to that clarify rule for those categories.
+
+
+class TestVagueCategoryClarification:
+    """Categories with many brand/type variants must clarify before searching."""
+
+    NEW_CATEGORIES = [
+        "condones",
+        "anticonceptivos",
+        "lentes de contacto",
+        "kit dental",
+        "higiene íntima",
+    ]
+
+    def _get_classify_instructions(self) -> str:
+        from farmafacil.services.ai_responder import CLASSIFY_INSTRUCTIONS
+        return CLASSIFY_INSTRUCTIONS
+
+    def _get_product_guidance_skill(self) -> str:
+        seed = _get_pharmacy_seed()
+        for skill in seed["skills"]:
+            if skill["name"] == "product_guidance":
+                return skill["content"]
+        raise AssertionError("product_guidance skill not found")
+
+    def test_classify_lists_all_new_categories_as_vague(self):
+        """CLASSIFY_INSTRUCTIONS must reference each new category as a clarify trigger."""
+        instructions = self._get_classify_instructions()
+        for category in self.NEW_CATEGORIES:
+            assert category in instructions, (
+                f"Category {category!r} missing from CLARIFY_NEEDED examples — "
+                f"AI will skip clarification and fire pharmacy APIs prematurely"
+            )
+
+    def test_classify_has_brand_clarify_example_for_condoms(self):
+        """The condoms example must ask brand/type, not just acknowledge."""
+        instructions = self._get_classify_instructions()
+        # The example should mention at least one brand cue (Trojan/Durex/Sico)
+        # and at least one type cue (lubricado/ultradelgado/retardante).
+        assert any(b in instructions for b in ("Trojan", "Durex", "Sico")), \
+            "Condoms clarify example missing brand cues (Trojan/Durex/Sico)"
+        assert any(t in instructions for t in ("ultradelgado", "lubricado", "retardante")), \
+            "Condoms clarify example missing type cues (ultradelgado/lubricado/retardante)"
+
+    def test_classify_explains_api_cost_motivation(self):
+        """The rule must justify clarification by API-call discipline."""
+        instructions = self._get_classify_instructions()
+        # The reason we clarify is to avoid pharmacy API calls before we
+        # know what to search — that motivation must be visible in the prompt.
+        assert "APIs" in instructions or "API" in instructions, \
+            "Clarify rule should mention API-call discipline as motivation"
+
+    def test_product_guidance_defers_to_clarify_for_new_categories(self):
+        """seed.py product_guidance rule must point multi-brand categories to clarify_needed."""
+        content = self._get_product_guidance_skill()
+        assert "clarify_needed" in content.lower() or "CLARIFY_NEEDED" in content, (
+            "product_guidance must reference clarify_needed for multi-brand categories — "
+            "otherwise the two layers contradict each other and the AI behaves unpredictably"
+        )
+        # Each new category should appear in the precedence list
+        for category in self.NEW_CATEGORIES:
+            # "higiene íntima" is the rule-text form; "Higiene" is the list-bullet form
+            short = category.split()[0]
+            assert short in content.lower() or short.capitalize() in content, (
+                f"product_guidance skill missing {short!r} in clarify-precedence list"
+            )
+
+    def test_product_guidance_keeps_simple_categories_as_drug_search(self):
+        """Single-variant categories (protector solar, pañales) still go to drug_search."""
+        content = self._get_product_guidance_skill()
+        # These are NOT in the clarify list — they should still be searched directly.
+        assert "protector solar" in content.lower()
+        assert "pañales" in content.lower()
+        assert "drug_search" in content

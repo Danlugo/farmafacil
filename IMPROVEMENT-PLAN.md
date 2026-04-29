@@ -226,6 +226,27 @@ Tracks planned improvements, new features, and technical debt. Items are priorit
 
 ---
 
+## P0 — Critical
+
+### Item 44: AI-First Discipline — Clarify Before Pharmacy APIs + Farmatodo Store Enrichment Resilience
+
+- **Status:** DONE (2026-04-28, v0.17.2)
+- **Added:** 2026-04-28
+- **Completed:** 2026-04-28
+- **Priority:** P0
+- **Problem:** Two user-visible bugs from Jose's testing on 2026-04-28 23:31. (1) Sending "necesito condones" caused the AI to classify as `drug_search` and immediately fire all 3 pharmacy API calls (Farmatodo Algolia + SAAS VTEX + Locatel VTEX, 37 cached results) for the generic term "Condones" before knowing brand or type — wasteful and produced generic results. (2) After the pharmacy fan-out, `_handle_drug_search` called Farmatodo's `/stores/nearby` endpoint for distance enrichment, which returned **409 Conflict**. The existing `except httpx.RequestError` clause in `get_nearby_stores` did NOT catch `httpx.HTTPStatusError` (separate sibling subclass under `HTTPError`), so the exception propagated up, the FastAPI webhook returned 500, and the user only saw the conversational ack ("Te busco condones ahora...") with no follow-up message. Production logs confirmed both events at 23:31:59 and 23:36:39.
+- **Solution implemented:**
+  1. Extended `CLASSIFY_INSTRUCTIONS` in `src/farmafacil/services/ai_responder.py` with 5 new vague-category examples that must trigger `clarify_needed` BEFORE pharmacy APIs are called: `condones`, `anticonceptivos`, `lentes de contacto`, `kit dental`, `productos de higiene íntima`. Each has a paired CLARIFY_QUESTION example asking brand/type. Added matching examples to the refiner prompt so the LLM knows how to distill "condones" + "trojan ultradelgado" → `trojan ultradelgado` for the actual search.
+  2. Updated `product_guidance` skill in `src/farmafacil/db/seed.py` to explicitly defer to `clarify_needed` for multi-brand/multi-type categories — resolves the prior contradiction where two layers gave conflicting guidance ("classify as drug_search with representative term" vs "classify as clarify_needed"). Added an explicit precedence list and an "EXCEPCIÓN" clause.
+  3. Fixed `get_nearby_stores` in `src/farmafacil/services/stores.py` to catch `httpx.HTTPStatusError` separately from `httpx.RequestError`. On any 4xx/5xx, log a warning with status code + city_code (for diagnosability) and return `[]`. Downstream `_enrich_with_nearby_stores` already handles empty store lists correctly — products still get returned to the user, just without per-store distance enrichment. Existing RequestError path (network/DNS/timeout) preserved unchanged.
+  4. Cleanup: removed 3 stale `_send_grid_image` mock patches from `tests/test_clarification.py` left behind by v0.15.2 (Item 40 removed grid images but the patches remained, causing AttributeError in 3 tests on Python 3.14).
+- **Files modified:** `src/farmafacil/services/ai_responder.py` (CLASSIFY_INSTRUCTIONS + refiner examples), `src/farmafacil/db/seed.py` (product_guidance skill), `src/farmafacil/services/stores.py` (HTTPStatusError handler), `tests/test_clarification.py` (removed obsolete patches), `tests/test_drug_liability.py` (added `TestVagueCategoryClarification` class — 5 tests)
+- **Files created:** `tests/test_stores_resilience.py` (new — 5 tests covering 409, 500, RequestError, 200 happy path, warning-log content)
+- **Test count:** 726 → 741 (+15 net: +10 new resilience+clarify, +5 from removed patches that now pass)
+- **Notes:** Code review (code-reviewer agent) returned APPROVE with one MINOR fix applied — `caplog.records[*].message` → `r.getMessage()` for cross-Python-version reliability. Trigger event: Jose user_id=4 conversation logs 784–787 on production at 23:31–23:36 UTC.
+
+---
+
 ## P2 — Medium
 
 ### Item 42: Fix All 16 User-Reported Bugs (Jose's Testing)

@@ -239,9 +239,10 @@ On the **next** incoming message from that user, the handler detects the stashed
 
 **Rules for when to clarify (see classification prompt):**
 
-- ✅ Use `clarify_needed` for generic categories: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "algo para el cabello"
-- ❌ Never use `clarify_needed` when the user names a specific product or ingredient: "omeprazol", "protector solar", "aspirina"
+- ✅ Use `clarify_needed` for generic categories: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "algo para el cabello", "condones", "anticonceptivos", "lentes de contacto", "kit dental", "productos de higiene íntima"
+- ❌ Never use `clarify_needed` when the user names a specific product, brand, or ingredient: "omeprazol", "protector solar", "aspirina", "Trojan ultradelgado"
 - ❌ Never use `clarify_needed` in mid-onboarding (the check is gated on `step is None`)
+- 💡 **Why this matters (v0.17.2):** clarifying first means no pharmacy API calls (Farmatodo Algolia + 2 VTEX) before we know what to search. Personal-care categories (condones, anticonceptivos, lentes, kit dental, higiene íntima) were added in Item 44 after Jose's "necesito condones" test produced 37 generic results then crashed the turn on a Farmatodo `/stores/nearby` 409.
 
 If the LLM returns `ACTION: clarify_needed` without a `CLARIFY_QUESTION`, the parser defensively degrades to `drug_search` so the user is never left hanging.
 

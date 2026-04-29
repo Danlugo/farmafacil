@@ -49,13 +49,19 @@ REGLAS:
 - Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
 - Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, busca aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, incluye RESPONSE breve reconociendo el síntoma + "consulta con tu médico".
 - ⚠️ Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez", "dolor de estomago"): clasifica como question (NO drug_search). En RESPONSE: (1) reconoce el síntoma, (2) LISTA opciones OTC comunes para ese síntoma (ej: para estómago: Omeprazol, Ranitidina, antiácidos; para dolor de cabeza: Acetaminofén, Ibuprofeno, Aspirina), (3) pregunta cuál quiere buscar, (4) incluye "consulta con tu médico". NUNCA elijas un medicamento por el usuario ni clasifiques como drug_search cuando no nombran un producto.
-- ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos distintos Y NO especifica forma farmacéutica/tipo (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé"), NO busques directamente. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), o marca preferida. Ejemplos:
+- ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos/marcas/tipos distintos Y NO especifica cuál (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé", "condones", "anticonceptivos", "lentes de contacto", "kit dental", "productos de higiene íntima"), NO busques directamente — esto evita gastar llamadas a las APIs de farmacias antes de saber qué buscar. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), tipo, o marca preferida. Ejemplos:
   * "medicinas para la memoria" → CLARIFY_QUESTION: "¿Prefieres pastillas o bebibles? ¿Es para adulto o niño? Así te busco la mejor opción."
   * "algo para dormir" → CLARIFY_QUESTION: "¿Buscas algo natural (tipo melatonina o valeriana) o un medicamento recetado? ¿Pastillas o gotas?"
   * "vitaminas" → CLARIFY_QUESTION: "¿Qué tipo de vitaminas? (multivitamínico, vitamina C, D, B12, etc.) ¿Pastillas, gomitas o líquido?"
+  * "necesito condones" → CLARIFY_QUESTION: "¿Tienes una marca preferida (Trojan, Durex, Sico)? ¿Algún tipo en particular (lubricado, ultradelgado, retardante)?"
+  * "anticonceptivos" → CLARIFY_QUESTION: "¿Pastillas anticonceptivas, condones, o algo de emergencia? Si son pastillas, ¿tienes una marca recetada?"
+  * "lentes de contacto" → CLARIFY_QUESTION: "¿Sabes la graduación o la marca que usas? ¿Diarios, mensuales, o de uso prolongado?"
+  * "kit dental" → CLARIFY_QUESTION: "¿Buscas un kit completo (cepillo + pasta + hilo) o algo específico? ¿Adulto o niño?"
+  * "productos de higiene íntima" → CLARIFY_QUESTION: "¿Para hombre o mujer? ¿Jabón, toallitas, o algo específico?"
   * "protector solar" (producto específico, NO vago) → drug_search directo, NO clarificar
   * "omeprazol" (producto específico) → drug_search directo, NO clarificar
-  NO uses clarify_needed si el usuario ya nombró un producto específico o un ingrediente activo. Solo para categorías genéricas ambiguas.
+  * "Trojan ultradelgado" (marca + tipo específico) → drug_search directo, NO clarificar
+  NO uses clarify_needed si el usuario ya nombró un producto específico, una marca, o un ingrediente activo. Solo para categorías genéricas ambiguas con múltiples marcas/tipos.
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
@@ -367,7 +373,12 @@ Vaga: "vitaminas" / Respuesta: "para niño, bebible" -> multivitaminico niños j
 Vaga: "algo para el cabello" / Respuesta: "caida" -> biotina cabello
 Vaga: "suplementos" / Respuesta: "para energia, capsulas" -> vitamina b12 capsulas
 Vaga: "algo para la tos" / Respuesta: "jarabe, adulto" -> jarabe tos adulto
-Vaga: "protector solar" / Respuesta: "para cara" -> protector solar facial"""
+Vaga: "protector solar" / Respuesta: "para cara" -> protector solar facial
+Vaga: "necesito condones" / Respuesta: "trojan ultradelgado" -> trojan ultradelgado
+Vaga: "condones" / Respuesta: "durex" -> condones durex
+Vaga: "anticonceptivos" / Respuesta: "pastillas yasmin" -> yasmin pastillas
+Vaga: "lentes de contacto" / Respuesta: "mensuales" -> lentes contacto mensuales
+Vaga: "kit dental" / Respuesta: "adulto cepillo y pasta" -> kit dental adulto"""
 
 
 async def refine_clarified_query(

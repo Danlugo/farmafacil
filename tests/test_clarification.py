@@ -468,7 +468,6 @@ async def test_clarify_answer_refines_and_dispatches_search(clarify_user):
          patch.object(handler, "refine_clarified_query", new=AsyncMock(side_effect=fake_refine)), \
          patch.object(handler, "increment_token_usage", AsyncMock()), \
          patch.object(handler, "get_setting", AsyncMock(return_value="hybrid")), \
-         patch.object(handler, "_send_grid_image", AsyncMock()), \
          patch.object(handler, "_send_detail_images", AsyncMock()):
         await handler.handle_incoming_message(
             clarify_user,
@@ -532,7 +531,6 @@ async def test_refiner_failure_falls_back_to_user_answer(clarify_user):
          patch.object(handler, "refine_clarified_query", new=AsyncMock(side_effect=fake_refine)), \
          patch.object(handler, "increment_token_usage", AsyncMock()) as mock_inc, \
          patch.object(handler, "get_setting", AsyncMock(return_value="hybrid")), \
-         patch.object(handler, "_send_grid_image", AsyncMock()), \
          patch.object(handler, "_send_detail_images", AsyncMock()):
         await handler.handle_incoming_message(
             clarify_user, "gomitas", wa_message_id=""
@@ -628,7 +626,6 @@ async def test_specific_drug_skips_clarification(clarify_user):
          patch.object(handler, "send_text_message", new=AsyncMock(side_effect=fake_send_text)), \
          patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \
          patch.object(handler, "get_setting", AsyncMock(return_value="ai_only")), \
-         patch.object(handler, "_send_grid_image", AsyncMock()), \
          patch.object(handler, "_send_detail_images", AsyncMock()):
         await handler.handle_incoming_message(
             clarify_user, "Omeprazol", wa_message_id=""

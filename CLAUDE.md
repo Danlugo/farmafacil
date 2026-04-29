@@ -61,7 +61,7 @@ docker compose logs -f app
 | `src/farmafacil/services/` | Business logic, intent, AI roles/router/responder, geocode, cache, stores |
 | `src/farmafacil/models/` | Pydantic schemas + SQLAlchemy ORM |
 | `src/farmafacil/db/` | Database session, seed data |
-| `tests/` | pytest test suite (726 tests) |
+| `tests/` | pytest test suite (741 tests) |
 | `src/farmafacil/services/media.py` | WhatsApp media download, Vision encoding, PDF/DOCX extraction |
 | `src/farmafacil/services/web_search.py` | Brave Search API client (admin-only) |
 | `src/farmafacil/services/scheduler.py` | Background task scheduler with DB-driven intervals |

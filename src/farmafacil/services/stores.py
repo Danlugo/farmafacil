@@ -74,6 +74,14 @@ async def get_nearby_stores(
                 headers={"User-Agent": "Mozilla/5.0"},
             )
             response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Farmatodo stores/nearby returned %d for cityId=%s — "
+            "search will continue without per-store distance enrichment",
+            exc.response.status_code,
+            city_code,
+        )
+        return []
     except httpx.RequestError as exc:
         logger.error("Failed to fetch stores: %s", exc)
         return []
