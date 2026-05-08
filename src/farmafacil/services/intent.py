@@ -1,0 +1,199 @@
+"""Intent detection — DB keywords first, AI responder fallback for complex messages.
+
+Flow:
+1. Check DB keyword table for exact match (cached, instant)
+2. If message looks like a drug name (short, no question marks) — treat as drug search
+3. If ambiguous or conversational — delegate to AI responder (classify_with_ai)
+"""
+
+import logging
+import time
+from dataclasses import dataclass
+
+from sqlalchemy import select
+
+from farmafacil.db.session import async_session
+from farmafacil.models.database import IntentKeyword
+
+logger = logging.getLogger(__name__)
+
+# ── In-memory cache for DB keywords (refreshed every 5 minutes) ────────
+
+_keyword_cache: dict[str, tuple[str, str | None]] = {}  # keyword → (action, response)
+_cache_loaded_at: float = 0
+CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+async def _load_keyword_cache() -> None:
+    """Load all active keywords from DB into memory cache."""
+    global _keyword_cache, _cache_loaded_at
+    async with async_session() as session:
+        result = await session.execute(
+            select(IntentKeyword).where(IntentKeyword.is_active.is_(True))
+        )
+        keywords = result.scalars().all()
+        _keyword_cache = {
+            kw.keyword.lower(): (kw.action, kw.response) for kw in keywords
+        }
+        _cache_loaded_at = time.time()
+        logger.debug("Loaded %d intent keywords into cache", len(_keyword_cache))
+
+
+async def _get_keyword_cache() -> dict[str, tuple[str, str | None]]:
+    """Get the keyword cache, refreshing if stale."""
+    if time.time() - _cache_loaded_at > CACHE_TTL_SECONDS:
+        await _load_keyword_cache()
+    return _keyword_cache
+
+
+# ── Data model ──────────────────────────────────────────────────────────
+
+@dataclass
+class Intent:
+    """Classified user intent with extracted profile data."""
+
+    action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, clarify_needed, nearest_store, view_similar, emergency, question, unknown
+    drug_query: str | None = None
+    response_text: str | None = None
+    detected_name: str | None = None
+    detected_location: str | None = None
+    # clarify_needed fields — bot asks clarify_question and stores clarify_context
+    # in user.awaiting_clarification_context until the next reply arrives.
+    clarify_question: str | None = None
+    clarify_context: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Concrete model id used for the AI fallback (empty string when the
+    # intent was resolved purely from keyword cache, since no LLM ran).
+    # Threaded through so the handler can route token usage to the correct
+    # per-model bucket. (v0.19.2, Item 49.)
+    model: str = ""
+
+
+HELP_MESSAGE = (
+    "\U0001f48a *FarmaFacil — Ayuda*\n\n"
+    "Puedo ayudarte a encontrar productos en farmacias de Venezuela: "
+    "medicamentos, vitaminas, skincare, cuidado personal, y mas.\n\n"
+    "*Buscar producto:*\n"
+    "\u2022 Envia el nombre (ej: _losartan_, _protector solar_)\n"
+    "\u2022 O describe lo que necesitas (ej: _algo para el dolor de cabeza_)\n\n"
+    "*Farmacias cercanas:*\n"
+    "\u2022 Pregunta _farmacia cercana_ o _donde comprar_\n\n"
+    "*Configuracion:*\n"
+    "\u2022 _cambiar zona_ — nueva ubicacion\n"
+    "\u2022 _cambiar nombre_ — actualizar tu nombre\n\n"
+    "*Comandos:*\n"
+    "\u2022 _/sugerencia <texto>_ \u2014 enviar una sugerencia\n"
+    "\u2022 _/bug <texto>_ \u2014 reportar un problema\n\n"
+    "*Ejemplos:*\n"
+    "\u2022 _losartan_\n"
+    "\u2022 _acetaminofen 500mg_\n"
+    "\u2022 _protector solar_\n"
+    "\u2022 _necesito algo para la gripe_"
+)
+
+
+async def classify_intent_keywords(text: str) -> Intent | None:
+    """Try to classify intent using DB keyword matching.
+
+    Args:
+        text: User message text (already stripped).
+
+    Returns:
+        Intent if classified, None if ambiguous (needs LLM).
+    """
+    text_lower = text.lower().strip()
+    cache = await _get_keyword_cache()
+
+    # Exact match in DB keywords
+    if text_lower in cache:
+        action, response = cache[text_lower]
+        return Intent(action=action, response_text=response)
+
+    # Short message (1-4 words), no question marks — likely a drug name
+    words = text_lower.split()
+    is_question = "?" in text or text_lower.startswith((
+        "como ", "donde ", "que ", "cual ", "cuando ", "por que ",
+        "cuanto ", "tienen ", "hay ", "puedo ", "puedes ",
+    ))
+
+    # Detect conversational/statement patterns that are NOT drug names
+    is_conversational = text_lower.startswith((
+        "me ", "no ", "yo ", "mi ", "eso ", "ese ", "esa ", "esto ",
+        "esta ", "el ", "la ", "los ", "las ", "ya ", "pero ",
+        "oye ", "mira ", "dime ", "quiero saber", "necesito saber",
+        "me siento", "estoy ", "tengo ", "necesito ",
+    ))
+
+    if is_question or is_conversational:
+        # Ambiguous — needs LLM
+        return None
+
+    # Non-conversational, non-question text up to 8 words → drug search
+    if len(words) <= 8:
+        return Intent(action="drug_search", drug_query=text.strip())
+
+    # Ambiguous — needs LLM
+    return None
+
+
+async def classify_intent_ai(
+    text: str, user_id: int, user_name: str, phone_number: str = "",
+) -> Intent:
+    """Use AI responder to classify intent and extract profile data.
+
+    Delegates to the role-based AI system which loads its system prompt
+    from the database (editable via admin UI).
+
+    Args:
+        text: User message text.
+        user_id: The user's database ID.
+        user_name: The user's display name.
+        phone_number: WhatsApp phone for conversation history context.
+
+    Returns:
+        Classified intent with optional drug name, name, location, or response.
+    """
+    from farmafacil.services.ai_responder import classify_with_ai
+
+    ai_result = await classify_with_ai(
+        text, user_id, user_name, phone_number=phone_number or None
+    )
+
+    return Intent(
+        action=ai_result.action,
+        drug_query=ai_result.drug_query,
+        response_text=ai_result.text if ai_result.text else None,
+        detected_name=ai_result.detected_name,
+        detected_location=ai_result.detected_location,
+        clarify_question=ai_result.clarify_question,
+        clarify_context=ai_result.clarify_context,
+        input_tokens=ai_result.input_tokens,
+        output_tokens=ai_result.output_tokens,
+        model=ai_result.model,
+    )
+
+
+async def classify_intent(
+    text: str, user_id: int = 0, user_name: str = "", phone_number: str = "",
+) -> Intent:
+    """Classify user intent — DB keywords first, AI fallback.
+
+    Args:
+        text: User message text.
+        user_id: The user's database ID (for AI fallback).
+        user_name: The user's display name (for AI fallback).
+        phone_number: WhatsApp phone for conversation history context.
+
+    Returns:
+        Classified Intent.
+    """
+    # Try DB keyword detection first (cached, instant, free)
+    intent = await classify_intent_keywords(text)
+    if intent is not None:
+        logger.debug("Keyword intent: %s for '%s'", intent.action, text[:50])
+        return intent
+
+    # Ambiguous — use AI responder
+    logger.info("Keyword detection inconclusive for '%s' — calling AI", text[:50])
+    return await classify_intent_ai(text, user_id, user_name, phone_number)

@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://farmafacil:farmafacil@db:5432/farmafacil
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: farmafacil
+      POSTGRES_PASSWORD: farmafacil
+      POSTGRES_DB: farmafacil
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U farmafacil"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  app_data:

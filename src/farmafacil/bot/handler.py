@@ -1,0 +1,2076 @@
+"""Handle incoming WhatsApp messages — smart conversational flow."""
+
+import asyncio
+import logging
+
+from sqlalchemy.exc import SQLAlchemyError
+
+from farmafacil.bot.formatter import format_nearby_stores, format_search_results
+
+from farmafacil.bot.whatsapp import (
+    send_image_message,
+    send_interactive_list,
+    send_read_receipt,
+    send_text_message,
+)
+from farmafacil.models.schemas import DrugResult
+from farmafacil.services.ai_responder import (
+    classify_with_ai,
+    generate_response,
+    refine_clarified_query,
+    run_admin_turn,
+)
+from farmafacil.services.admin_chat import build_tools_manifest
+from farmafacil.services.ai_roles import assemble_prompt, get_role
+from farmafacil.services.user_memory import auto_update_memory, get_memory
+from farmafacil.services.geocode import geocode_zone, reverse_geocode
+from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
+from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
+from farmafacil.services.search_feedback import (
+    log_search,
+    parse_feedback,
+    record_feedback,
+    record_feedback_detail,
+)
+from farmafacil.config import LLM_MODEL, LLM_MODEL_OPUS, MODEL_ALIASES
+from farmafacil.services.chat_debug import build_debug_footer, estimate_cost, get_user_stats
+from farmafacil.services.conversation_log import log_outbound as log_outbound_conv
+from farmafacil.services.drug_interactions import (
+    check_interactions,
+    extract_medications_from_memory,
+    format_interaction_warning,
+)
+from farmafacil.services.settings import (
+    get_default_model,
+    get_setting,
+    resolve_chat_debug,
+    resolve_response_mode,
+    set_default_model,
+)
+from farmafacil.services.store_backfill import format_store_info, lookup_store
+from farmafacil.services.store_locations import get_all_nearby_stores
+from farmafacil.services.user_feedback import create_feedback, parse_feedback_command
+from farmafacil.services.user_suggestions import create_suggestion, parse_suggestion_command
+from farmafacil.services.users import (
+    get_or_create_user,
+    increment_token_usage,
+    is_chat_admin,
+    set_admin_mode,
+    set_awaiting_category_search,
+    set_awaiting_clarification,
+    set_onboarding_step,
+    update_last_search,
+    update_user_location,
+    update_user_name,
+    update_user_preference,
+    validate_user_profile,
+)
+
+logger = logging.getLogger(__name__)
+
+# ── Messages ────────────────────────────────────────────────────────────
+
+MSG_WELCOME = (
+    "\U0001f48a *Hola! Soy FarmaFacil*\n\n"
+    "Te ayudo a encontrar productos en farmacias de Venezuela.\n\n"
+    "*Como te llamas?*"
+)
+
+MSG_ASK_LOCATION = (
+    "Mucho gusto *{name}*! \U0001f91d\n\n"
+    "*En que zona o barrio estas?*\n"
+    "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+)
+
+MSG_ASK_PREFERENCE = (
+    "\u2705 *{zone}* guardado!\n\n"
+    "Como prefieres ver los resultados?\n\n"
+    "*1.* \U0001f4f8 *Imagen grande* — un producto a la vez con detalles\n"
+    "*2.* \U0001f5bc *Galeria* — varios productos en una imagen\n\n"
+    "Responde *1* o *2*"
+)
+
+MSG_READY = (
+    "\u2705 Listo *{name}*! Ya estas configurado.\n\n"
+    "Enviame el nombre de un producto de farmacia.\n"
+    "Ejemplo: _losartan_, _protector solar_, _vitamina C_"
+)
+
+MSG_LOCATION_NOT_FOUND = (
+    "No logre ubicar esa zona en Venezuela.\n"
+    "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
+    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
+)
+
+# Shown when a user shares a GPS location pin that cannot be reverse-geocoded
+# (unreachable Nominatim, coordinates outside Venezuela, malformed response).
+# Added in v0.13.0 (Item 24) — users can fall back to typing a city name.
+MSG_LOCATION_PIN_NOT_FOUND = (
+    "No pude ubicar las coordenadas que compartiste.\n"
+    "Por favor, envia el *nombre de tu zona o barrio* por texto.\n\n"
+    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
+)
+
+MSG_INVALID_PREFERENCE = "Responde *1* para imagen grande o *2* para galeria."
+
+MSG_RETURNING = (
+    "\U0001f48a *Hola {name}!* Buscando en *{zone}*.\n\n"
+    "Enviame el nombre de un producto de farmacia.\n\n"
+    "\U0001f527 _Comandos:_\n"
+    "\u2022 _cambiar zona_ — nueva ubicacion\n"
+    "\u2022 _cambiar nombre_ — actualizar nombre\n"
+    "\u2022 _ayuda_ — instrucciones"
+)
+
+MSG_ASK_NEW_LOCATION = "Dime tu nueva zona o barrio.\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+MSG_ASK_NEW_PREFERENCE = (
+    "Como prefieres ver los resultados?\n\n"
+    "*1.* \U0001f4f8 *Imagen grande*\n*2.* \U0001f5bc *Galeria*\n\nResponde *1* o *2*"
+)
+MSG_ASK_NEW_NAME = "Como te llamas?"
+
+MSG_ASK_FEEDBACK = "\u00bfTe sirvi\u00f3? (s\u00ed/no)"
+MSG_FEEDBACK_THANKS = "\u00a1Gracias por tu respuesta! \U0001f44d"
+MSG_FEEDBACK_SORRY = "Lamento eso. \u00bfQu\u00e9 buscabas exactamente o qu\u00e9 estuvo mal?"
+MSG_FEEDBACK_DETAIL_THANKS = "Gracias por explicarnos. Vamos a mejorar. \U0001f4aa"
+
+MSG_FEEDBACK_EMPTY = (
+    "Por favor incluye tu {label} despu\u00e9s del comando.\n\n"
+    "Ejemplo: _/{cmd} la b\u00fasqueda de losartan no me devolvi\u00f3 resultados_"
+)
+MSG_FEEDBACK_REGISTERED = (
+    "\u2705 \u00a1Gracias! Tu {label} ha sido registrado.\n\n"
+    "\U0001f4cb *Caso #{case_id}*\n\n"
+    "Nuestro equipo lo revisar\u00e1 pronto."
+)
+MSG_FEEDBACK_ERROR = (
+    "Lo siento, no pude registrar tu comentario en este momento. "
+    "Por favor int\u00e9ntalo de nuevo en unos minutos."
+)
+
+MSG_SUGGESTION_EMPTY = (
+    "Por favor incluye tu sugerencia despu\u00e9s del comando.\n\n"
+    "Ejemplo: _/sugerencia me gustar\u00eda poder filtrar por precio_"
+)
+MSG_SUGGESTION_REGISTERED = (
+    "\u2705 \u00a1Gracias por tu sugerencia!\n\n"
+    "\ud83d\udccb *Sugerencia #{case_id}*\n\n"
+    "La revisaremos pronto."
+)
+MSG_SUGGESTION_ERROR = (
+    "Lo siento, no pude registrar tu sugerencia en este momento. "
+    "Por favor int\u00e9ntalo de nuevo en unos minutos."
+)
+
+MSG_NEED_LOCATION = (
+    "{name}, necesito saber tu ubicacion para buscarte farmacias cercanas.\n\n"
+    "*En que zona o barrio estas?*\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+)
+
+MSG_CLARIFY_CANCELED = (
+    "Listo, cancele la busqueda anterior. Dime que necesitas \U0001f64c"
+)
+
+# Shown instead of the ¿Te sirvió? prompt when a drug search returns zero
+# results. Asking "did it help?" when there is literally nothing to rate was
+# a UX confusion signal in the v0.12.3 prod test (Item 34).
+MSG_RETRY_DIFFERENT_NAME = (
+    "\U0001f4a1 Si no encontraste lo que buscabas, prueba con otro nombre "
+    "o el principio activo. Ejemplo: _acetaminofen_ en vez de _tachipirin_."
+)
+
+# Words that cancel a pending clarification and reset the state.
+_CLARIFY_CANCEL_WORDS = {
+    "cancelar", "cancela", "cancel", "olvidalo", "olvídalo", "nada",
+    "dejalo", "déjalo", "no", "ninguno", "ninguna",
+}
+
+# ── Category quick-reply menu (Item 29, v0.13.2) ────────────────────────
+# Shown as a WhatsApp interactive list when an onboarded user sends a bare
+# greeting. Each tuple is (reply_id, display_title). Reply IDs are stable
+# machine identifiers — the title is what the user sees in the list AND
+# what we echo back in the follow-up prompt.
+#
+# Category set chosen after Item 29 product review (2026-04-11):
+# kept Medicamentos + Cuidado Personal (core pharmacy volume), added
+# Belleza (high-margin), Alimentos (Farmatodo sells food), and
+# Artículos Hogar (pharmacy-adjacent). Dropped Higiene (overlap with
+# Cuidado Personal) and Equipos Ortopédicos (too niche). See MEMORY.md.
+CATEGORIES: list[tuple[str, str]] = [
+    ("cat_medicamentos", "Medicamentos"),
+    ("cat_cuidado_personal", "Cuidado Personal"),
+    ("cat_belleza", "Belleza"),
+    ("cat_alimentos", "Alimentos"),
+    ("cat_hogar", "Articulos Hogar"),
+]
+_CATEGORY_BY_ID: dict[str, str] = {cat_id: title for cat_id, title in CATEGORIES}
+
+MSG_CATEGORY_LIST_BODY = (
+    "\U0001f48a Hola *{name}*! \u00bfQu\u00e9 estas buscando hoy?\n\n"
+    "Elegi una categoria o escribi directamente el nombre de un producto."
+)
+MSG_CATEGORY_LIST_BUTTON = "Ver categorias"
+MSG_CATEGORY_LIST_HEADER = "FarmaFacil"
+MSG_CATEGORY_LIST_FOOTER = "Podes cancelar en cualquier momento"
+
+MSG_CATEGORY_PROMPT = (
+    "\U0001f6cd *{category}* - \u00bfQue producto buscas?\n\n"
+    "Escribi el nombre y lo busco para vos.\n"
+    "Ejemplo: _losartan_, _shampoo_, _vitamina C_"
+)
+MSG_CATEGORY_CANCELED = (
+    "Listo, cancele la busqueda por categoria. Dime que necesitas \U0001f64c"
+)
+
+# ── Admin chat messages (Item 35, v0.14.0) ─────────────────────────────
+MSG_ADMIN_DENIED = (
+    "\U0001f512 No tienes permisos de admin. "
+    "Solo usuarios con *chat_admin* activado desde el dashboard pueden "
+    "usar este modo."
+)
+
+MSG_ADMIN_WELCOME = (
+    "\U0001f6e0\ufe0f *Modo Admin ACTIVADO* — usando Claude Opus.\n\n"
+    "Puedes pedirme cosas en lenguaje natural y yo llamo las "
+    "herramientas necesarias para responderte.\n\n"
+    "*Comandos disponibles:*\n"
+    "\u2022 */admin* — activar/desactivar este modo\n"
+    "\u2022 */admin off* — salir del modo admin\n"
+    "\u2022 */models* — ver modelo default + alternativas\n"
+    "\u2022 */model haiku|sonnet|opus* — cambiar modelo default "
+    "de usuarios\n"
+    "\u2022 */stats* — estadisticas de uso + costos\n"
+    "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n"
+    "\u2022 */sugerencia <texto>* — enviar una sugerencia\n"
+    "\u2022 */simulate* — adjunta un archivo con preguntas + caption /simulate\n\n"
+    "*Ejemplos de lo que puedo hacer:*\n"
+    "\u2022 _Mostrame los ultimos 10 feedbacks pendientes_\n"
+    "\u2022 _Ver caso #12_ / _Marcar caso #12 revisado_\n"
+    "\u2022 _Ver el rol pharmacy_advisor con sus reglas_\n"
+    "\u2022 _Agregar una regla al rol X diciendo Y_\n"
+    "\u2022 _Ver usuarios recientes_\n"
+    "\u2022 _Ver la memoria del usuario 5491112345678_\n"
+    "\u2022 _Listar farmacias de Locatel en CCS_\n"
+    "\u2022 _Desactivar la farmacia #42_\n"
+    "\u2022 _Cuantos productos tenemos?_\n"
+    "\u2022 _Top 10 busquedas_\n"
+    "\u2022 _Leer el archivo src/farmafacil/bot/handler.py_\n"
+    "\u2022 _Cambiar el default_model a sonnet_\n"
+    "\u2022 _Registrar un bug: el scraper de Farmatodo esta lento_\n"
+    "\u2022 _Mostrame las sugerencias pendientes_"
+)
+
+MSG_ADMIN_OFF = (
+    "\u2705 *Modo Admin DESACTIVADO*.\n"
+    "Volves al flujo normal de busqueda de productos."
+)
+
+MSG_ADMIN_NOT_ACTIVE = (
+    "El modo admin no esta activo. Usa */admin* para activarlo."
+)
+
+# Natural-language phrases that also turn off admin mode (redundant UX
+# sugar in case the user forgets the slash command).
+_ADMIN_OFF_PHRASES: frozenset[str] = frozenset({
+    "/admin off", "admin off", "salir admin", "desactivar admin",
+    "turn off admin", "apagar admin", "cerrar admin",
+})
+
+# ── Admin chat helpers (Item 35, v0.14.0) ─────────────────────────────
+
+async def _handle_admin_toggle(sender: str, user) -> None:
+    """Handle the ``/admin`` command — toggle admin mode on/off.
+
+    Enforces the ``chat_admin`` gate: only users explicitly flagged in the
+    SQLAdmin dashboard can enable admin mode. The flag itself is NEVER
+    editable from chat — see the docstring on ``users.chat_admin``.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: The already-loaded User ORM row for ``sender``.
+    """
+    allowed = await is_chat_admin(sender)
+    if not allowed:
+        logger.warning(
+            "Admin toggle DENIED for %s (chat_admin=False)", sender,
+        )
+        await send_text_message(sender, MSG_ADMIN_DENIED)
+        return
+
+    if user.admin_mode_active:
+        await set_admin_mode(sender, False)
+        await send_text_message(sender, MSG_ADMIN_OFF)
+        await log_outbound_conv(sender, MSG_ADMIN_OFF, message_type="admin_out")
+        logger.info("Admin mode OFF for %s", sender)
+        return
+
+    await set_admin_mode(sender, True)
+    await send_text_message(sender, MSG_ADMIN_WELCOME)
+    await log_outbound_conv(
+        sender, MSG_ADMIN_WELCOME, message_type="admin_out",
+    )
+    logger.info("Admin mode ON for %s (opus)", sender)
+
+
+async def _handle_admin_off(sender: str, user) -> None:
+    """Turn off admin mode if currently active, else send gentle hint."""
+    if not user.admin_mode_active:
+        await send_text_message(sender, MSG_ADMIN_NOT_ACTIVE)
+        return
+    await set_admin_mode(sender, False)
+    await send_text_message(sender, MSG_ADMIN_OFF)
+    await log_outbound_conv(sender, MSG_ADMIN_OFF, message_type="admin_out")
+    logger.info("Admin mode OFF (phrase) for %s", sender)
+
+
+async def _handle_model_commands(sender: str, text: str) -> bool:
+    """Handle ``/models`` and ``/model <alias>`` — default user model control.
+
+    Only callable while admin mode is active (the handler gates this).
+
+    Args:
+        sender: WhatsApp phone number.
+        text: Raw message text (already stripped, not lower-cased).
+
+    Returns:
+        True if the message matched a model command and was handled;
+        False if the caller should keep processing the message.
+    """
+    lower = text.lower().strip()
+
+    if lower == "/models":
+        try:
+            current = await get_default_model()
+        except Exception:  # noqa: BLE001 — defensive, settings is DB-backed
+            logger.error("get_default_model failed", exc_info=True)
+            current = "haiku"
+        aliases = ", ".join(sorted(MODEL_ALIASES.keys()))
+        msg = (
+            "\U0001f916 *Modelos disponibles*\n\n"
+            f"Default actual: *{current}*\n"
+            f"Alias validos: {aliases}\n\n"
+            "Usa */model haiku|sonnet|opus* para cambiar el default "
+            "de usuarios. (El admin AI usa Opus siempre.)"
+        )
+        await send_text_message(sender, msg)
+        await log_outbound_conv(sender, msg, message_type="admin_out")
+        return True
+
+    if lower.startswith("/model "):
+        alias = lower.removeprefix("/model ").strip()
+        try:
+            new_alias = await set_default_model(alias)
+        except ValueError as exc:
+            err = f"\u274c {exc}"
+            await send_text_message(sender, err)
+            await log_outbound_conv(sender, err, message_type="admin_out")
+            return True
+        except Exception:  # noqa: BLE001 — last-resort, never crash webhook
+            logger.error("set_default_model failed", exc_info=True)
+            err = "Error interno guardando el default_model."
+            await send_text_message(sender, err)
+            await log_outbound_conv(sender, err, message_type="admin_out")
+            return True
+        msg = (
+            f"\u2705 Default model actualizado a *{new_alias}*. "
+            "Afecta clasificacion de intent y respuestas de usuarios — "
+            "el admin AI sigue usando Opus."
+        )
+        await send_text_message(sender, msg)
+        await log_outbound_conv(sender, msg, message_type="admin_out")
+        return True
+
+    return False
+
+
+async def _handle_admin_turn(
+    sender: str, user, text: str, debug_on: bool,
+) -> None:
+    """Dispatch a free-text admin message through the Opus tool loop.
+
+    Assembles the ``app_admin`` role prompt + live tool manifest, calls
+    ``run_admin_turn``, increments admin-bucket token counters, sends the
+    final text to WhatsApp, and classifies the outbound log row as
+    ``admin_out`` so admin conversations can be filtered separately in
+    the dashboard without mixing them into user-facing conversation stats.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: Already-loaded User ORM row.
+        text: The free-text admin message (not /admin, not /models).
+        debug_on: True when chat debug is enabled — appends a compact
+            admin debug footer showing tools + tokens + steps.
+    """
+    role = await get_role("app_admin")
+    if role is None:
+        logger.error("app_admin role missing — admin turn aborted")
+        err = (
+            "El rol *app_admin* no esta configurado en la base. "
+            "Re-ejecuta el seed de roles o crealo desde el dashboard."
+        )
+        await send_text_message(sender, err)
+        await log_outbound_conv(sender, err, message_type="admin_out")
+        return
+
+    profile = {
+        "name": user.name,
+        "zone": user.zone_name,
+        "city_code": user.city_code,
+        "preference": user.display_preference,
+    }
+    memory_text = await get_memory(user.id)
+    base_prompt = assemble_prompt(role, memory_text, profile)
+    tool_manifest = build_tools_manifest()
+    system_prompt = (
+        f"{base_prompt}\n\n## Available Tools\n\n{tool_manifest}"
+    )
+
+    result = await run_admin_turn(
+        user_message=text,
+        system_prompt=system_prompt,
+        history=None,
+        admin_user_id=user.id,
+    )
+
+    # Route tokens to the admin bucket regardless of the underlying
+    # model (run_admin_turn is hardcoded to Opus but the bucket split
+    # happens inside increment_token_usage via is_admin=True).
+    if result.input_tokens or result.output_tokens:
+        await increment_token_usage(
+            user.id,
+            result.input_tokens,
+            result.output_tokens,
+            model=LLM_MODEL_OPUS,
+            is_admin=True,
+        )
+
+    reply = result.text or "(sin respuesta)"
+    if debug_on:
+        tools_label = ", ".join(result.tools_used) or "none"
+        reply += (
+            f"\n\n_[admin] opus steps={result.steps} "
+            f"tools={tools_label} "
+            f"tok={result.input_tokens}/{result.output_tokens}_"
+        )
+
+    await send_text_message(sender, reply)
+    await log_outbound_conv(sender, reply, message_type="admin_out")
+    logger.info(
+        "Admin turn for %s: tools=%s steps=%d tok=%d/%d",
+        sender, result.tools_used, result.steps,
+        result.input_tokens, result.output_tokens,
+    )
+
+
+async def _update_memory_safe(
+    user_id: int, user_name: str, user_message: str, bot_response: str,
+) -> None:
+    """Non-blocking memory update — errors are logged, never raised."""
+    try:
+        await auto_update_memory(user_id, user_name, user_message, bot_response)
+    except Exception:
+        # Last-resort catch: memory update is a background enhancement and
+        # must NEVER propagate errors to the WhatsApp reply path. Specific
+        # error types are already logged one layer down in
+        # ``user_memory.auto_update_memory`` itself.
+        logger.error("Memory update failed (non-blocking)", exc_info=True)
+
+
+async def handle_image_message(
+    sender: str,
+    media_id: str,
+    mime_type: str,
+    caption: str = "",
+    wa_message_id: str | None = None,
+) -> None:
+    """Handle an image or document sent via WhatsApp.
+
+    For regular users: uses Claude Vision to read drug names from
+    prescription photos / drug box images, then searches automatically.
+
+    For admin users in admin mode: passes the image to the admin AI
+    for analysis (screenshots, documents, etc.).
+
+    Args:
+        sender: WhatsApp phone number.
+        media_id: WhatsApp media ID for downloading.
+        mime_type: MIME type of the media.
+        caption: Optional caption text from the user.
+        wa_message_id: WhatsApp message ID for read receipts.
+    """
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        download_whatsapp_media,
+        encode_image_for_vision,
+        extract_text_from_document,
+    )
+
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    user = await get_or_create_user(sender)
+
+    # Download the media
+    result = await download_whatsapp_media(media_id)
+    if result is None:
+        await send_text_message(
+            sender,
+            "No pude descargar el archivo. Intenta de nuevo o envia el nombre por texto.",
+        )
+        return
+
+    data, actual_mime = result
+
+    # ── /simulate command: file caption triggers batch simulation ─────
+    # Admin attaches a file with caption "/simulate" (or "/ai_simulate")
+    # and it runs the batch test in one step. Also supports the two-step
+    # flow where /ai_simulate was sent first (awaiting state).
+    caption_lower = (caption or "").strip().lower()
+    is_simulate = (
+        caption_lower in ("/simulate", "/ai_simulate")
+        or user.awaiting_clarification_context == "__ai_simulate__"
+    )
+    if is_simulate and user.admin_mode_active and await is_chat_admin(sender):
+        if user.awaiting_clarification_context == "__ai_simulate__":
+            await set_awaiting_clarification(sender, None)
+        await _run_batch_simulation(sender, user, data, actual_mime, caption)
+        return
+
+    # ── Admin mode: pass image/document to admin AI ──────────────────
+    if user.admin_mode_active and await is_chat_admin(sender):
+        await _handle_admin_media(sender, user, data, actual_mime, caption)
+        return
+
+    # ── Regular user: image → Vision → drug name → search ────────────
+    if actual_mime in SUPPORTED_IMAGE_TYPES:
+        image_block = encode_image_for_vision(data, actual_mime)
+        if image_block is None:
+            await send_text_message(
+                sender,
+                "La imagen es demasiado grande o no es compatible. "
+                "Intenta con una foto más pequeña o envia el nombre por texto.",
+            )
+            return
+
+        await send_text_message(
+            sender,
+            "\U0001f50d Analizando la imagen para identificar el medicamento...",
+        )
+
+        drug_name = await _extract_drug_name_from_image(image_block, caption)
+        if not drug_name:
+            await send_text_message(
+                sender,
+                "No pude identificar un medicamento en la imagen. "
+                "Intenta con una foto más clara o envia el nombre por texto.",
+            )
+            return
+
+        await send_text_message(
+            sender,
+            f"\U0001f4ca Encontre: *{drug_name}*. Buscando disponibilidad...",
+        )
+
+        # Trigger a drug search with the extracted name
+        await handle_incoming_message(sender, drug_name)
+        return
+
+    # ── Document (PDF/DOCX) — extract text for drug names ────────────
+    text = await extract_text_from_document(data, actual_mime)
+    if text:
+        # Try to find drug names in the extracted text using AI
+        await send_text_message(
+            sender,
+            "\U0001f4c4 Leyendo el documento para identificar medicamentos...",
+        )
+        drug_name = await _extract_drug_name_from_text(text)
+        if drug_name:
+            await send_text_message(
+                sender,
+                f"\U0001f4ca Encontre: *{drug_name}*. Buscando disponibilidad...",
+            )
+            await handle_incoming_message(sender, drug_name)
+            return
+
+    # Unsupported or couldn't process
+    await send_text_message(
+        sender,
+        "\U0001f4f7 Recibimos tu archivo, pero no pudimos extraer un nombre "
+        "de medicamento. Envia el *nombre del producto* por texto y te lo busco.",
+    )
+
+
+async def _extract_drug_name_from_image(
+    image_block: dict, caption: str = "",
+) -> str | None:
+    """Use Claude Vision to extract a drug name from a photo.
+
+    Sends the image to Claude with a targeted prompt asking for
+    the drug name visible in the image (prescription, drug box, label).
+
+    Returns:
+        The drug name string, or None if not found.
+    """
+    import anthropic
+
+    from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.settings import resolve_user_model
+
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    content: list[dict] = [image_block]
+    user_text = (
+        "Mira esta imagen. Identifica el nombre del medicamento o producto "
+        "de farmacia que aparece. Responde SOLO con el nombre del producto "
+        "(sin dosis, sin marca, solo el nombre genérico o comercial principal). "
+        "Si hay varios, responde con el más prominente. "
+        "Si no puedes identificar ningún medicamento, responde: NONE"
+    )
+    if caption:
+        user_text += f"\n\nEl usuario también escribió: {caption}"
+
+    content.append({"type": "text", "text": user_text})
+
+    try:
+        # Resolve from app_settings so admin /model takes effect on Vision
+        # too. (v0.19.2, Item 49.)
+        resolved_model = await resolve_user_model()
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=resolved_model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": content}],
+        )
+        reply = response.content[0].text.strip()
+        logger.info("Vision drug extraction (model=%s): %s", resolved_model, reply[:100])
+
+        if reply.upper() == "NONE" or len(reply) > 100:
+            return None
+        return reply
+
+    except Exception as exc:
+        logger.error("Vision drug extraction failed: %s", exc)
+        return None
+
+
+async def _extract_drug_name_from_text(text: str) -> str | None:
+    """Use AI to extract a drug name from document text."""
+    import anthropic
+
+    from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.settings import resolve_user_model
+
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    # Only send the first 2000 chars to keep the call cheap
+    snippet = text[:2000]
+
+    try:
+        # Resolve from app_settings so admin /model takes effect on document
+        # extraction too. (v0.19.2, Item 49.)
+        resolved_model = await resolve_user_model()
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=resolved_model,
+            max_tokens=100,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Este es el texto extraído de un documento médico o receta. "
+                    "Identifica el medicamento principal mencionado. "
+                    "Responde SOLO con el nombre del medicamento "
+                    "(sin dosis ni instrucciones). "
+                    "Si hay varios, responde con el primero. "
+                    "Si no encuentras ninguno, responde: NONE\n\n"
+                    f"Texto del documento:\n{snippet}"
+                ),
+            }],
+        )
+        reply = response.content[0].text.strip()
+        logger.info(
+            "Document drug extraction (model=%s): %s",
+            resolved_model, reply[:100],
+        )
+
+        if reply.upper() == "NONE" or len(reply) > 100:
+            return None
+        return reply
+
+    except Exception as exc:
+        logger.error("Document drug extraction failed: %s", exc)
+        return None
+
+
+async def _handle_admin_media(
+    sender: str,
+    user,
+    data: bytes,
+    mime_type: str,
+    caption: str = "",
+) -> None:
+    """Handle media in admin mode — pass to admin AI for analysis."""
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        encode_image_for_vision,
+        extract_text_from_document,
+    )
+
+    if mime_type in SUPPORTED_IMAGE_TYPES:
+        image_block = encode_image_for_vision(data, mime_type)
+        if image_block is None:
+            await send_text_message(sender, "Imagen demasiado grande o formato no soportado.")
+            return
+
+        # Build admin turn with image
+        role = await get_role("app_admin")
+        if not role:
+            await send_text_message(sender, "Admin role not found.")
+            return
+
+        tools_manifest = build_tools_manifest()
+        system_prompt = assemble_prompt(role) + "\n\n" + tools_manifest
+
+        user_content: list[dict] = [image_block]
+        if caption:
+            user_content.append({"type": "text", "text": caption})
+        else:
+            user_content.append({"type": "text", "text": "Analiza esta imagen."})
+
+        # Run admin turn with image content
+        admin_result = await run_admin_turn(
+            user_message=user_content,
+            system_prompt=system_prompt,
+            admin_user_id=user.id,
+        )
+
+        if admin_result.text:
+            await send_text_message(sender, admin_result.text)
+            await log_outbound_conv(sender, admin_result.text, message_type="admin_out")
+
+        await increment_token_usage(
+            sender,
+            admin_result.tokens_in,
+            admin_result.tokens_out,
+            is_admin=True,
+            model="opus",
+        )
+        return
+
+    # Document in admin mode — extract text and pass as context
+    text = await extract_text_from_document(data, mime_type)
+    if text:
+        await handle_incoming_message(
+            sender,
+            f"[Documento adjunto — contenido extraído]:\n{text[:3000]}",
+        )
+    else:
+        await send_text_message(
+            sender, "No pude extraer texto de este documento.",
+        )
+
+
+async def _run_batch_simulation(
+    sender: str,
+    user,
+    data: bytes,
+    mime_type: str,
+    caption: str = "",
+) -> None:
+    """Run batch AI simulation from an uploaded file.
+
+    Extracts text from the file (txt/pdf/docx), splits into questions
+    (one per line), runs each through classify_with_ai, and sends
+    results back as a WhatsApp message + saves to user's file folder.
+    """
+    from farmafacil.services.media import (
+        SUPPORTED_IMAGE_TYPES,
+        extract_text_from_document,
+    )
+    from farmafacil.services.ai_responder import classify_with_ai
+    from farmafacil.services.file_manager import write_file
+
+    # Extract text from the file
+    if mime_type == "text/plain":
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("latin-1")
+    elif mime_type in SUPPORTED_IMAGE_TYPES:
+        await send_text_message(
+            sender,
+            "Para /ai_simulate necesito un archivo de texto (.txt, .pdf, .docx), no una imagen.",
+        )
+        return
+    else:
+        text = await extract_text_from_document(data, mime_type)
+
+    if not text:
+        await send_text_message(
+            sender,
+            "No pude extraer texto del archivo. Usa .txt, .pdf o .docx con una pregunta por línea.",
+        )
+        return
+
+    questions = [q.strip() for q in text.strip().split("\n") if q.strip()]
+    if not questions:
+        await send_text_message(sender, "El archivo está vacío.")
+        return
+
+    await send_text_message(
+        sender,
+        f"\U0001f9ea Iniciando simulación con *{len(questions)} preguntas*...\n"
+        "Esto puede tomar unos minutos.",
+    )
+
+    user_name = user.name or "TestUser"
+    lines = [f"Batch Simulation — {len(questions)} questions\n{'='*50}\n"]
+
+    for i, question in enumerate(questions, 1):
+        try:
+            result = await classify_with_ai(question, user.id, user_name)
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"  ACTION: {result.action}")
+            if result.drug_query:
+                lines.append(f"  DRUG: {result.drug_query}")
+            if result.text:
+                lines.append(f"  RESPONSE: {result.text}")
+            if result.clarify_question:
+                lines.append(f"  CLARIFY: {result.clarify_question}")
+            lines.append("")
+        except Exception as exc:
+            lines.append(f"Q{i}: {question}")
+            lines.append(f"  ERROR: {exc}")
+            lines.append("")
+
+    output = "\n".join(lines)
+
+    # Save to user's file folder
+    write_result = write_file("batch_results.txt", output, phone=sender)
+    logger.info("Batch simulation for %s: %d questions. %s", sender, len(questions), write_result)
+
+    # Send summary via WhatsApp (truncate if too long for a single message)
+    if len(output) > 4000:
+        summary = output[:4000] + "\n\n... (resultado completo guardado en batch_results.txt)"
+    else:
+        summary = output
+
+    await send_text_message(sender, summary)
+    await send_text_message(
+        sender,
+        f"\u2705 Simulación completada. {write_result}\n"
+        "Usa el admin chat para leer el archivo completo: "
+        "\"lee mi archivo batch_results.txt\"",
+    )
+
+
+async def handle_location_message(
+    sender: str,
+    latitude: float,
+    longitude: float,
+    wa_message_id: str = "",
+) -> None:
+    """Handle an inbound WhatsApp location pin share.
+
+    Users can share their GPS location instead of typing a zone name.
+    Added in v0.13.0 (Item 24). Behaviour:
+
+    - If the user is onboarding (awaiting_name / awaiting_location / welcome
+      / no profile yet), reverse-geocode the coordinates and advance
+      onboarding to the preference step. Name may still be missing — in
+      that case we update location first and then re-ask for the name.
+    - If the user is already onboarded, treat this as a "cambiar zona"
+      — persist the new location and acknowledge the change without
+      resetting any other profile fields.
+    - If reverse-geocoding fails or the coordinates are outside
+      Venezuela, send ``MSG_LOCATION_PIN_NOT_FOUND`` and leave the user's
+      current state untouched so they can recover by typing a city.
+
+    Args:
+        sender: The WhatsApp phone number of the sender.
+        latitude: Latitude from the WhatsApp location payload.
+        longitude: Longitude from the WhatsApp location payload.
+        wa_message_id: The WhatsApp message ID (for read receipts).
+    """
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+
+    # Blue checks + typing bubble (fire-and-forget)
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    # Snapshot the prior onboarding step BEFORE we update the location —
+    # ``update_user_location`` unconditionally sets step to
+    # ``awaiting_preference``, so we use the pre-update value to decide
+    # whether this user is still onboarding or already fully onboarded.
+    # ``display_preference`` has a non-nullable default of ``"grid"`` so
+    # it cannot be used as an "already onboarded" signal.
+    prior_step = user.onboarding_step
+
+    location = await reverse_geocode(latitude, longitude)
+    if not location:
+        await send_text_message(sender, MSG_LOCATION_PIN_NOT_FOUND)
+        return
+
+    user = await update_user_location(
+        sender,
+        location["lat"],
+        location["lng"],
+        location["zone_name"],
+        location["city"],
+    )
+
+    logger.info(
+        "Location pin accepted from %s: %s (%s) — prior step=%s",
+        sender, user.zone_name, user.city_code, prior_step,
+    )
+
+    # If the user hasn't told us their name yet, location came before
+    # name — save location, then loop back to asking for the name so
+    # onboarding doesn't skip that step.
+    if not user.name:
+        await set_onboarding_step(sender, "awaiting_name")
+        await send_text_message(
+            sender,
+            f"\u2705 *{user.zone_name}* guardado!\n\n*Como te llamas?*",
+        )
+        return
+
+    # Still onboarding? (prior step was welcome / awaiting_name /
+    # awaiting_location). Onboarding is now complete after location.
+    if prior_step is not None:
+        await send_text_message(
+            sender, MSG_READY.format(name=user.name or "amigo"),
+        )
+        return
+
+    # Already fully onboarded (prior step was None) — this is a
+    # "cambiar zona" — acknowledge the updated zone and clear the step
+    # that ``update_user_location`` set.
+    await set_onboarding_step(sender, None)
+    await send_text_message(
+        sender,
+        f"\u2705 Zona actualizada a *{user.zone_name}*. "
+        "Ahora buscare farmacias cerca de ti.",
+    )
+
+
+async def _send_category_list(sender: str, display_name: str) -> None:
+    """Send the category quick-reply list message (Item 29, v0.13.2).
+
+    Wraps the WhatsApp interactive-list payload so the greeting branch in
+    ``handle_incoming_message`` stays readable. Uses the ``CATEGORIES``
+    constant as the source of truth — to add/remove a category, edit the
+    tuple list above.
+
+    Args:
+        sender: Recipient WhatsApp phone number.
+        display_name: User's name for the body greeting.
+    """
+    rows = [
+        {"id": cat_id, "title": title}
+        for cat_id, title in CATEGORIES
+    ]
+    await send_interactive_list(
+        to=sender,
+        body=MSG_CATEGORY_LIST_BODY.format(name=display_name),
+        button=MSG_CATEGORY_LIST_BUTTON,
+        rows=rows,
+        header=MSG_CATEGORY_LIST_HEADER,
+        footer=MSG_CATEGORY_LIST_FOOTER,
+        section_title="Categorias",
+    )
+
+
+async def handle_list_reply(
+    sender: str, reply_id: str, wa_message_id: str = "",
+) -> None:
+    """Handle a WhatsApp interactive list reply (Item 29, v0.13.2).
+
+    Fired when a user taps a row in an interactive list message. Currently
+    only category rows from the greeting menu are supported — unknown reply
+    IDs are logged and ignored so a stale or malformed payload never crashes
+    the webhook.
+
+    Args:
+        sender: WhatsApp phone number of the sender.
+        reply_id: The ``id`` field from the list reply payload.
+        wa_message_id: The WhatsApp message ID (for read receipts).
+    """
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    category = _CATEGORY_BY_ID.get(reply_id)
+    if category is None:
+        logger.warning(
+            "Unknown list_reply id from %s: %r (ignoring)", sender, reply_id,
+        )
+        return
+
+    # Stash the picked category and prompt the user for a concrete product.
+    # The next free-text message is routed through the normal drug-search
+    # pipeline in handle_incoming_message.
+    await set_awaiting_category_search(sender, category)
+    await send_text_message(
+        sender, MSG_CATEGORY_PROMPT.format(category=category),
+    )
+    logger.info(
+        "Category menu pick from %s: %s (awaiting_category_search set)",
+        sender, category,
+    )
+
+
+async def handle_incoming_message(
+    sender: str, message_text: str, wa_message_id: str = "",
+) -> None:
+    """Process an incoming WhatsApp message with smart profile detection.
+
+    The bot extracts name, location, and drug queries from ANY message,
+    filling in the user profile progressively instead of forcing a rigid wizard.
+
+    Args:
+        sender: The WhatsApp phone number of the sender.
+        message_text: The message text.
+        wa_message_id: The WhatsApp message ID (for read receipts).
+    """
+    text = message_text.strip()
+    if not text:
+        return
+
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+    step = user.onboarding_step
+    text_lower = text.lower()
+
+    # Send read receipt (fire-and-forget) — shows blue checks + typing bubble
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    # ── Feedback commands (/bug, /comentario) — intercept before anything ──
+    # Intercepted here so users can report issues even if they're stuck in
+    # an onboarding state (e.g., awaiting_feedback with a confused prompt).
+    feedback_cmd = parse_feedback_command(text)
+    if feedback_cmd is not None:
+        feedback_type, body = feedback_cmd
+        label = "reporte" if feedback_type == "bug" else "comentario"
+
+        # If the user is stuck in a feedback-related onboarding state, clear
+        # it BEFORE we do anything else — the `/bug` command is an escape
+        # hatch and must release the state even if the feedback save fails
+        # or the body is empty.
+        if step in ("awaiting_feedback", "awaiting_feedback_detail"):
+            await set_onboarding_step(sender, None)
+
+        if not body:
+            await send_text_message(
+                sender,
+                MSG_FEEDBACK_EMPTY.format(label=label, cmd=feedback_type),
+            )
+            return
+        try:
+            case_id = await create_feedback(
+                user_id=user.id,
+                feedback_type=feedback_type,
+                message=body,
+                phone_number=sender,
+            )
+        except ValueError as exc:
+            logger.warning("Invalid feedback submission from %s: %s", sender, exc)
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        except SQLAlchemyError:
+            logger.error(
+                "Failed to create feedback case (DB error)", exc_info=True,
+            )
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        except Exception:
+            # Last-resort: /bug is an escape-hatch command — we already
+            # cleared the user's stuck state above, so even an unexpected
+            # error must reply with the error message (not leave the user
+            # hanging).
+            logger.error(
+                "Failed to create feedback case (unexpected error)",
+                exc_info=True,
+            )
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        await send_text_message(
+            sender,
+            MSG_FEEDBACK_REGISTERED.format(label=label, case_id=case_id),
+        )
+        return
+
+    # ── Suggestion command (/sugerencia) — intercept before admin mode ──
+    suggestion_body = parse_suggestion_command(text)
+    if suggestion_body is not None:
+        # Clear stuck feedback state if present (same escape-hatch as /bug)
+        if step in ("awaiting_feedback", "awaiting_feedback_detail"):
+            await set_onboarding_step(sender, None)
+
+        if not suggestion_body:
+            await send_text_message(sender, MSG_SUGGESTION_EMPTY)
+            return
+        try:
+            case_id = await create_suggestion(
+                user_id=user.id,
+                phone_number=sender,
+                message=suggestion_body,
+            )
+        except ValueError as exc:
+            logger.warning("Invalid suggestion from %s: %s", sender, exc)
+            await send_text_message(sender, MSG_SUGGESTION_ERROR)
+            return
+        except SQLAlchemyError:
+            logger.error(
+                "Failed to create suggestion (DB error)", exc_info=True,
+            )
+            await send_text_message(sender, MSG_SUGGESTION_ERROR)
+            return
+        except Exception:
+            logger.error(
+                "Failed to create suggestion (unexpected error)",
+                exc_info=True,
+            )
+            await send_text_message(sender, MSG_SUGGESTION_ERROR)
+            return
+        await send_text_message(
+            sender,
+            MSG_SUGGESTION_REGISTERED.format(case_id=case_id),
+        )
+        return
+
+    # ── Admin chat commands + admin-mode dispatch (Item 35, v0.14.0) ───
+    # Runs AFTER /bug so admins can still escape a stuck state, and
+    # BEFORE clarification/category/onboarding so admin mode shadows
+    # everything else. The /admin command is ALWAYS checked (it's the
+    # only way to enter the mode), but admin-mode free-text routing
+    # only fires when the user's admin_mode_active flag is True.
+    if text_lower in _ADMIN_OFF_PHRASES:
+        if user.admin_mode_active:
+            await _handle_admin_off(sender, user)
+            return
+        # User typed "admin off" without being in admin mode — fall
+        # through to normal processing (NOT a command).
+    if text_lower == "/admin":
+        await _handle_admin_toggle(sender, user)
+        return
+    if user.admin_mode_active:
+        # Model commands are only valid while admin mode is active so
+        # regular users can never change the default model by accident.
+        if await _handle_model_commands(sender, text):
+            return
+        # /ai_simulate — batch test the pharmacy AI with a file of questions
+        if text_lower == "/ai_simulate":
+            await send_text_message(
+                sender,
+                "\U0001f9ea *Modo simulación activado.*\n\n"
+                "Envía un archivo (.txt, .pdf, .docx) con una pregunta por línea. "
+                "Ejecutaré cada pregunta como si fuera un usuario real y te "
+                "devuelvo los resultados.\n\n"
+                "Para cancelar, escribe */admin* o cualquier otro mensaje.",
+            )
+            # Store state — next file upload triggers batch simulation
+            await set_awaiting_clarification(sender, "__ai_simulate__")
+            return
+        # Any other message goes through the Opus tool loop. Resolve
+        # debug flag up-front so the admin helper can append a footer.
+        debug_on = resolve_chat_debug(
+            user.chat_debug, await get_setting("chat_debug"),
+        )
+        await _handle_admin_turn(sender, user, text, debug_on)
+        return
+
+    # ── Clarification reply handling ────────────────────────────────────
+    # If the bot previously asked a clarifying question for a vague query
+    # (e.g., "memory medicines" → "pills or drinks?"), the NEXT message
+    # from the user is the answer. We merge the original context with the
+    # answer into a refined query and dispatch it as a direct drug search.
+    # This runs AFTER the /bug escape hatch but BEFORE onboarding / intent
+    # routing so the user is always free to cancel or report a bug first.
+    if user.awaiting_clarification_context and step is None:
+        pending_context = user.awaiting_clarification_context
+        # Escape hatch — user wants to abandon the clarification.
+        if text_lower in _CLARIFY_CANCEL_WORDS:
+            await set_awaiting_clarification(sender, None)
+            await send_text_message(sender, MSG_CLARIFY_CANCELED)
+            return
+        # Clear the pending context BEFORE dispatching so that a failure
+        # downstream cannot leave the user trapped in the clarify state.
+        await set_awaiting_clarification(sender, None)
+        # Ask the user-facing default model (admin-controlled) to distill
+        # the vague context + the user's answer into a concrete 2-5 word
+        # search term. Without this step the scraper would receive a
+        # 15-word natural-language sentence that no product catalog can
+        # match (regression from v0.12.3, fixed in v0.12.4).
+        refined_query, r_in, r_out, r_model = await refine_clarified_query(
+            pending_context, text,
+        )
+        if r_in or r_out:
+            await increment_token_usage(
+                user.id, r_in, r_out, model=r_model or LLM_MODEL,
+            )
+        logger.info(
+            "Clarification refinement for %s: %r + %r -> %r",
+            sender, pending_context, text, refined_query,
+        )
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=user.name or "amigo")
+            )
+            return
+        await _handle_drug_search(
+            sender, user, refined_query, user.name or "amigo",
+            debug_on=resolve_chat_debug(
+                user.chat_debug, await get_setting("chat_debug")
+            ),
+        )
+        # Remember the chosen preference so we don't ask again next time.
+        await _update_memory_safe(
+            user.id, user.name or "amigo",
+            f"{pending_context} (clarified: {text})",
+            f"User specified preference: {text}",
+        )
+        return
+
+    # ── Category menu follow-up (Item 29, v0.13.2) ──────────────────────
+    # If the user picked a category from the greeting list, their next
+    # free-text message is the product name. Merge state -> dispatch -> clear.
+    # Runs AFTER /bug + clarification so those escape hatches still work,
+    # and BEFORE onboarding so it only fires for fully-onboarded users.
+    if user.awaiting_category_search and step is None:
+        pending_category = user.awaiting_category_search
+        # Escape hatch — user wants to abandon the category search.
+        if text_lower in _CLARIFY_CANCEL_WORDS:
+            await set_awaiting_category_search(sender, None)
+            await send_text_message(sender, MSG_CATEGORY_CANCELED)
+            return
+        # Clear the stash BEFORE dispatching so a downstream failure cannot
+        # leave the user trapped in the category-search state (fail-safe
+        # pattern from Item 31).
+        await set_awaiting_category_search(sender, None)
+        logger.info(
+            "Category freeform from %s: category=%r query=%r",
+            sender, pending_category, text,
+        )
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=user.name or "amigo"),
+            )
+            return
+        await _handle_drug_search(
+            sender, user, text, user.name or "amigo",
+            debug_on=resolve_chat_debug(
+                user.chat_debug, await get_setting("chat_debug"),
+            ),
+        )
+        await _update_memory_safe(
+            user.id, user.name or "amigo",
+            f"[{pending_category}] {text}",
+            f"User searched within category: {pending_category}",
+        )
+        return
+
+    # ── Rigid onboarding steps (only when explicitly waiting for input) ──
+
+    if step == "welcome":
+        await set_onboarding_step(sender, "awaiting_name")
+        await send_text_message(sender, MSG_WELCOME)
+        return
+
+    if step == "awaiting_name":
+        # Always use AI here to distinguish greetings from actual names
+        ai_result = await classify_with_ai(text, user.id, user.name or "")
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
+
+        # If it's just a greeting (hi, hola), re-ask for name
+        if ai_result.action == "greeting" and not ai_result.detected_name:
+            await send_text_message(
+                sender,
+                "\U0001f60a Hola! Dime tu nombre para poder atenderte mejor.\n\n"
+                "Ejemplo: _Maria_, _Jose_, _Carlos_"
+            )
+            return
+
+        name = ai_result.detected_name or text.strip().title()
+
+        # Validate name — reject common non-names
+        if not _is_valid_name(name):
+            await send_text_message(
+                sender,
+                "No logre entender tu nombre. Dime solo tu nombre, por favor.\n\n"
+                "Ejemplo: _Maria_, _Jose_, _Carlos_"
+            )
+            return
+
+        user = await update_user_name(sender, name)
+
+        # Did they also mention a location?
+        if ai_result.detected_location:
+            location = await geocode_zone(ai_result.detected_location)
+            if location:
+                user = await update_user_location(
+                    sender, location["lat"], location["lng"],
+                    location["zone_name"], location["city"],
+                )
+                await send_text_message(
+                    sender, MSG_READY.format(name=user.name or "amigo")
+                )
+                return
+
+        await send_text_message(sender, MSG_ASK_LOCATION.format(name=user.name))
+        return
+
+    if step == "awaiting_location":
+        # Try to geocode — but also check if AI can extract location.
+        intent = await classify_intent(text, user.id, user.name or "", sender)
+        location_text = intent.detected_location or text
+
+        # v0.19.0 Item 47 — use location.resolve directly so we can read
+        # confidence + alternatives. Daniel's "La Boyera → La Hoyadita"
+        # silent miss happened because the legacy `geocode_zone` swallowed
+        # the confidence signal.
+        from farmafacil.services.location import (
+            DEFAULT_MIN_CONFIDENCE,
+            resolve as _resolve_location,
+        )
+
+        result = await _resolve_location(location_text)
+        if result is None:
+            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
+            return
+
+        # Confidence guard — if Nominatim returned a low-confidence hit
+        # AND the display_name doesn't include the user's input tokens,
+        # we suspect a wrong-place match. Tell the user what we found and
+        # ask them to share their location pin instead.
+        from farmafacil.services.location import _name_matches_query
+        name_ok = _name_matches_query(location_text, result.display_name)
+        confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
+        if not (name_ok and confidence_ok):
+            logger.warning(
+                "Onboarding geocode low-confidence: query=%r → display=%r confidence=%.2f",
+                location_text, result.display_name, result.confidence,
+            )
+            await send_text_message(
+                sender,
+                f"⚠️ No estoy 100% seguro de tu ubicación. "
+                f"Encontré *{result.display_name}* — ¿es correcto?\n\n"
+                f"Si NO, compárteme tu ubicación por WhatsApp "
+                f"(toca el clíp \U0001f4ce → Ubicación) o escribe la zona "
+                f"con más detalle (ej: \"La Boyera, Caracas\").",
+            )
+            # Still persist the best guess so the user has SOME location
+            # rather than being stuck — the warning above tells them how
+            # to fix if it's wrong.
+            user = await update_user_location(
+                sender, result.lat, result.lng,
+                result.zone_name, result.city_code,
+            )
+            await send_text_message(
+                sender, MSG_READY.format(name=user.name or "amigo")
+            )
+            return
+
+        user = await update_user_location(
+            sender, result.lat, result.lng,
+            result.zone_name, result.city_code,
+        )
+        await send_text_message(
+            sender, MSG_READY.format(name=user.name or "amigo")
+        )
+        return
+
+    if step == "awaiting_preference":
+        # Legacy: users stuck in this state from pre-v0.15.2 onboarding.
+        # Clear the step and let them proceed normally.
+        await set_onboarding_step(sender, None)
+        # Fall through to normal message handling
+        step = None
+
+    if step == "awaiting_feedback":
+        feedback = parse_feedback(text)
+        if feedback == "yes":
+            if user.last_search_log_id:
+                await record_feedback(user.last_search_log_id, "yes")
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_FEEDBACK_THANKS)
+        elif feedback == "no":
+            if user.last_search_log_id:
+                await record_feedback(user.last_search_log_id, "no")
+            await set_onboarding_step(sender, "awaiting_feedback_detail")
+            await send_text_message(sender, MSG_FEEDBACK_SORRY)
+        else:
+            # Not a feedback response — clear step and process normally
+            await set_onboarding_step(sender, None)
+            # Fall through to normal message handling below
+            step = None
+        if feedback is not None:
+            return
+
+    if step == "awaiting_feedback_detail":
+        if user.last_search_log_id:
+            await record_feedback_detail(user.last_search_log_id, text)
+        await set_onboarding_step(sender, None)
+        await send_text_message(sender, MSG_FEEDBACK_DETAIL_THANKS)
+        return
+
+    # ── Onboarding complete — smart conversational flow ─────────────────
+
+    # Resolve response mode and debug mode: user override → global setting
+    global_mode = await get_setting("response_mode")
+    global_debug = await get_setting("chat_debug")
+    mode = resolve_response_mode(user.response_mode, global_mode)
+    debug_on = resolve_chat_debug(user.chat_debug, global_debug)
+    display_name = user.name or "amigo"
+
+    # ── Special commands (available in all modes) ──────────────────────
+    if text_lower == "/stats":
+        if debug_on:
+            from farmafacil.services.settings import resolve_user_model
+
+            stats = await get_user_stats(sender, user.id)
+            from farmafacil import __version__
+            from farmafacil.services.chat_debug import estimate_cost_breakdown
+            # Show + price by the CURRENT default model, not the hardcoded
+            # haiku constant. (v0.19.2, Item 49.)
+            current_model = await resolve_user_model()
+            last_cost = estimate_cost(
+                stats["last_tokens_in"], stats["last_tokens_out"], current_model
+            )
+            user_costs = estimate_cost_breakdown(stats)
+            g_stats = {
+                "tokens_in_haiku": stats["global_tokens_in_haiku"],
+                "tokens_out_haiku": stats["global_tokens_out_haiku"],
+                "tokens_in_sonnet": stats["global_tokens_in_sonnet"],
+                "tokens_out_sonnet": stats["global_tokens_out_sonnet"],
+            }
+            global_costs = estimate_cost_breakdown(g_stats)
+            msg = (
+                "\U0001f4ca *FarmaFacil Stats*\n\n"
+                f"app version: *{__version__}*\n"
+                f"ai model: *{current_model}*\n\n"
+                f"\U0001f464 *Mi cuenta ({display_name}):*\n"
+                f"  preguntas: {stats['total_questions']}\n"
+                f"  busquedas exitosas: {stats['total_success']}\n\n"
+                f"  _Ultima llamada:_\n"
+                f"  tokens: {stats['last_tokens_in']} in / {stats['last_tokens_out']} out\n"
+                f"  est costo: ${last_cost:.4f}\n\n"
+                f"  _Acumulado:_\n"
+                f"  tokens: {stats['total_tokens_in']} in / {stats['total_tokens_out']} out\n"
+                f"  haiku: {stats['calls_haiku']} calls, ${user_costs['cost_haiku']:.4f}\n"
+                f"  sonnet: {stats['calls_sonnet']} calls, ${user_costs['cost_sonnet']:.4f}\n"
+                f"  est costo total: ${user_costs['cost_total']:.4f}\n\n"
+                f"\U0001f30d *Global (todos los usuarios):*\n"
+                f"  tokens: {stats['global_tokens_in']} in / {stats['global_tokens_out']} out\n"
+                f"  haiku: {stats['global_calls_haiku']} calls, ${global_costs['cost_haiku']:.4f}\n"
+                f"  sonnet: {stats['global_calls_sonnet']} calls, ${global_costs['cost_sonnet']:.4f}\n"
+                f"  est costo total: ${global_costs['cost_total']:.4f}"
+            )
+            await send_text_message(sender, msg)
+        else:
+            await send_text_message(
+                sender, "Este comando no esta disponible."
+            )
+        return
+
+    # AI-only mode — bypass keyword routing, send everything to AI
+    if mode == "ai_only":
+        logger.info("AI-only mode for %s — routing to AI classifier", sender)
+        ai_result = await classify_with_ai(text, user.id, display_name)
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
+        logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
+
+        # If AI detects a medical emergency, send response immediately — no search
+        if ai_result.action == "emergency":
+            reply = ai_result.text or (
+                "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
+                "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
+                "2. Línea de emergencias nacional: *171*\n\n"
+                "NO busques medicamentos para emergencias — ve al médico de inmediato."
+            )
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
+            return
+
+        # If AI detects a view_similar request, re-run last search
+        if ai_result.action == "view_similar":
+            await _handle_view_similar(sender, user)
+            return
+
+        # If AI detects a nearest_store query, show nearby pharmacies
+        if ai_result.action == "nearest_store":
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            if ai_result.text:
+                await send_text_message(sender, ai_result.text)
+            await _handle_nearest_store(
+                sender, user, display_name, debug_on=debug_on, ai_result=ai_result,
+            )
+            return
+
+        # If AI detects a drug search, perform it
+        if ai_result.action == "drug_search" and ai_result.drug_query:
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            # If AI included a conversational response (e.g., symptom acknowledgment),
+            # send it before the search results
+            if ai_result.text:
+                await send_text_message(sender, ai_result.text)
+            await _handle_drug_search(
+                sender, user, ai_result.drug_query, display_name,
+                debug_on=debug_on, ai_result=ai_result,
+            )
+            return
+
+        # If AI wants to clarify a vague category query, ask the question
+        # and stash the original context so the next reply is merged back in.
+        if ai_result.action == "clarify_needed" and ai_result.clarify_question:
+            context = ai_result.clarify_context or text
+            await set_awaiting_clarification(sender, context)
+            reply = ai_result.clarify_question
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
+            await _update_memory_safe(
+                user.id, display_name, text, ai_result.clarify_question,
+            )
+            return
+
+        # For all other actions, generate a full AI response
+        if ai_result.text:
+            reply = ai_result.text
+            tokens_ai = ai_result
+        else:
+            full_result = await generate_response(text, user.id, display_name)
+            await increment_token_usage(
+                user.id, full_result.input_tokens, full_result.output_tokens,
+                model=full_result.model or LLM_MODEL,
+            )
+            reply = full_result.text
+            tokens_ai = full_result
+
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tokens_ai)
+        await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
+        return
+
+    # ── Hybrid mode — check keywords first, AI fallback ───────────────
+
+    # Check change commands via DB keywords (before LLM call)
+    cache = await _get_keyword_cache()
+    if text_lower in cache:
+        action, response = cache[text_lower]
+        if action == "location_change":
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(sender, MSG_ASK_NEW_LOCATION)
+            return
+        if action == "name_change":
+            await set_onboarding_step(sender, "awaiting_name")
+            await send_text_message(sender, MSG_ASK_NEW_NAME)
+            return
+        if action == "farewell" and response:
+            await send_text_message(sender, response)
+            return
+        if action == "view_similar":
+            await _handle_view_similar(sender, user)
+            return
+        if action == "nearest_store":
+            if not user.latitude:
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender, MSG_NEED_LOCATION.format(name=display_name)
+                )
+                return
+            await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
+            return
+
+    # Classify intent (keywords first, AI fallback)
+    intent = await classify_intent(text, user.id, user.name or "", sender)
+    await increment_token_usage(
+        user.id, intent.input_tokens, intent.output_tokens,
+        model=intent.model or LLM_MODEL,
+    )
+
+    # Auto-update profile if LLM detected new info
+    if intent.detected_name and intent.detected_name != user.name:
+        user = await update_user_name(sender, intent.detected_name)
+        # Reset onboarding_step to None since they're already onboarded
+        await set_onboarding_step(sender, None)
+        user = await get_or_create_user(sender)
+        display_name = user.name
+
+    if intent.detected_location and intent.detected_location.lower() != (user.zone_name or "").lower():
+        location = await geocode_zone(intent.detected_location)
+        if location:
+            user = await update_user_location(
+                sender, location["lat"], location["lng"],
+                location["zone_name"], location["city"],
+            )
+            await set_onboarding_step(sender, None)
+            user = await get_or_create_user(sender)
+
+    # Route by action
+    if intent.action == "greeting":
+        # Item 29 (v0.13.2) — show the category quick-reply menu instead
+        # of the legacy MSG_RETURNING text when the kill-switch is on and
+        # the user is fully onboarded. Setting evaluates as "true"/"false"
+        # (string) — anything other than the literal "true" falls back to
+        # the legacy path so a misconfigured setting is never catastrophic.
+        menu_setting = (await get_setting("category_menu_enabled")).strip().lower()
+        if menu_setting == "true":
+            await _send_category_list(sender, display_name)
+        else:
+            await send_text_message(
+                sender,
+                MSG_RETURNING.format(
+                    name=display_name, zone=user.zone_name,
+                ),
+            )
+
+    elif intent.action == "help":
+        await send_text_message(sender, HELP_MESSAGE)
+
+    elif intent.action == "drug_search":
+        # Make sure we have location before searching
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=display_name)
+            )
+            return
+
+        # If AI included a conversational response (symptom acknowledgment), send first
+        if intent.response_text:
+            await send_text_message(sender, intent.response_text)
+
+        query = intent.drug_query or text
+        await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)
+
+    elif intent.action == "clarify_needed" and intent.clarify_question:
+        # Vague category — ask a clarifying question and stash the original
+        # query so the next reply is merged back in as a refined search.
+        context = intent.clarify_context or text
+        await set_awaiting_clarification(sender, context)
+        reply = intent.clarify_question
+        if debug_on:
+            reply += await _build_debug(sender, user.id)
+        await send_text_message(sender, reply)
+        await _update_memory_safe(
+            user.id, display_name, text, intent.clarify_question,
+        )
+
+    elif intent.action == "nearest_store":
+        if not user.latitude:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=display_name)
+            )
+            return
+        if intent.response_text:
+            await send_text_message(sender, intent.response_text)
+        await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
+
+    elif intent.action == "emergency":
+        reply = intent.response_text or (
+            "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
+            "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
+            "2. Línea de emergencias nacional: *171*\n\n"
+            "NO busques medicamentos para emergencias — ve al médico de inmediato."
+        )
+        if debug_on:
+            reply += await _build_debug(sender, user.id)
+        await send_text_message(sender, reply)
+
+    elif intent.action == "question":
+        # Check if the question is about a pharmacy store
+        store = await _try_store_lookup(text)
+        if store:
+            await send_text_message(sender, format_store_info(store))
+        else:
+            # Use AI responder for complex questions
+            ai_result = await generate_response(text, user.id, display_name)
+            await increment_token_usage(
+                user.id, ai_result.input_tokens, ai_result.output_tokens,
+                model=ai_result.model or LLM_MODEL,
+            )
+            logger.info("AI response (role=%s) for '%s'", ai_result.role_used, text[:50])
+            reply = ai_result.text
+            if debug_on:
+                reply += await _build_debug(sender, user.id, ai_result)
+            await send_text_message(sender, reply)
+            await _update_memory_safe(user.id, display_name, text, reply)
+
+    else:
+        # Unknown intent — try AI responder before giving up
+        ai_result = await generate_response(text, user.id, display_name)
+        await increment_token_usage(
+            user.id, ai_result.input_tokens, ai_result.output_tokens,
+            model=ai_result.model or LLM_MODEL,
+        )
+        logger.info("AI fallback (role=%s) for '%s'", ai_result.role_used, text[:50])
+        reply = ai_result.text
+        if debug_on:
+            reply += await _build_debug(sender, user.id, ai_result)
+        await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
+
+
+def _should_ask_feedback(response) -> bool:
+    """Decide whether to append the ¿Te sirvió? prompt after a drug search.
+
+    The prompt only makes sense when the user actually has something to rate.
+    Returns False when:
+      1. The response has zero results (nothing to rate).
+      2. Every active scraper failed (total outage — also zero results).
+
+    Partial failures (1 of 3 scrapers down but at least one returned products)
+    still get the prompt — the user has real results to evaluate even if
+    coverage was incomplete.
+
+    Args:
+        response: SearchResponse from ``search_drug``.
+
+    Returns:
+        True if the feedback prompt should be sent, False otherwise.
+    """
+    if not response.results:
+        return False
+    total_active = len(ACTIVE_SCRAPERS)
+    failed_count = len(response.failed_pharmacies or [])
+    if total_active > 0 and failed_count >= total_active:
+        # Defensive — if every scraper failed we would not have any results,
+        # so this branch is technically unreachable after the first check.
+        # Kept as an explicit guard against future regressions where we might
+        # start returning cached or partial data alongside a total outage.
+        return False
+    return True
+
+
+async def _handle_drug_search(
+    sender: str,
+    user,
+    query: str,
+    display_name: str,
+    debug_on: bool = False,
+    ai_result=None,
+) -> None:
+    """Perform a drug search and send results to the user.
+
+    After showing results, asks for feedback: "¿Te sirvió? (sí/no)".
+    The feedback prompt is suppressed on zero-result and total-failure
+    responses — see `_should_ask_feedback`.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with location and preferences.
+        query: Drug name or search term.
+        display_name: User's display name.
+        debug_on: Whether to append debug footer.
+        ai_result: AiResponse from classification (for token stats).
+    """
+    logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
+
+    # Check for drug interactions with user's known medications
+    client_memory = await get_memory(user.id)
+    known_meds = extract_medications_from_memory(client_memory)
+    if known_meds:
+        # Check interactions between the searched drug and known medications
+        drugs_to_check = [query] + known_meds
+        interaction_result = await check_interactions(drugs_to_check)
+        if interaction_result.has_interactions:
+            warning = format_interaction_warning(interaction_result)
+            await send_text_message(sender, warning)
+            logger.info(
+                "Drug interaction warning for %s: %s + %s",
+                sender, query, known_meds,
+            )
+
+    response = await search_drug(
+        query=query,
+        city_code=user.city_code,
+        latitude=user.latitude,
+        longitude=user.longitude,
+        zone_name=user.zone_name,
+    )
+
+    # Log the search and save the log ID for feedback tracking
+    results_count = len(response.results) if response.results else 0
+    search_log_id = await log_search(user.id, query, results_count)
+    await update_last_search(sender, query, search_log_id)
+
+    # Send individual product images FIRST, then text summary below
+    if response.results:
+        await _send_detail_images(sender, response.results)
+
+    reply = format_search_results(response)
+    if debug_on:
+        reply += await _build_debug(sender, user.id, ai_result)
+    await send_text_message(sender, reply)
+
+    # Ask for feedback ONLY when there is something to rate (Item 34).
+    # Zero-result or total-outage responses get a retry hint instead —
+    # asking "¿Te sirvió?" when the bot showed no products is a UX
+    # confusion signal and trains users that the feedback prompt means
+    # "did you understand me?" rather than "did these results help?".
+    if _should_ask_feedback(response):
+        await set_onboarding_step(sender, "awaiting_feedback")
+        await send_text_message(sender, MSG_ASK_FEEDBACK)
+    else:
+        await send_text_message(sender, MSG_RETRY_DIFFERENT_NAME)
+        logger.info(
+            "Skipped ¿Te sirvió? for %s (query=%r, results=%d, failed=%s)",
+            sender, query, results_count, response.failed_pharmacies,
+        )
+
+    # Update user memory with search context
+    summary = f"Searched: {query} → {results_count} results"
+    await _update_memory_safe(user.id, display_name, query, summary)
+
+
+async def _handle_nearest_store(
+    sender: str,
+    user,
+    display_name: str,
+    debug_on: bool = False,
+    ai_result=None,
+) -> None:
+    """Find and send nearest pharmacy stores to the user.
+
+    Queries all pharmacy chains from the pharmacy_locations DB table
+    and returns them sorted by distance from the user's location.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with location data.
+        display_name: User's display name.
+        debug_on: Whether to append debug footer.
+        ai_result: AiResponse from classification (for token stats).
+    """
+    logger.info(
+        "Nearest store query from %s/%s (%s)",
+        sender, display_name, user.zone_name,
+    )
+
+    stores = await get_all_nearby_stores(
+        latitude=user.latitude,
+        longitude=user.longitude,
+    )
+
+    reply = format_nearby_stores(stores, zone_name=user.zone_name)
+    if debug_on:
+        reply += await _build_debug(sender, user.id, ai_result)
+    await send_text_message(sender, reply)
+
+    # Ask for feedback (same as drug search)
+    await set_onboarding_step(sender, "awaiting_feedback")
+    await send_text_message(sender, MSG_ASK_FEEDBACK)
+
+    await _update_memory_safe(
+        user.id, display_name,
+        "farmacia cercana",
+        f"Showed {len(stores)} nearby stores",
+    )
+
+
+async def _try_store_lookup(text: str) -> object | None:
+    """Try to find a pharmacy store name mentioned in the text.
+
+    Checks for patterns like "donde queda TEPUY", "TEPUY", "farmacia TEPUY".
+    """
+    # Extract potential store name from common patterns
+    text_lower = text.lower().strip()
+    # Remove common question words
+    for prefix in ("donde queda ", "donde esta ", "donde está ", "direccion de ",
+                    "dirección de ", "ubicacion de ", "ubicación de ", "farmacia "):
+        if text_lower.startswith(prefix):
+            store_name = text_lower[len(prefix):].strip().rstrip("?")
+            store = await lookup_store(store_name)
+            if store:
+                return store
+
+    # Try the whole text as a store name (user might just type "TEPUY")
+    # Only if it's short (1-2 words) to avoid false matches
+    words = text_lower.split()
+    if len(words) <= 2:
+        store = await lookup_store(text_lower.rstrip("?"))
+        if store:
+            return store
+
+    return None
+
+
+_NOT_NAMES = {
+    "hi", "hello", "hey", "hola", "buenas", "buenos", "ola", "que tal",
+    "good", "ok", "si", "no", "yes", "gracias", "thanks", "bye", "chao",
+    "ayuda", "help", "losartan", "acetaminofen", "ibuprofeno", "1", "2",
+}
+
+
+def _is_valid_name(name: str) -> bool:
+    """Check if a string looks like a real person's name."""
+    if not name or len(name.strip()) < 2:
+        return False
+    if name.lower().strip() in _NOT_NAMES:
+        return False
+    # Reject if it's all digits or has special characters
+    stripped = name.strip()
+    if stripped.isdigit():
+        return False
+    # Reject very long "names" (likely a sentence)
+    if len(stripped.split()) > 4:
+        return False
+    return True
+
+
+async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
+    """Send individual product images with rich captions.
+
+    Each product gets its own WhatsApp image message so users can tap
+    to zoom.  Capped at ``max_detail_products`` app setting (default 3).
+    """
+    from farmafacil.services.settings import get_setting_int
+
+    max_images = await get_setting_int("max_detail_products")
+    for result in results[:max_images]:
+        if result.image_url:
+            caption = _build_product_caption(result)
+            await send_image_message(sender, result.image_url, caption)
+
+
+def _build_product_caption(result: DrugResult) -> str:
+    """Build a Farmatodo-style product card caption for WhatsApp."""
+    lines = []
+    if result.discount_pct:
+        lines.append(f"\U0001f7e2 *{result.discount_pct} DCTO*")
+    if result.brand:
+        lines.append(f"_{result.brand}_")
+    lines.append(f"*{result.drug_name}*")
+    if result.price_bs is not None:
+        price_line = f"*Bs. {result.price_bs:,.2f}*"
+        if result.full_price_bs and result.full_price_bs != result.price_bs:
+            price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
+        lines.append(price_line)
+    if result.unit_label:
+        lines.append(result.unit_label)
+    if result.requires_prescription:
+        lines.append("\U0001f4cb Requiere receta")
+    if result.stores_in_stock > 0:
+        lines.append(f"\u2705 Disponible en {result.stores_in_stock} tiendas")
+    if result.nearby_stores:
+        closest = result.nearby_stores[0]
+        lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")
+    return "\n".join(lines)
+
+
+async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
+    """Build a debug footer from AI response and user stats.
+
+    Args:
+        sender: WhatsApp phone number.
+        user_id: User database ID.
+        ai_result: AiResponse with role_used and token counts (optional).
+
+    Returns:
+        Formatted debug footer string.
+    """
+    from farmafacil.services.settings import resolve_user_model
+
+    stats = await get_user_stats(sender, user_id)
+    role = getattr(ai_result, "role_used", "keyword") if ai_result else "keyword"
+    in_tok = getattr(ai_result, "input_tokens", 0) if ai_result else 0
+    out_tok = getattr(ai_result, "output_tokens", 0) if ai_result else 0
+    # Prefer the model actually used for THIS call (set by ai_responder /
+    # intent / refine when an LLM ran). Fall back to the current default
+    # so the footer never lies — previously it always showed LLM_MODEL
+    # (haiku) regardless of what the admin had set as default.
+    # (v0.19.2, Item 49.)
+    call_model = getattr(ai_result, "model", "") if ai_result else ""
+    model_for_footer = call_model or await resolve_user_model()
+    return build_debug_footer(
+        role_used=role,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        total_questions=stats["total_questions"],
+        total_success=stats["total_success"],
+        total_tokens_in=stats["total_tokens_in"],
+        total_tokens_out=stats["total_tokens_out"],
+        global_tokens_in=stats["global_tokens_in"],
+        global_tokens_out=stats["global_tokens_out"],
+        model_used=model_for_footer,
+        calls_haiku=stats["calls_haiku"],
+        calls_sonnet=stats["calls_sonnet"],
+        global_calls_haiku=stats["global_calls_haiku"],
+        global_calls_sonnet=stats["global_calls_sonnet"],
+        global_tokens_in_haiku=stats["global_tokens_in_haiku"],
+        global_tokens_out_haiku=stats["global_tokens_out_haiku"],
+        global_tokens_in_sonnet=stats["global_tokens_in_sonnet"],
+        global_tokens_out_sonnet=stats["global_tokens_out_sonnet"],
+    )
+
+
+async def _handle_view_similar(sender: str, user) -> None:
+    """Handle 'ver similares' command — re-run last search without exact filtering.
+
+    Loads the user's last search query and re-runs it with show_all=True
+    to show all product variants instead of just the exact match.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with last_search_query.
+    """
+    if not user.last_search_query:
+        await send_text_message(
+            sender,
+            "No tienes una busqueda reciente. Enviame el nombre de un producto de farmacia.",
+        )
+        return
+
+    display_name = user.name or "amigo"
+    query = user.last_search_query
+
+    if not user.latitude:
+        await send_text_message(
+            sender, MSG_NEED_LOCATION.format(name=display_name)
+        )
+        return
+
+    logger.info(
+        "View similar from %s/%s: '%s'", sender, display_name, query
+    )
+    response = await search_drug(
+        query=query,
+        city_code=user.city_code,
+        latitude=user.latitude,
+        longitude=user.longitude,
+        zone_name=user.zone_name,
+        show_all=True,
+    )
+
+    if response.results:
+        await _send_detail_images(sender, response.results)
+
+    reply = format_search_results(response)
+    await send_text_message(sender, reply)
