@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time as _time
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -67,6 +68,38 @@ from farmafacil.services.users import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Pending temp-location stash (in-memory, per-phone) ────────────────
+# When an onboarded user shares a GPS pin, we stash the reverse-geocoded
+# location here instead of permanently updating their profile.  The next
+# text message from that user pops the stash and uses it as a one-time
+# temp_location for drug search / nearest store.
+# Entries auto-expire after _PENDING_LOC_TTL_SECONDS.
+#
+# IMPORTANT: This dict is safe ONLY in a single-process uvicorn context
+# (no --workers flag).  If the deployment ever moves to multiple workers,
+# this must be replaced with a shared store (Redis, DB column, etc.).
+# dict.pop() is atomic under CPython's GIL for single-process async.
+_pending_temp_location: dict[str, tuple[dict, float]] = {}
+_PENDING_LOC_TTL_SECONDS = 600  # 10 minutes
+
+
+def _stash_temp_location(sender: str, location: dict) -> None:
+    """Stash a temporary location for the sender's next search."""
+    _pending_temp_location[sender] = (location, _time.monotonic())
+
+
+def _pop_temp_location(sender: str) -> dict | None:
+    """Pop and return the stashed temp location, or None if expired/absent."""
+    entry = _pending_temp_location.pop(sender, None)
+    if entry is None:
+        return None
+    location, ts = entry
+    if _time.monotonic() - ts > _PENDING_LOC_TTL_SECONDS:
+        logger.info("Expired pending temp location for %s (stashed %.0fs ago)", sender, _time.monotonic() - ts)
+        return None
+    return location
+
 
 # ── Messages ────────────────────────────────────────────────────────────
 
@@ -913,46 +946,51 @@ async def handle_location_message(
         await send_text_message(sender, MSG_LOCATION_PIN_NOT_FOUND)
         return
 
-    user = await update_user_location(
-        sender,
-        location["lat"],
-        location["lng"],
-        location["zone_name"],
-        location["city"],
-    )
-
-    logger.info(
-        "Location pin accepted from %s: %s (%s) — prior step=%s",
-        sender, user.zone_name, user.city_code, prior_step,
-    )
-
-    # If the user hasn't told us their name yet, location came before
-    # name — save location, then loop back to asking for the name so
-    # onboarding doesn't skip that step.
-    if not user.name:
-        await set_onboarding_step(sender, "awaiting_name")
-        await send_text_message(
+    # ── Onboarding users: permanently save location ───────────────
+    # If the user is still onboarding (prior_step is not None, or no
+    # name yet), we persist the location to the DB — they're setting
+    # up their profile for the first time.
+    if prior_step is not None or not user.name:
+        user = await update_user_location(
             sender,
-            f"\u2705 *{user.zone_name}* guardado!\n\n*Como te llamas?*",
+            location["lat"],
+            location["lng"],
+            location["zone_name"],
+            location["city"],
         )
-        return
+        logger.info(
+            "Location pin saved (onboarding) for %s: %s (%s) — step=%s",
+            sender, user.zone_name, user.city_code, prior_step,
+        )
 
-    # Still onboarding? (prior step was welcome / awaiting_name /
-    # awaiting_location). Onboarding is now complete after location.
-    if prior_step is not None:
+        if not user.name:
+            await set_onboarding_step(sender, "awaiting_name")
+            await send_text_message(
+                sender,
+                f"\u2705 *{user.zone_name}* guardado!\n\n*Como te llamas?*",
+            )
+            return
+
+        # Onboarding complete
         await send_text_message(
             sender, MSG_READY.format(name=user.name or "amigo"),
         )
         return
 
-    # Already fully onboarded (prior step was None) — this is a
-    # "cambiar zona" — acknowledge the updated zone and clear the step
-    # that ``update_user_location`` set.
-    await set_onboarding_step(sender, None)
+    # ── Already onboarded: stash as temporary location ────────────
+    # Don't permanently change their saved home — stash the pin so
+    # the next drug search uses these coords once.  (v0.21.3)
+    _stash_temp_location(sender, location)
+    logger.info(
+        "Location pin stashed as temp for %s: %s (%.4f, %.4f) — home stays %s",
+        sender, location["zone_name"], location["lat"], location["lng"],
+        user.zone_name,
+    )
     await send_text_message(
         sender,
-        f"\u2705 Zona actualizada a *{user.zone_name}*. "
-        "Ahora buscare farmacias cerca de ti.",
+        f"\U0001f4cd Buscar\u00e9 cerca de *{location['zone_name']}* en tu pr\u00f3xima b\u00fasqueda.\n"
+        f"Tu ubicaci\u00f3n guardada sigue siendo *{user.zone_name or 'sin definir'}*.\n\n"
+        "Env\u00edame el nombre de un producto para buscarlo ah\u00ed.",
     )
 
 
@@ -1548,6 +1586,7 @@ async def handle_incoming_message(
                 sender, user, ai_result.drug_query, display_name,
                 debug_on=debug_on, ai_result=ai_result,
                 temp_location=_ai_temp_loc,
+                best_price=ai_result.modifier == "best_price",
             )
             return
 
@@ -1637,7 +1676,11 @@ async def handle_incoming_message(
     # geocode it but DON'T permanently update the profile.  Instead,
     # stash the temporary coords so drug_search can use them once.
     # The user's saved home location is preserved.
-    _temp_location: dict | None = None
+    #
+    # Also check for a pending location pin stash (from a GPS pin the
+    # user shared just before this text message).  Text-detected location
+    # takes priority over a stashed pin.
+    _temp_location: dict | None = _pop_temp_location(sender)
     if intent.detected_location and intent.detected_location.lower() != (user.zone_name or "").lower():
         location = await geocode_zone(intent.detected_location)
         if location:
@@ -1683,9 +1726,11 @@ async def handle_incoming_message(
             await send_text_message(sender, intent.response_text)
 
         query = intent.drug_query or text
+        best_price = intent.modifier == "best_price"
         await _handle_drug_search(
             sender, user, query, display_name,
             debug_on=debug_on, temp_location=_temp_location,
+            best_price=best_price,
         )
 
     elif intent.action == "clarify_needed" and intent.clarify_question:
@@ -1799,6 +1844,7 @@ async def _handle_drug_search(
     debug_on: bool = False,
     ai_result=None,
     temp_location: dict | None = None,
+    best_price: bool = False,
 ) -> None:
     """Perform a drug search and send results to the user.
 
@@ -1868,6 +1914,20 @@ async def _handle_drug_search(
         zone_name=search_zone,
     )
 
+    # ── Best-price filter: keep only the single cheapest in-stock result ──
+    best_price_filtered = False
+    if best_price and response.results:
+        in_stock = [r for r in response.results if r.available and r.price_bs is not None]
+        if in_stock:
+            cheapest = min(in_stock, key=lambda r: r.price_bs)
+            response.results = [cheapest]
+            response.total = 1
+            best_price_filtered = True
+            logger.info(
+                "Best-price filter for '%s': %s at Bs. %s (%s)",
+                query, cheapest.drug_name, cheapest.price_bs, cheapest.pharmacy_name,
+            )
+
     # Log the search and save the log ID for feedback tracking
     results_count = len(response.results) if response.results else 0
     search_log_id = await log_search(user.id, query, results_count)
@@ -1878,6 +1938,8 @@ async def _handle_drug_search(
         await _send_detail_images(sender, response.results)
 
     reply = format_search_results(response)
+    if best_price_filtered:
+        reply += "\n\n\U0001f4b0 _Mostrando solo la opción más económica. Envía el nombre del producto sin \"mejor precio\" para ver todas las opciones._"
     if debug_on:
         reply += await _build_debug(sender, user.id, ai_result)
     await send_text_message(sender, reply)

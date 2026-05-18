@@ -1,6 +1,6 @@
 # FarmaFacil — WhatsApp Bot Conversation Flow
 
-> Last Updated: 2026-04-08
+> Last Updated: 2026-05-18
 
 ## Overview
 
@@ -78,7 +78,9 @@ The bot accepts location in **two forms**:
 
 On success, step advances to `awaiting_preference`.
 
-**Location pin also works post-onboarding.** A fully-onboarded user who shares their location pin triggers a "cambiar zona" — the new coordinates replace the old ones and the bot replies "✅ Zona actualizada a *X*" without touching `display_preference`. `handle_location_message` snapshots the prior `onboarding_step` before calling `update_user_location` (which unconditionally sets it to `awaiting_preference`) to decide between "still onboarding → ask for preference" and "already onboarded → acknowledge zone update".
+**Location pin also works post-onboarding (v0.21.3).** When a fully-onboarded user shares their GPS pin, the coordinates are **stashed as a temporary location** for the next search — the user's saved home location is NOT updated. The bot replies "📍 Buscaré cerca de *{zone}* en tu próxima búsqueda. Tu ubicación guardada sigue siendo *{home}*." The stash uses an in-memory dict (`_pending_temp_location`) keyed by phone number with a 10-minute TTL. The next drug search or nearest-store query pops the stashed location (consuming it) and uses those coordinates instead of the user's profile. If no search happens within the TTL, the stash expires silently.
+
+For onboarding users (step not None or no name), the original behavior is preserved: `update_user_location()` permanently saves the coordinates.
 
 ---
 
@@ -144,6 +146,7 @@ If no keyword match, `classify_intent()` runs:
 LLM can also extract profile data mid-conversation:
 - If LLM detects a new name → auto-updates `users.name`
 - If LLM detects a new location → geocodes to a **temporary location** for this search only; the user's saved home location is NOT updated (v0.21.2). A confirmation message is sent: "Buscando X cerca de Y (tu ubicación guardada sigue siendo Z)".
+- If LLM detects a best-price intent (e.g., "mejor precio de losartan") → sets `MODIFIER: best_price` which filters results to the single cheapest in-stock option (v0.21.3).
 
 ### 3. Intent Routing
 
@@ -184,7 +187,8 @@ When intent is `drug_search`:
 2. **Symptom acknowledgment (v0.14.2 policy):** If the AI included a conversational response, send it as a text message BEFORE the search results. **The bot NEVER recommends specific drugs for symptoms** — when a user describes symptoms without naming a product, the AI responds with empathy, explains it cannot recommend medications (liability), and offers to search for whatever their doctor has prescribed. The bot CAN recommend non-drug products (skincare, vitamins, baby, hygiene). If the user volunteers a medication they already take, the bot can share general interaction/side-effect info but always routes to "consulta con tu médico".
 3. **Drug interaction check:** If the user has known medications in their memory (`user_memories`), extract them via `extract_medications_from_memory()`, then query the RxNorm/RxNav API via `check_interactions()`. If interactions are detected, send a ⚠️ warning message before search results.
 4. Call `search_drug(query, city_code, lat, lng, zone_name)`
-3. Format results as text via `format_search_results()`
+5. **Best-price filter (v0.21.3):** If the AI set `MODIFIER: best_price`, filter results to the single cheapest in-stock option. If no in-stock results have a price, the filter does not fire and all results pass through. When the filter fires, a hint message is appended: "💰 Mostrando la opción más económica. Escribe solo el nombre del producto para ver todas las opciones."
+6. Format results as text via `format_search_results()`
 4. Send text message
 5. If results exist, send image based on preference:
    - `detail`: Send individual product images (top 3) with rich captions

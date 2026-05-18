@@ -54,6 +54,7 @@ class Intent:
 
     action: str  # greeting, help, location_change, preference_change, name_change, farewell, drug_search, clarify_needed, nearest_store, view_similar, emergency, question, unknown
     drug_query: str | None = None
+    modifier: str | None = None  # e.g. "best_price" (v0.21.3)
     response_text: str | None = None
     detected_name: str | None = None
     detected_location: str | None = None
@@ -163,6 +164,7 @@ async def classify_intent_ai(
     return Intent(
         action=ai_result.action,
         drug_query=ai_result.drug_query,
+        modifier=ai_result.modifier,
         response_text=ai_result.text if ai_result.text else None,
         detected_name=ai_result.detected_name,
         detected_location=ai_result.detected_location,

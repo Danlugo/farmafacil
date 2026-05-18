@@ -38,6 +38,7 @@ INSTRUCCIONES ADICIONALES: Analiza el mensaje del usuario y responde en formato 
 FORMATO DE RESPUESTA (usa exactamente estas líneas, omite las que no apliquen):
 ACTION: [greeting|drug_search|clarify_needed|nearest_store|view_similar|emergency|question|unknown]
 DRUG: [nombre del producto tal como lo escribió el usuario]
+MODIFIER: [best_price si pide el más barato/mejor precio]
 NAME: [nombre de la persona si se presenta]
 LOCATION: [zona/barrio/ciudad si menciona ubicación]
 CLARIFY_QUESTION: [pregunta de clarificación si ACTION=clarify_needed]
@@ -92,6 +93,12 @@ REGLAS:
     DRUG: tensiometro
     RESPONSE: Te busco tensiómetros.
   Si no es claro qué suministro necesitan, usa clarify_needed: CLARIFY_QUESTION: "¿Qué necesitas para tu examen? (envase recolector, tiras reactivas, etc.)"
+- 💰 MEJOR PRECIO: Si el usuario pide "el más barato", "mejor precio", "el más económico", "el más accesible", "el precio más bajo", o cualquier variación que indique que solo quiere la opción más barata, incluye MODIFIER: best_price. El sistema filtrará los resultados para mostrar solo la opción más económica disponible. Ejemplos:
+  * "dame el mejor precio de losartan" → DRUG: losartan, MODIFIER: best_price
+  * "busca omeprazol al precio más bajo" → DRUG: omeprazol, MODIFIER: best_price
+  * "quiero el ibuprofeno más barato" → DRUG: ibuprofeno, MODIFIER: best_price
+  * "cuánto cuesta el losartan más económico" → DRUG: losartan, MODIFIER: best_price
+  Si el usuario NO pide explícitamente el más barato, NO incluyas MODIFIER — el sistema ya muestra todos los resultados ordenados por precio.
 - Si mencionan nombre y medicamento en el mismo mensaje, extrae ambos
 - Solo clasifica como question/unknown si el producto claramente NO se vende en farmacias
 - En caso de duda, SIEMPRE clasifica como drug_search — es mejor buscar y no encontrar que rechazar
@@ -110,6 +117,7 @@ class AiResponse:
     role_used: str
     action: str = "ai_response"
     drug_query: str | None = None
+    modifier: str | None = None  # e.g. "best_price" (v0.21.3)
     detected_name: str | None = None
     detected_location: str | None = None
     # Clarification flow: when action == "clarify_needed", the bot asks
@@ -771,12 +779,15 @@ def _parse_structured_response(reply: str) -> AiResponse:
     for line in reply.strip().split("\n"):
         line = line.strip()
         if ":" in line:
+            # partition splits on FIRST colon only — values containing
+            # colons (e.g. "Te busco envases: recolectores") are preserved.
             key, _, value = line.partition(":")
             key = key.strip().upper()
             value = value.strip()
             if key in (
                 "ACTION",
                 "DRUG",
+                "MODIFIER",
                 "NAME",
                 "LOCATION",
                 "RESPONSE",
@@ -809,6 +820,7 @@ def _parse_structured_response(reply: str) -> AiResponse:
         role_used="",
         action=action,
         drug_query=fields.get("DRUG"),
+        modifier=fields.get("MODIFIER"),
         detected_name=fields.get("NAME"),
         detected_location=fields.get("LOCATION"),
         clarify_question=fields.get("CLARIFY_QUESTION"),
