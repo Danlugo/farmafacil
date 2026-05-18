@@ -143,7 +143,7 @@ If no keyword match, `classify_intent()` runs:
 
 LLM can also extract profile data mid-conversation:
 - If LLM detects a new name → auto-updates `users.name`
-- If LLM detects a new location → geocodes and auto-updates coordinates
+- If LLM detects a new location → geocodes to a **temporary location** for this search only; the user's saved home location is NOT updated (v0.21.2). A confirmation message is sent: "Buscando X cerca de Y (tu ubicación guardada sigue siendo Z)".
 
 ### 3. Intent Routing
 

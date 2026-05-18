@@ -1511,9 +1511,14 @@ async def handle_incoming_message(
             await _handle_view_similar(sender, user)
             return
 
+        # Resolve temporary location if AI detected one different from profile
+        _ai_temp_loc: dict | None = None
+        if ai_result.detected_location and ai_result.detected_location.lower() != (user.zone_name or "").lower():
+            _ai_temp_loc = await geocode_zone(ai_result.detected_location)
+
         # If AI detects a nearest_store query, show nearby pharmacies
         if ai_result.action == "nearest_store":
-            if not user.latitude:
+            if not user.latitude and not _ai_temp_loc:
                 await set_onboarding_step(sender, "awaiting_location")
                 await send_text_message(
                     sender, MSG_NEED_LOCATION.format(name=display_name)
@@ -1522,13 +1527,14 @@ async def handle_incoming_message(
             if ai_result.text:
                 await send_text_message(sender, ai_result.text)
             await _handle_nearest_store(
-                sender, user, display_name, debug_on=debug_on, ai_result=ai_result,
+                sender, user, display_name, debug_on=debug_on,
+                ai_result=ai_result, temp_location=_ai_temp_loc,
             )
             return
 
         # If AI detects a drug search, perform it
         if ai_result.action == "drug_search" and ai_result.drug_query:
-            if not user.latitude:
+            if not user.latitude and not _ai_temp_loc:
                 await set_onboarding_step(sender, "awaiting_location")
                 await send_text_message(
                     sender, MSG_NEED_LOCATION.format(name=display_name)
@@ -1541,6 +1547,7 @@ async def handle_incoming_message(
             await _handle_drug_search(
                 sender, user, ai_result.drug_query, display_name,
                 debug_on=debug_on, ai_result=ai_result,
+                temp_location=_ai_temp_loc,
             )
             return
 
@@ -1598,6 +1605,10 @@ async def handle_incoming_message(
             await _handle_view_similar(sender, user)
             return
         if action == "nearest_store":
+            # Keyword-cache path: fires on exact text match (e.g. "farmacias
+            # cercanas"), not natural-language phrases like "busca X cerca de Y".
+            # Temp-location is intentionally not supported here — it requires
+            # AI classification to extract detected_location from the text.
             if not user.latitude:
                 await set_onboarding_step(sender, "awaiting_location")
                 await send_text_message(
@@ -1622,15 +1633,20 @@ async def handle_incoming_message(
         user = await get_or_create_user(sender)
         display_name = user.name
 
+    # If AI detected a location different from the user's saved one,
+    # geocode it but DON'T permanently update the profile.  Instead,
+    # stash the temporary coords so drug_search can use them once.
+    # The user's saved home location is preserved.
+    _temp_location: dict | None = None
     if intent.detected_location and intent.detected_location.lower() != (user.zone_name or "").lower():
         location = await geocode_zone(intent.detected_location)
         if location:
-            user = await update_user_location(
-                sender, location["lat"], location["lng"],
-                location["zone_name"], location["city"],
+            _temp_location = location
+            logger.info(
+                "Temporary location for %s: %s (%.4f, %.4f) — home stays %s",
+                sender, location["zone_name"], location["lat"], location["lng"],
+                user.zone_name,
             )
-            await set_onboarding_step(sender, None)
-            user = await get_or_create_user(sender)
 
     # Route by action
     if intent.action == "greeting":
@@ -1654,8 +1670,8 @@ async def handle_incoming_message(
         await send_text_message(sender, HELP_MESSAGE)
 
     elif intent.action == "drug_search":
-        # Make sure we have location before searching
-        if not user.latitude:
+        # Make sure we have location before searching (temp or saved)
+        if not user.latitude and not _temp_location:
             await set_onboarding_step(sender, "awaiting_location")
             await send_text_message(
                 sender, MSG_NEED_LOCATION.format(name=display_name)
@@ -1667,7 +1683,10 @@ async def handle_incoming_message(
             await send_text_message(sender, intent.response_text)
 
         query = intent.drug_query or text
-        await _handle_drug_search(sender, user, query, display_name, debug_on=debug_on)
+        await _handle_drug_search(
+            sender, user, query, display_name,
+            debug_on=debug_on, temp_location=_temp_location,
+        )
 
     elif intent.action == "clarify_needed" and intent.clarify_question:
         # Vague category — ask a clarifying question and stash the original
@@ -1683,7 +1702,7 @@ async def handle_incoming_message(
         )
 
     elif intent.action == "nearest_store":
-        if not user.latitude:
+        if not user.latitude and not _temp_location:
             await set_onboarding_step(sender, "awaiting_location")
             await send_text_message(
                 sender, MSG_NEED_LOCATION.format(name=display_name)
@@ -1691,7 +1710,10 @@ async def handle_incoming_message(
             return
         if intent.response_text:
             await send_text_message(sender, intent.response_text)
-        await _handle_nearest_store(sender, user, display_name, debug_on=debug_on)
+        await _handle_nearest_store(
+            sender, user, display_name,
+            debug_on=debug_on, temp_location=_temp_location,
+        )
 
     elif intent.action == "emergency":
         reply = intent.response_text or (
@@ -1776,6 +1798,7 @@ async def _handle_drug_search(
     display_name: str,
     debug_on: bool = False,
     ai_result=None,
+    temp_location: dict | None = None,
 ) -> None:
     """Perform a drug search and send results to the user.
 
@@ -1790,8 +1813,37 @@ async def _handle_drug_search(
         display_name: User's display name.
         debug_on: Whether to append debug footer.
         ai_result: AiResponse from classification (for token stats).
+        temp_location: One-time location override (from "busca X cerca de Y").
+            Dict with lat, lng, zone_name, city keys.  When provided, the
+            search uses these coordinates instead of the user's saved profile.
+            The user's saved location is NOT modified.
     """
-    logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
+    # Use temporary location if provided, otherwise user's saved location.
+    # geocode_zone() returns {"lat", "lng", "zone_name", "city"} — but
+    # accept "city_code" as a fallback key to guard against callers that
+    # mirror the User model attribute name.
+    search_lat = temp_location["lat"] if temp_location else user.latitude
+    search_lng = temp_location["lng"] if temp_location else user.longitude
+    search_zone = temp_location["zone_name"] if temp_location else user.zone_name
+    search_city = (
+        (temp_location.get("city") or temp_location.get("city_code"))
+        if temp_location
+        else user.city_code
+    )
+
+    if temp_location:
+        logger.info(
+            "Drug search from %s/%s: '%s' — TEMP location %s (%.4f, %.4f), home=%s",
+            sender, display_name, query, search_zone, search_lat, search_lng, user.zone_name,
+        )
+        # Tell the user we're searching from the temporary location
+        await send_text_message(
+            sender,
+            f"🔍 Buscando *{query}* cerca de *{search_zone}* "
+            f"(tu ubicación guardada sigue siendo *{user.zone_name or 'sin definir'}*).",
+        )
+    else:
+        logger.info("Drug search from %s/%s (%s): '%s'", sender, display_name, user.zone_name, query)
 
     # Check for drug interactions with user's known medications
     client_memory = await get_memory(user.id)
@@ -1810,10 +1862,10 @@ async def _handle_drug_search(
 
     response = await search_drug(
         query=query,
-        city_code=user.city_code,
-        latitude=user.latitude,
-        longitude=user.longitude,
-        zone_name=user.zone_name,
+        city_code=search_city,
+        latitude=search_lat,
+        longitude=search_lng,
+        zone_name=search_zone,
     )
 
     # Log the search and save the log ID for feedback tracking
@@ -1856,6 +1908,7 @@ async def _handle_nearest_store(
     display_name: str,
     debug_on: bool = False,
     ai_result=None,
+    temp_location: dict | None = None,
 ) -> None:
     """Find and send nearest pharmacy stores to the user.
 
@@ -1868,18 +1921,29 @@ async def _handle_nearest_store(
         display_name: User's display name.
         debug_on: Whether to append debug footer.
         ai_result: AiResponse from classification (for token stats).
+        temp_location: One-time location override.
     """
-    logger.info(
-        "Nearest store query from %s/%s (%s)",
-        sender, display_name, user.zone_name,
-    )
+    search_lat = temp_location["lat"] if temp_location else user.latitude
+    search_lng = temp_location["lng"] if temp_location else user.longitude
+    search_zone = temp_location["zone_name"] if temp_location else user.zone_name
+
+    if temp_location:
+        logger.info(
+            "Nearest store from %s/%s — TEMP location %s, home=%s",
+            sender, display_name, search_zone, user.zone_name,
+        )
+    else:
+        logger.info(
+            "Nearest store query from %s/%s (%s)",
+            sender, display_name, user.zone_name,
+        )
 
     stores = await get_all_nearby_stores(
-        latitude=user.latitude,
-        longitude=user.longitude,
+        latitude=search_lat,
+        longitude=search_lng,
     )
 
-    reply = format_nearby_stores(stores, zone_name=user.zone_name)
+    reply = format_nearby_stores(stores, zone_name=search_zone)
     if debug_on:
         reply += await _build_debug(sender, user.id, ai_result)
     await send_text_message(sender, reply)
