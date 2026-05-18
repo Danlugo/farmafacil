@@ -199,6 +199,32 @@ compute_relevance("Aspirina", "Aspirador Nasal Infantil Kerful", drug_class="APA
 
 ---
 
+## AI Returns Only Brand, Drops Product Name (Bug #18)
+
+### Symptom
+User asks for a specific product by a specific brand (e.g., "melatonina de laboratorio Arco Iris") but the bot searches only the brand name, returning all products from that brand instead of the specific product.
+
+### Root Cause
+The AI classifier extracted only the brand/lab as the DRUG query, dropping the product name. "Arco Iris" returns 10+ mixed products; "melatonina arco iris" returns the exact match.
+
+### Solution (v0.21.1)
+Added a "PRODUCTO + MARCA/LABORATORIO" rule to `CLASSIFY_INSTRUCTIONS` in `services/ai_responder.py`. The rule instructs the AI to always combine product name + brand in the DRUG field (e.g., DRUG: melatonina arco iris, not DRUG: arco iris).
+
+---
+
+## AI Echoes Medical Exam Requests With No Action (Bug #17)
+
+### Symptom
+User says "necesito hacerme un examen de heces" and the bot responds with "Entiendo que necesitas hacerte un examen de heces" — echoing the statement with no drug search or helpful action.
+
+### Root Cause
+The AI classifier didn't know that pharmacies sell supplies for medical exams (recolector de heces, recolector de orina, pruebas de embarazo, etc.). It classified the message as a general question.
+
+### Solution (v0.21.1)
+Added an "EXÁMENES MÉDICOS Y SUMINISTROS" rule to `CLASSIFY_INSTRUCTIONS` in `services/ai_responder.py`. Maps exam types to pharmacy supplies (e.g., "examen de heces" → DRUG: recolector de heces). When the exam type is ambiguous, uses `clarify_needed` to ask what supply is needed.
+
+---
+
 ## Database Connection Errors (Production)
 
 ### Symptom
