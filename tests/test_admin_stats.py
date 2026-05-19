@@ -1,11 +1,14 @@
 """Tests for admin user stats page."""
 
+from unittest.mock import patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from farmafacil.api.app import app
 from farmafacil.db.session import async_session
 from farmafacil.models.database import ConversationLog, SearchLog, User
+from tests.conftest import TEST_ADMIN_PASS, TEST_ADMIN_USER, admin_auth_headers
 
 
 async def _create_test_user(phone: str = "5551234567", name: str = "TestUser") -> User:
@@ -59,6 +62,14 @@ async def _add_search_logs(user_id: int, total: int = 10, positive: int = 4) -> 
 class TestAdminUserStatsPage:
     """Test the /admin/user-stats/{user_id} HTML endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_admin_creds(self):
+        with (
+            patch("farmafacil.api.routes.ADMIN_USERNAME", TEST_ADMIN_USER),
+            patch("farmafacil.api.routes.ADMIN_PASSWORD", TEST_ADMIN_PASS),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_returns_html_with_user_stats(self):
         """Stats page returns 200 with user name and key metrics."""
@@ -69,7 +80,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
@@ -85,7 +96,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get("/admin/user-stats/99999")
+            response = await client.get("/admin/user-stats/99999", headers=admin_auth_headers())
 
         assert response.status_code == 404
         assert "not found" in response.text.lower()
@@ -98,7 +109,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert "Estimated Cost" in body
@@ -113,7 +124,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert "Success Rate" in body
@@ -128,7 +139,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert "Recent Searches" in body
@@ -142,7 +153,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert f"/api/v1/stats?phone={user.phone_number}" in body
@@ -158,7 +169,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert "<script>alert(1)</script>" not in body
@@ -183,7 +194,7 @@ class TestAdminUserStatsPage:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(f"/admin/user-stats/{user.id}")
+            response = await client.get(f"/admin/user-stats/{user.id}", headers=admin_auth_headers())
 
         body = response.text
         assert "<img src=x onerror=alert(1)>" not in body

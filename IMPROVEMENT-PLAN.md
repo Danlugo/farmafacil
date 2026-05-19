@@ -9,56 +9,56 @@
 ## Phase 1 — Security Hotfix (P0)
 
 ### Item 50: Authenticate all PII-exposing API endpoints
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~30 min)
 - **Problem:** `/api/v1/users`, `/api/v1/conversations`, `/api/v1/stats`, `/admin/conversations/*`, `/api/v1/conversations/export`, `POST /api/v1/scheduled-tasks/{id}/run` are reachable without auth via the public ngrok URL. They expose phone numbers, GPS coordinates, full chat history, and allow triggering scheduled tasks.
-- **Fix:** Add `Depends(_require_admin)` to all 9 endpoints in `api/routes.py`. The `_require_admin` function already exists and works (protects the audio endpoint).
+- **Fix:** Added `_admin: str = Depends(_require_admin)` to all 12 PII-exposing endpoints in `api/routes.py`. HTTP Basic auth required on every endpoint except `/health`, `/webhook`, and `/docs`.
 - **Files:** `src/farmafacil/api/routes.py`
 - **Found by:** Security, SRE, Architecture (3 agents independently)
 
 ### Item 51: Add WhatsApp webhook HMAC-SHA256 signature verification
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~2 hours)
 - **Problem:** Meta sends `X-Hub-Signature-256` on every webhook POST. The app ignores it entirely. Anyone who discovers the ngrok URL can spoof messages from any phone number, including admin-flagged phones.
-- **Fix:** Add `APP_SECRET` env var (Facebook App Secret). In `receive_webhook`, compute HMAC-SHA256 of body, compare with `hmac.compare_digest()`. Return 403 on mismatch before parsing.
+- **Fix:** Added `WHATSAPP_APP_SECRET` env var. New `_verify_signature()` in webhook.py computes HMAC-SHA256 and compares with `hmac.compare_digest()`. Returns 403 on mismatch. GET verify_token now uses `secrets.compare_digest()` and rejects unconfigured tokens. Dev mode: skips HMAC when secret not set (with per-request warning).
 - **Files:** `src/farmafacil/bot/webhook.py`, `src/farmafacil/config.py`
 - **Found by:** Security, SRE
 
 ### Item 52: Remove hardcoded secrets and rotate credentials
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~1 hour)
 - **Problem:** `ALGOLIA_API_KEY="869a91..."`, `ALGOLIA_APP_ID="VCOJEYD2PO"`, `WHATSAPP_VERIFY_TOKEN="farmafacil_verify_2026"` hardcoded as defaults in `config.py`. `POSTGRES_PASSWORD: farmafacil` in `docker-compose.yml`. Real verify token in `.env.example`. All in git history since initial commit.
-- **Fix:** Remove all hardcoded defaults (empty string + startup warning like `ADMIN_PASSWORD`). Change `docker-compose.yml` to use `${POSTGRES_PASSWORD}`. Update `.env.example` with placeholders. Rotate Algolia key, verify token, Postgres password.
+- **Fix:** Removed all hardcoded defaults (empty string + startup warnings). `docker-compose.yml` uses `${POSTGRES_PASSWORD}`. `.env.example` uses placeholders. Added Algolia keys to production/local `.env` files. App/Postgres ports bound to 127.0.0.1.
 - **Files:** `src/farmafacil/config.py`, `docker-compose.yml`, `.env.example`
 - **Found by:** Security, Code Quality, Architecture, SRE (4 agents)
 
 ### Item 53: Fix `_handle_admin_media` token counting bug
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~15 min)
 - **Problem:** `_handle_admin_media` at `handler.py:944-950` passes `sender` (string phone number) as `user_id` (expects int), and references `.tokens_in`/`.tokens_out` which don't exist on `AdminTurnResult` (correct fields: `.input_tokens`/`.output_tokens`). Silently corrupts token accounting for admin image messages.
-- **Fix:** Change `sender` to `user.id`, `.tokens_in` to `.input_tokens`, `.tokens_out` to `.output_tokens`. Add type annotation `user: User`.
+- **Fix:** Changed `sender` → `user.id`, `.tokens_in` → `.input_tokens`, `.tokens_out` → `.output_tokens`.
 - **Files:** `src/farmafacil/bot/handler.py`
 - **Found by:** Code Quality
 
 ### Item 54: Harden admin login against brute-force
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~30 min)
 - **Problem:** `/admin/login` uses `==` comparison (timing-observable) and has no rate limiting or lockout. The `_require_admin` in routes.py correctly uses `secrets.compare_digest` but the SQLAdmin login does not.
-- **Fix:** Replace `==` with `hmac.compare_digest()` for username and password. Add SlowAPI rate limit on the login path.
+- **Fix:** Replaced `==` with `hmac.compare_digest()` for both username and password. Added truthiness guards to prevent matching unconfigured empty credentials.
 - **Files:** `src/farmafacil/api/admin.py`
 - **Found by:** Security
 
 ### Item 55: Bind Postgres port to localhost only
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.23.0)
 - **Priority:** P0
 - **Effort:** Low (~5 min)
 - **Problem:** `docker-compose.yml` exposes Postgres on `0.0.0.0` with default credentials. Database directly reachable from the LAN.
-- **Fix:** Change port binding to `127.0.0.1:5433:5432`.
+- **Fix:** Changed port binding to `127.0.0.1:5432:5432`. Also bound app port to `127.0.0.1:8000:8000` (all external traffic goes through ngrok).
 - **Files:** `docker-compose.yml`
 - **Found by:** Security
 

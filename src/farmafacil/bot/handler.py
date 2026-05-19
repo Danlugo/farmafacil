@@ -942,9 +942,9 @@ async def _handle_admin_media(
             await log_outbound_conv(sender, admin_result.text, message_type="admin_out")
 
         await increment_token_usage(
-            sender,
-            admin_result.tokens_in,
-            admin_result.tokens_out,
+            user.id,
+            admin_result.input_tokens,
+            admin_result.output_tokens,
             is_admin=True,
             model="opus",
         )

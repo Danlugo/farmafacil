@@ -19,9 +19,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # Scraper
 SCRAPER_TIMEOUT = int(os.getenv("SCRAPER_TIMEOUT", "30"))
 
-# Farmatodo Algolia API
-ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID", "VCOJEYD2PO")
-ALGOLIA_API_KEY = os.getenv("ALGOLIA_API_KEY", "869a91e98550dd668b8b1dc04bca9011")
+# Farmatodo Algolia API (search-only key — set via env var, no hardcoded default)
+ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID", "")
+ALGOLIA_API_KEY = os.getenv("ALGOLIA_API_KEY", "")
 ALGOLIA_INDEX = os.getenv("ALGOLIA_INDEX", "products-venezuela")
 SCRAPER_USER_AGENT = os.getenv(
     "SCRAPER_USER_AGENT",
@@ -31,7 +31,8 @@ SCRAPER_USER_AGENT = os.getenv(
 # WhatsApp Business API
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "")
-WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "farmafacil_verify_2026")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
 WHATSAPP_API_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
 
 # LLM (Claude Haiku for intent detection and conversational fallback)
@@ -59,8 +60,26 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "")
 
+import logging as _log
+
+_cfg_logger = _log.getLogger(__name__)
+
 if not ADMIN_PASSWORD or not ADMIN_SECRET_KEY:
-    import logging as _log
-    _log.getLogger(__name__).warning(
+    _cfg_logger.warning(
         "ADMIN_PASSWORD and/or ADMIN_SECRET_KEY not set — admin dashboard login will fail"
+    )
+
+if not ALGOLIA_APP_ID or not ALGOLIA_API_KEY:
+    _cfg_logger.warning(
+        "ALGOLIA_APP_ID and/or ALGOLIA_API_KEY not set — drug search will fail"
+    )
+
+if not WHATSAPP_VERIFY_TOKEN:
+    _cfg_logger.warning(
+        "WHATSAPP_VERIFY_TOKEN not set — webhook GET verification will reject all requests"
+    )
+
+if not WHATSAPP_APP_SECRET:
+    _cfg_logger.warning(
+        "WHATSAPP_APP_SECRET not set — webhook signature verification disabled"
     )

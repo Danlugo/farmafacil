@@ -1,10 +1,13 @@
 """Tests for API input validation and rate limiting (Item 23)."""
 
+from unittest.mock import patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from farmafacil.api.app import create_app
 from farmafacil.api.limiter import limiter
+from tests.conftest import TEST_ADMIN_PASS, TEST_ADMIN_USER, admin_auth_headers
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +16,15 @@ def _reset_limiter():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _patch_admin_creds():
+    with (
+        patch("farmafacil.api.routes.ADMIN_USERNAME", TEST_ADMIN_USER),
+        patch("farmafacil.api.routes.ADMIN_PASSWORD", TEST_ADMIN_PASS),
+    ):
+        yield
 
 
 @pytest.fixture
@@ -78,6 +90,7 @@ class TestIntentValidation:
         r = await client.post(
             "/api/v1/intents",
             json={"action": "", "keyword": "hola"},
+            headers=admin_auth_headers(),
         )
         assert r.status_code == 422
 
@@ -85,6 +98,7 @@ class TestIntentValidation:
         r = await client.post(
             "/api/v1/intents",
             json={"action": "a" * 51, "keyword": "hola"},
+            headers=admin_auth_headers(),
         )
         assert r.status_code == 422
 
@@ -92,6 +106,7 @@ class TestIntentValidation:
         r = await client.post(
             "/api/v1/intents",
             json={"action": "greeting", "keyword": "k" * 101},
+            headers=admin_auth_headers(),
         )
         assert r.status_code == 422
 
@@ -128,7 +143,7 @@ class TestRateLimiting:
         """The 61st GET /api/v1/stats within a minute returns 429."""
         last = None
         for _ in range(61):
-            last = await client.get("/api/v1/stats")
+            last = await client.get("/api/v1/stats", headers=admin_auth_headers())
         assert last is not None
         assert last.status_code == 429
 

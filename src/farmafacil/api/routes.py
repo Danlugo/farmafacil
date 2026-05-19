@@ -74,6 +74,7 @@ async def get_conversations(
     request: Request,
     phone: str | None = Query(None, max_length=30),
     limit: int = Query(50, le=200),
+    _admin: str = Depends(_require_admin),
 ) -> list[dict]:
     """View conversation logs for troubleshooting.
 
@@ -111,6 +112,7 @@ async def get_conversations(
 async def get_users(
     request: Request,
     limit: int = Query(50, le=200),
+    _admin: str = Depends(_require_admin),
 ) -> list[dict]:
     """View registered users.
 
@@ -157,6 +159,7 @@ class IntentCreate(BaseModel):
 async def get_intents(
     request: Request,
     action: str | None = Query(None, max_length=50),
+    _admin: str = Depends(_require_admin),
 ) -> list[dict]:
     """List all intent keywords, optionally filtered by action."""
     async with async_session() as session:
@@ -179,7 +182,7 @@ async def get_intents(
 
 @router.post("/api/v1/intents")
 @limiter.limit("30/minute")
-async def create_intent(request: Request, data: IntentCreate) -> dict:
+async def create_intent(request: Request, data: IntentCreate, _admin: str = Depends(_require_admin)) -> dict:
     """Add a new intent keyword."""
     async with async_session() as session:
         intent = IntentKeyword(
@@ -202,6 +205,7 @@ async def create_intent(request: Request, data: IntentCreate) -> dict:
 async def get_stats(
     request: Request,
     phone: str | None = Query(None, max_length=30),
+    _admin: str = Depends(_require_admin),
 ) -> dict:
     """Usage statistics — global totals or per-user breakdown.
 
@@ -298,7 +302,7 @@ async def get_stats(
 
 @router.delete("/api/v1/intents/{intent_id}")
 @limiter.limit("30/minute")
-async def delete_intent(request: Request, intent_id: int) -> dict:
+async def delete_intent(request: Request, intent_id: int, _admin: str = Depends(_require_admin)) -> dict:
     """Deactivate an intent keyword."""
     async with async_session() as session:
         result = await session.execute(
@@ -319,7 +323,7 @@ async def delete_intent(request: Request, intent_id: int) -> dict:
 
 @router.get("/admin/user-stats/{user_id}", response_class=HTMLResponse)
 @limiter.limit("60/minute")
-async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
+async def admin_user_stats(request: Request, user_id: int, _admin: str = Depends(_require_admin)) -> HTMLResponse:
     """Render an HTML stats dashboard for a single user.
 
     Args:
@@ -506,7 +510,7 @@ async def admin_user_stats(request: Request, user_id: int) -> HTMLResponse:
 
 @router.get("/api/v1/scheduled-tasks")
 @limiter.limit("60/minute")
-async def list_scheduled_tasks(request: Request) -> list[dict]:
+async def list_scheduled_tasks(request: Request, _admin: str = Depends(_require_admin)) -> list[dict]:
     """List all scheduled tasks with their status."""
     from farmafacil.models.database import ScheduledTask
 
@@ -535,7 +539,7 @@ async def list_scheduled_tasks(request: Request) -> list[dict]:
 
 @router.post("/api/v1/scheduled-tasks/{task_id}/run")
 @limiter.limit("10/minute")
-async def run_scheduled_task(request: Request, task_id: int) -> dict:
+async def run_scheduled_task(request: Request, task_id: int, _admin: str = Depends(_require_admin)) -> dict:
     """Manually trigger a scheduled task."""
     from farmafacil.services.scheduler import run_task_now
 
@@ -592,7 +596,7 @@ def _group_into_sessions(messages: list) -> list[dict]:
 
 @router.get("/admin/conversations", response_class=HTMLResponse)
 @limiter.limit("60/minute")
-async def admin_conversations_list(request: Request) -> HTMLResponse:
+async def admin_conversations_list(request: Request, _admin: str = Depends(_require_admin)) -> HTMLResponse:
     """Render a list of users with links to their conversation sessions."""
     async with async_session() as session:
         result = await session.execute(
@@ -657,7 +661,7 @@ a:hover{{text-decoration:underline;}}
 
 @router.get("/admin/conversations/{phone}", response_class=HTMLResponse)
 @limiter.limit("60/minute")
-async def admin_conversation_sessions(request: Request, phone: str) -> HTMLResponse:
+async def admin_conversation_sessions(request: Request, phone: str, _admin: str = Depends(_require_admin)) -> HTMLResponse:
     """List all sessions for a user, each as a collapsible thread."""
     safe_phone = escape(phone)
 
@@ -785,6 +789,7 @@ async def export_conversations(
     phone: str | None = Query(None),
     session: str | None = Query(None, description="ISO timestamp of session start"),
     format: str = Query("csv", pattern="^(csv|docx)$"),
+    _admin: str = Depends(_require_admin),
 ) -> StreamingResponse:
     """Export conversations as CSV or Word document.
 

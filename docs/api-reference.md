@@ -1,13 +1,15 @@
 # FarmaFacil — API Reference
 
-> Last Updated: 2026-04-29
+> Last Updated: 2026-05-19
 > Base URL (production): `https://amparo-chromophoric-christia.ngrok-free.dev`
 > Base URL (local dev): `http://localhost:8000`
-> Base URL (server direct): `http://10.0.0.116:8100`
+> Base URL (server direct): `http://10.0.0.80:8100`
 
 ## Authentication
 
-Most endpoints are unauthenticated (internal use). The admin dashboard at `/admin` requires HTTP Basic Auth (see [deployment.md](deployment.md) for credentials).
+**All PII-exposing endpoints require HTTP Basic Auth** (v0.23.0). Only `/health`, `/webhook` (GET/POST), and `/docs` are public. The admin dashboard at `/admin` also requires HTTP Basic Auth (see [deployment.md](deployment.md) for credentials).
+
+Unauthenticated requests to protected endpoints receive **HTTP 401 Unauthorized** with a `WWW-Authenticate: Basic` header.
 
 ## Rate Limiting
 
@@ -46,6 +48,8 @@ All query parameters and request bodies are validated by FastAPI/Pydantic. Viola
 | Code | Meaning |
 |------|---------|
 | 200 | Success |
+| 401 | Unauthorized — missing or invalid HTTP Basic auth credentials |
+| 403 | Forbidden — webhook signature verification failed |
 | 404 | Resource not found |
 | 422 | Validation failure (invalid query params, bad JSON body) |
 | 429 | Rate limit exceeded |

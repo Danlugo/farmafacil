@@ -1,10 +1,13 @@
 """Tests for persistent usage stats — token tracking and stats API."""
 
+from unittest.mock import patch
+
 import pytest
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
 from farmafacil.services.users import increment_token_usage
+from tests.conftest import TEST_ADMIN_PASS, TEST_ADMIN_USER, admin_auth_headers
 
 
 class TestIncrementTokenUsage:
@@ -264,6 +267,14 @@ class TestBuildDebugFooterWithTotals:
 class TestStatsEndpoint:
     """Test GET /api/v1/stats endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_admin(self):
+        with (
+            patch("farmafacil.api.routes.ADMIN_USERNAME", TEST_ADMIN_USER),
+            patch("farmafacil.api.routes.ADMIN_PASSWORD", TEST_ADMIN_PASS),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_global_stats_returns_totals(self):
         from httpx import ASGITransport, AsyncClient
@@ -273,7 +284,7 @@ class TestStatsEndpoint:
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/v1/stats")
+            resp = await client.get("/api/v1/stats", headers=admin_auth_headers())
         assert resp.status_code == 200
         data = resp.json()
         assert "total_users" in data
@@ -292,7 +303,7 @@ class TestStatsEndpoint:
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/v1/stats")
+            resp = await client.get("/api/v1/stats", headers=admin_auth_headers())
         assert resp.status_code == 200
         data = resp.json()
         assert "haiku" in data
@@ -312,7 +323,7 @@ class TestStatsEndpoint:
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/v1/stats?phone=9999999999")
+            resp = await client.get("/api/v1/stats?phone=9999999999", headers=admin_auth_headers())
         assert resp.status_code == 200
         assert resp.json() == {"error": "user not found"}
 
@@ -330,7 +341,7 @@ class TestStatsEndpoint:
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/v1/stats?phone=5559906666")
+            resp = await client.get("/api/v1/stats?phone=5559906666", headers=admin_auth_headers())
         assert resp.status_code == 200
         data = resp.json()
         assert data["phone"] == "5559906666"

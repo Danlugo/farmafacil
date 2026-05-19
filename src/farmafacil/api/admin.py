@@ -4,6 +4,8 @@ Provides a full admin UI at /admin for managing all database tables.
 Authentication required via username/password.
 """
 
+import hmac
+
 from markupsafe import Markup, escape as _escape
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
@@ -1351,7 +1353,13 @@ class AdminAuth(AuthenticationBackend):
         username = form.get("username", "")
         password = form.get("password", "")
 
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        # Empty guard prevents matching an unconfigured (empty) ADMIN_PASSWORD
+        if (
+            username
+            and password
+            and hmac.compare_digest(username.encode(), ADMIN_USERNAME.encode())
+            and hmac.compare_digest(password.encode(), ADMIN_PASSWORD.encode())
+        ):
             request.session.update({"authenticated": True})
             return True
         return False

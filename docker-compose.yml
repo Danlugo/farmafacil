@@ -2,7 +2,7 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     volumes:
@@ -12,16 +12,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
     environment:
-      - DATABASE_URL=postgresql+asyncpg://farmafacil:farmafacil@db:5432/farmafacil
+      - DATABASE_URL=postgresql+asyncpg://farmafacil:${POSTGRES_PASSWORD}@db:5432/farmafacil
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: farmafacil
-      POSTGRES_PASSWORD: farmafacil
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: farmafacil
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

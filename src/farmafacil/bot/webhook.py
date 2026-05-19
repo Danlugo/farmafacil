@@ -1,6 +1,10 @@
 """WhatsApp Business API webhook endpoint."""
 
+import hashlib
+import hmac
+import json
 import logging
+import secrets
 
 from fastapi import APIRouter, Query, Request, Response
 
@@ -12,12 +16,43 @@ from farmafacil.bot.handler import (
     handle_voice_message,
 )
 from farmafacil.bot.whatsapp import send_text_message
-from farmafacil.config import WHATSAPP_VERIFY_TOKEN
+from farmafacil.config import WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN
 from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
 
 logger = logging.getLogger(__name__)
 
 webhook_router = APIRouter()
+
+
+def _verify_signature(payload: bytes, signature_header: str) -> bool:
+    """Verify WhatsApp webhook HMAC-SHA256 signature.
+
+    Args:
+        payload: Raw request body bytes.
+        signature_header: Value of X-Hub-Signature-256 header (e.g. "sha256=abc...").
+
+    Returns:
+        True if signature is valid, False otherwise.
+    """
+    if not WHATSAPP_APP_SECRET:
+        # No secret configured — skip verification (dev mode)
+        logger.warning("HMAC verification skipped — WHATSAPP_APP_SECRET not set")
+        return True
+
+    if not signature_header:
+        return False
+
+    if not signature_header.startswith("sha256="):
+        return False
+
+    expected_sig = signature_header[7:]  # strip "sha256=" prefix
+    computed = hmac.new(
+        WHATSAPP_APP_SECRET.encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(computed, expected_sig)
 
 
 @webhook_router.get("/webhook")
@@ -38,7 +73,13 @@ async def verify_webhook(
     Returns:
         The challenge string if verification passes, 403 otherwise.
     """
-    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
+    if not WHATSAPP_VERIFY_TOKEN:
+        logger.warning("Webhook verify rejected — WHATSAPP_VERIFY_TOKEN not configured")
+        return Response(content="Forbidden", status_code=403)
+
+    if hub_mode == "subscribe" and hub_verify_token and secrets.compare_digest(
+        hub_verify_token, WHATSAPP_VERIFY_TOKEN
+    ):
         logger.info("Webhook verified successfully")
         return Response(content=hub_challenge, media_type="text/plain")
 
@@ -46,8 +87,8 @@ async def verify_webhook(
     return Response(content="Forbidden", status_code=403)
 
 
-@webhook_router.post("/webhook")
-async def receive_webhook(request: Request) -> dict:
+@webhook_router.post("/webhook", response_model=None)
+async def receive_webhook(request: Request) -> dict | Response:
     """Handle incoming WhatsApp messages (POST).
 
     Meta sends a POST with message data when users send messages.
@@ -58,7 +99,15 @@ async def receive_webhook(request: Request) -> dict:
     Returns:
         Acknowledgement dict (200 OK).
     """
-    body = await request.json()
+    # ── HMAC-SHA256 signature verification ───────────────────────────────
+    raw_body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+
+    if not _verify_signature(raw_body, signature):
+        logger.warning("Webhook signature verification failed")
+        return Response(content="Invalid signature", status_code=403)
+
+    body = json.loads(raw_body)
 
     # Extract messages from the webhook payload
     for entry in body.get("entry", []):
