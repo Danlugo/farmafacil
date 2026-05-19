@@ -1,6 +1,6 @@
 # FarmaFacil — Deployment Guide
 
-> Last Updated: 2026-04-10
+> Last Updated: 2026-05-19
 
 ## Local Development
 
@@ -41,9 +41,10 @@ All variables live in `.env` (copy from `.env.example`).
 | `WHATSAPP_VERIFY_TOKEN` | `farmafacil_verify_2026` | Yes | Webhook verification token (set in Meta dashboard) |
 | `ANTHROPIC_API_KEY` | *(empty)* | Yes | Claude Haiku API key |
 | `LLM_MODEL` | `claude-haiku-4-5-20251001` | No | Anthropic model ID |
+| `OPENAI_API_KEY` | *(empty)* | Yes | OpenAI API key (Whisper voice transcription) |
 | `ADMIN_USERNAME` | `admin` | No | Admin dashboard username |
-| `ADMIN_PASSWORD` | `LetsGoChiguires` | Yes (change) | Admin dashboard password |
-| `ADMIN_SECRET_KEY` | *(insecure default)* | Yes (change) | Session signing key |
+| `ADMIN_PASSWORD` | *(none)* | Yes | Admin dashboard password — login fails without it |
+| `ADMIN_SECRET_KEY` | *(none)* | Yes | Session signing key — login fails without it |
 
 > **Security:** Change `ADMIN_PASSWORD` and `ADMIN_SECRET_KEY` before any deployment.
 
@@ -51,7 +52,7 @@ All variables live in `.env` (copy from `.env.example`).
 
 ## Production Server
 
-**Server:** `10.0.0.116` (Linux Mint, 32GB RAM, Docker 29.1)
+**Server:** `10.0.0.80` (Linux Mint, 32GB RAM, Docker 29.1). IP is DHCP-assigned and may change after reboots — verify with `hostname -I` on the machine if SSH fails.
 
 | Service | Port | Notes |
 |---------|------|-------|
@@ -68,7 +69,7 @@ All variables live in `.env` (copy from `.env.example`).
 ### SSH Access
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
 ```
 
 ---
@@ -80,7 +81,7 @@ The production stack uses Docker Compose with PostgreSQL.
 ### First Deployment
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
 cd ~/workspace/farmafacil
 cp .env.example .env
 # Edit .env — add real WhatsApp token, Anthropic key, admin credentials
@@ -92,13 +93,19 @@ curl http://localhost:8100/health
 ### Updating the App
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.116
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
 cd ~/workspace/farmafacil && git pull
 docker compose build --no-cache
 docker compose down && docker compose up -d
 curl http://localhost:8100/health
 docker compose logs -f app
 ```
+
+> **⚠ `.env` changes require `down/up`, not `restart`.**
+> `docker compose restart` reuses the existing container environment — new or changed
+> variables in `.env` will NOT take effect. Always use `docker compose down && docker compose up -d`
+> when `.env` has been modified. This includes adding missing variables like `ADMIN_PASSWORD`
+> or `OPENAI_API_KEY` after a fresh git pull.
 
 ### Useful Docker Commands
 
@@ -138,7 +145,7 @@ ngrok http 8100
 
 The current public URL is: `https://amparo-chromophoric-christia.ngrok-free.dev`
 
-ngrok admin UI: `http://10.0.0.116:4040`
+ngrok admin UI: `http://10.0.0.80:4040`
 
 ### Update Webhook URL in Meta
 
