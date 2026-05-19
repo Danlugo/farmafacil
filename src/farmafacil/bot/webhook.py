@@ -9,6 +9,7 @@ from farmafacil.bot.handler import (
     handle_incoming_message,
     handle_list_reply,
     handle_location_message,
+    handle_voice_message,
 )
 from farmafacil.bot.whatsapp import send_text_message
 from farmafacil.config import WHATSAPP_VERIFY_TOKEN
@@ -201,6 +202,25 @@ async def receive_webhook(request: Request) -> dict:
                         await handle_image_message(
                             sender, media_id, mime_type,
                             caption=caption or filename, wa_message_id=wa_id,
+                        )
+
+                elif msg_type == "audio":
+                    audio_data = message.get("audio", {})
+                    media_id = audio_data.get("id", "")
+                    mime_type = audio_data.get("mime_type", "audio/ogg")
+                    logger.info(
+                        "Received voice message from %s: media_id=%s mime=%s",
+                        sender, media_id, mime_type,
+                    )
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text="[audio]",
+                        message_type="audio",
+                        wa_message_id=wa_id,
+                    )
+                    if media_id:
+                        await handle_voice_message(
+                            sender, media_id, wa_message_id=wa_id,
                         )
 
                 else:

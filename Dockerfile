@@ -13,8 +13,8 @@ COPY src/ /app/src/
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 
-# Data directory for SQLite DB (mount as volume in production)
-RUN mkdir -p /app/data && chown farmafacil:farmafacil /app/data
+# Data directory for SQLite DB and audio files (mount as volume in production)
+RUN mkdir -p /app/data /app/data/audio && chown -R farmafacil:farmafacil /app/data
 VOLUME /app/data
 
 USER farmafacil

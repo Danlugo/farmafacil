@@ -4,8 +4,11 @@ import csv
 import io
 from html import escape
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select
 
 from farmafacil import __version__
@@ -13,11 +16,32 @@ from farmafacil.api.limiter import limiter
 from farmafacil.db.session import async_session
 from pydantic import BaseModel, Field
 
-from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User
+from farmafacil.config import ADMIN_PASSWORD, ADMIN_USERNAME
+from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User, VoiceMessage
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
 from farmafacil.services.search import search_drug
 
 router = APIRouter()
+_http_basic = HTTPBasic()
+
+
+def _require_admin(
+    credentials: HTTPBasicCredentials = Depends(_http_basic),
+) -> str:
+    """Verify HTTP Basic credentials match the admin user.
+
+    Used to protect endpoints that serve sensitive data (e.g. user audio)
+    outside the SQLAdmin session-cookie scope.
+    """
+    correct_user = secrets.compare_digest(
+        credentials.username.encode(), ADMIN_USERNAME.encode(),
+    )
+    correct_pass = secrets.compare_digest(
+        credentials.password.encode(), ADMIN_PASSWORD.encode(),
+    )
+    if not (correct_user and correct_pass):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return credentials.username
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -884,4 +908,64 @@ def _export_as_docx(messages, users_by_phone, phone, session_iso):
         iter([buffer.getvalue()]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Voice message audio playback ───────────────────────────────────────
+
+
+@router.get("/api/v1/audio/{voice_message_id}")
+@limiter.limit("30/minute")
+async def get_voice_audio(
+    voice_message_id: int,
+    request: Request,
+    _admin: str = Depends(_require_admin),
+) -> FileResponse:
+    """Serve a stored voice message audio file for playback.
+
+    Protected by HTTP Basic auth (admin credentials). Used by the
+    SQLAdmin dashboard to embed an HTML5 ``<audio>`` player.
+
+    Args:
+        voice_message_id: The voice_messages.id to serve.
+        request: The incoming HTTP request.
+
+    Returns:
+        The audio file with appropriate MIME type.
+    """
+    from farmafacil.services.voice import AUDIO_BASE_DIR, get_audio_absolute_path
+
+    async with async_session() as session:
+        stmt = select(VoiceMessage).where(VoiceMessage.id == voice_message_id)
+        voice_msg = (await session.execute(stmt)).scalar_one_or_none()
+
+    if voice_msg is None:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+
+    audio_path = get_audio_absolute_path(voice_msg.audio_path).resolve()
+
+    # Path containment: audio files must reside under AUDIO_BASE_DIR
+    try:
+        audio_path.relative_to(AUDIO_BASE_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid audio path")
+
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+    # Determine MIME type from extension
+    suffix = audio_path.suffix.lower()
+    mime_map = {
+        ".ogg": "audio/ogg",
+        ".opus": "audio/opus",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".wav": "audio/wav",
+    }
+    media_type = mime_map.get(suffix, "audio/ogg")
+
+    return FileResponse(
+        path=str(audio_path),
+        media_type=media_type,
+        filename=audio_path.name,
     )

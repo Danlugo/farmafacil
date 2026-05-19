@@ -4,7 +4,7 @@ Provides a full admin UI at /admin for managing all database tables.
 Authentication required via username/password.
 """
 
-from markupsafe import Markup
+from markupsafe import Markup, escape as _escape
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
@@ -31,6 +31,7 @@ from farmafacil.models.database import (
     UserFeedback,
     UserMemory,
     UserSuggestion,
+    VoiceMessage,
 )
 from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES
 from farmafacil.services.store_backfill import FARMATODO_CITIES
@@ -1180,10 +1181,81 @@ class GeocodeCacheAdmin(ModelView, model=GeocodeCache):
     page_size = 50
 
 
+class VoiceMessageAdmin(ModelView, model=VoiceMessage):
+    """Admin view for voice messages with audio playback."""
+
+    name = "Voice Message"
+    name_plural = "Voice Messages"
+    icon = "fa-microphone"
+    category = "Communication"
+
+    column_list = [
+        VoiceMessage.id,
+        VoiceMessage.user_id,
+        VoiceMessage.phone_number,
+        VoiceMessage.transcription,
+        VoiceMessage.original_language,
+        VoiceMessage.duration_seconds,
+        VoiceMessage.created_at,
+    ]
+    column_details_list = [
+        VoiceMessage.id,
+        VoiceMessage.user_id,
+        VoiceMessage.phone_number,
+        VoiceMessage.audio_path,
+        VoiceMessage.transcription,
+        VoiceMessage.original_language,
+        VoiceMessage.duration_seconds,
+        VoiceMessage.translation_es,
+        VoiceMessage.translation_en,
+        VoiceMessage.transcription_model,
+        VoiceMessage.wa_message_id,
+        VoiceMessage.conversation_log_id,
+        VoiceMessage.created_at,
+    ]
+    column_searchable_list = [
+        VoiceMessage.phone_number,
+        VoiceMessage.transcription,
+    ]
+    column_sortable_list = [
+        VoiceMessage.id,
+        VoiceMessage.user_id,
+        VoiceMessage.created_at,
+        VoiceMessage.duration_seconds,
+    ]
+    column_default_sort = ("created_at", True)
+    can_create = False
+    can_delete = False
+    can_edit = False
+    page_size = 25
+
+    column_formatters = {
+        VoiceMessage.transcription: lambda m, _: (
+            (m.transcription[:80] + "...") if m.transcription and len(m.transcription) > 80
+            else (m.transcription or "—")
+        ),
+    }
+
+    column_formatters_detail = {
+        VoiceMessage.audio_path: lambda m, _: Markup(
+            f'<audio controls preload="none">'
+            f'<source src="/api/v1/audio/{int(m.id)}" type="audio/ogg">'
+            f"Your browser does not support audio playback."
+            f"</audio>"
+            f"<br><small>{_escape(m.audio_path)}</small>"
+        ),
+        VoiceMessage.conversation_log_id: lambda m, _: Markup(
+            f'<a href="/admin/conversation-log/details/{int(m.conversation_log_id)}">'
+            f"View conversation #{int(m.conversation_log_id)}</a>"
+        ) if m.conversation_log_id else "—",
+    }
+
+
 ADMIN_VIEWS = [
     UserAdmin,
     UserFeedbackAdmin,
     UserSuggestionAdmin,
+    VoiceMessageAdmin,
     ConversationLogAdmin,
     SearchLogAdmin,
     IntentKeywordAdmin,

@@ -787,3 +787,73 @@ class GeocodeCache(Base):
 
     def __repr__(self) -> str:
         return f"GeocodeCache({self.source}: {self.query_text} \u2192 {self.latitude}, {self.longitude})"
+
+
+class VoiceMessage(Base):
+    """A voice message received from a WhatsApp user.
+
+    Audio is downloaded and stored locally; transcription is performed via
+    OpenAI Whisper API.  Translation columns are reserved for future
+    multi-language support (v0.22.0 shell \u2014 values stay NULL for now).
+    """
+
+    __tablename__ = "voice_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    phone_number: Mapped[str] = mapped_column(
+        String(30), nullable=False, index=True,
+        comment="Sender phone at the time of message (E.164)",
+    )
+    audio_path: Mapped[str] = mapped_column(
+        String(500), nullable=False,
+        comment="Relative path to the stored audio file under /data/audio/",
+    )
+    audio_url: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+        comment="Original WhatsApp media download URL (expires after ~30d)",
+    )
+    duration_seconds: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+        comment="Duration of the voice note in seconds",
+    )
+    original_language: Mapped[str | None] = mapped_column(
+        String(10), nullable=True,
+        comment="Detected language code (e.g. es, en, pt) \u2014 shell for future translation",
+    )
+    transcription: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Whisper transcription of the audio",
+    )
+    translation_es: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Spanish translation \u2014 shell for future implementation",
+    )
+    translation_en: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="English translation \u2014 shell for future implementation",
+    )
+    wa_message_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True,
+        comment="WhatsApp message ID for dedup and cross-reference",
+    )
+    conversation_log_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("conversation_logs.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Link to the conversation_logs entry for context",
+    )
+    transcription_model: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+        comment="Model used for transcription (e.g. whisper-1)",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship("User")
+    conversation_log: Mapped["ConversationLog | None"] = relationship("ConversationLog")
+
+    def __repr__(self) -> str:
+        snippet = (self.transcription or "")[:40]
+        return f"Voice #{self.id}: {snippet}..."

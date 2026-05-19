@@ -361,12 +361,27 @@ Receives incoming WhatsApp messages. Meta delivers this as a nested JSON structu
 
 | Type | Handling |
 |------|---------|
-| `text` | Full bot processing via handler.py |
-| `location` | Logged; GPS-based onboarding (TODO) |
-| `image` | Logged; sends "coming soon" reply |
+| `text` | Full bot processing via `handle_incoming_message()` |
+| `location` | GPS onboarding + temp location for searches via `handle_location_message()` |
+| `image` | Vision API drug extraction via `handle_image_message()` |
+| `document` | Same as image (prescriptions, etc.) |
+| `audio` | Voice transcription (Whisper) → text processing via `handle_voice_message()` (v0.22.0) |
+| `interactive` | List/button replies via `handle_list_reply()` |
 | Other | Logged only |
 
 **Response:** Always `{"status": "ok"}` (200). Errors are logged, not surfaced to Meta.
+
+### GET /api/v1/audio/{voice\_message\_id}
+
+Serves a stored voice message audio file for HTML5 playback. Used by the SQLAdmin dashboard.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| voice_message_id | int | VoiceMessage record ID |
+
+**Response:** Audio file with appropriate MIME type (`audio/ogg`, `audio/opus`, etc.), or `404`.
 
 ---
 

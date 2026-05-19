@@ -46,6 +46,7 @@ from farmafacil.models.database import (
     UserFeedback,
     UserMemory,
     UserSuggestion,
+    VoiceMessage,
 )
 from farmafacil.services import settings as settings_svc
 from farmafacil.services.user_memory import get_memory, update_memory
@@ -337,6 +338,69 @@ async def _tool_update_suggestion(args: dict[str, Any]) -> str:
         return f"Sugerencia #{sid} no existe."
     logger.info("admin_chat.update_suggestion id=%d values=%s", sid, list(values))
     return f"Sugerencia #{sid} actualizada."
+
+
+# ── Voice message tools ──────────────────────────────────────────────────
+
+async def _tool_list_voice_messages(args: dict[str, Any]) -> str:
+    """List recent voice messages, optionally filtered by user phone."""
+    limit = int(args.get("limit", 10) or 10)
+    limit = max(1, min(limit, 50))
+    phone = args.get("phone")
+
+    async with async_session() as session:
+        stmt = (
+            select(VoiceMessage)
+            .order_by(desc(VoiceMessage.created_at))
+            .limit(limit)
+        )
+        if phone:
+            stmt = stmt.where(VoiceMessage.phone_number == str(phone))
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+    if not rows:
+        return "Sin mensajes de voz."
+    lines = [f"Mensajes de voz ({len(rows)}):"]
+    for r in rows:
+        tx = _truncate(r.transcription or "(sin transcripción)", 50)
+        lang = r.original_language or "?"
+        dur = f"{r.duration_seconds:.0f}s" if r.duration_seconds else "?"
+        lines.append(
+            f"🎙️ #{r.id} [{lang}] {dur} — {tx} "
+            f"(tel: {r.phone_number}, {r.created_at:%Y-%m-%d %H:%M})"
+        )
+    return "\n".join(lines)
+
+
+async def _tool_get_voice_message(args: dict[str, Any]) -> str:
+    """Get full details of a single voice message by ID."""
+    vm_id = int(args.get("id") or 0)
+    if not vm_id:
+        return "Falta id."
+    async with async_session() as session:
+        result = await session.execute(
+            select(VoiceMessage).where(VoiceMessage.id == vm_id)
+        )
+        vm = result.scalar_one_or_none()
+    if not vm:
+        return f"Mensaje de voz #{vm_id} no existe."
+    dur = f"{vm.duration_seconds:.1f}s" if vm.duration_seconds else "(desconocido)"
+    return (
+        f"Mensaje de voz #{vm.id}\n"
+        f"Usuario_id: {vm.user_id}\n"
+        f"Teléfono: {vm.phone_number}\n"
+        f"Idioma: {vm.original_language or '(no detectado)'}\n"
+        f"Duración: {dur}\n"
+        f"Audio: {vm.audio_path}\n"
+        f"Transcripción: {vm.transcription or '(sin transcripción)'}\n"
+        f"Traducción ES: {vm.translation_es or '(pendiente)'}\n"
+        f"Traducción EN: {vm.translation_en or '(pendiente)'}\n"
+        f"Modelo: {vm.transcription_model or '(desconocido)'}\n"
+        f"WA msg: {vm.wa_message_id}\n"
+        f"Conversación: #{vm.conversation_log_id or '(no vinculado)'}\n"
+        f"Fecha: {vm.created_at:%Y-%m-%d %H:%M}"
+    )
 
 
 # ── Conversation log tools ─────────────────────────────────────────────
@@ -1455,6 +1519,15 @@ TOOLS: dict[str, tuple[str, Any]] = {
     "update_suggestion": (
         "Marcar sugerencia revisada o agregar notas. Args: id, reviewed?, admin_notes?",
         _tool_update_suggestion,
+    ),
+    # Voice messages
+    "list_voice_messages": (
+        "Listar mensajes de voz recientes. Args: limit?, phone?",
+        _tool_list_voice_messages,
+    ),
+    "get_voice_message": (
+        "Ver detalles de un mensaje de voz por id. Args: id",
+        _tool_get_voice_message,
     ),
     # Conversation logs
     "list_conversation_logs": (

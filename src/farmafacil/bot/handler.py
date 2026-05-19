@@ -509,6 +509,124 @@ async def _update_memory_safe(
         logger.error("Memory update failed (non-blocking)", exc_info=True)
 
 
+async def handle_voice_message(
+    sender: str,
+    media_id: str,
+    wa_message_id: str | None = None,
+) -> None:
+    """Handle a voice note sent via WhatsApp.
+
+    Downloads the audio, stores it locally, transcribes via Whisper,
+    then feeds the transcription into handle_incoming_message as if
+    the user had typed it.
+
+    Args:
+        sender: WhatsApp phone number.
+        media_id: WhatsApp media ID for downloading the audio.
+        wa_message_id: WhatsApp message ID for read receipts.
+    """
+    from farmafacil.services.media import download_whatsapp_media
+    from farmafacil.services.voice import (
+        MAX_AUDIO_BYTES,
+        save_audio_file,
+        transcribe_audio,
+        get_audio_absolute_path,
+    )
+
+    if wa_message_id:
+        asyncio.create_task(send_read_receipt(sender, wa_message_id))
+
+    user = await get_or_create_user(sender)
+    user = await validate_user_profile(user)
+
+    # Download the audio file from WhatsApp
+    result = await download_whatsapp_media(media_id)
+    if result is None:
+        await send_text_message(
+            sender,
+            "🎙️ No pude descargar el audio. ¿Puedes escribir tu mensaje por texto?",
+        )
+        return
+
+    data, mime_type = result
+
+    # Check size limit
+    if len(data) > MAX_AUDIO_BYTES:
+        await send_text_message(
+            sender,
+            "🎙️ El audio es muy largo. Intenta con un mensaje más corto o escríbelo por texto.",
+        )
+        return
+
+    # Save audio to disk
+    safe_wa_id = wa_message_id or "no_id"
+    audio_relative_path = save_audio_file(data, user.id, safe_wa_id)
+    audio_absolute_path = get_audio_absolute_path(audio_relative_path)
+
+    # Transcribe via Whisper (returns text, language, duration)
+    transcription, detected_lang, duration = await transcribe_audio(audio_absolute_path)
+
+    # Store voice message record in DB
+    from farmafacil.db.session import async_session
+    from farmafacil.models.database import VoiceMessage
+
+    # Find the conversation_log entry for this message (if wa_message_id available)
+    conversation_log_id = None
+    if wa_message_id:
+        from sqlalchemy import select
+        from farmafacil.models.database import ConversationLog
+        async with async_session() as session:
+            stmt = select(ConversationLog.id).where(
+                ConversationLog.wa_message_id == wa_message_id
+            ).order_by(ConversationLog.id.desc()).limit(1)
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row:
+                conversation_log_id = row
+
+    try:
+        async with async_session() as session:
+            voice_msg = VoiceMessage(
+                user_id=user.id,
+                phone_number=sender,
+                audio_path=audio_relative_path,
+                duration_seconds=duration,
+                original_language=detected_lang,
+                transcription=transcription,
+                wa_message_id=wa_message_id,
+                conversation_log_id=conversation_log_id,
+                transcription_model="whisper-1" if transcription else None,
+            )
+            session.add(voice_msg)
+            await session.commit()
+            logger.info(
+                "Voice message saved: id=%d user=%d duration=%.1fs transcription='%s'",
+                voice_msg.id, user.id, duration or 0, (transcription or "")[:60],
+            )
+    except Exception:
+        # DB commit failed — clean up orphan audio file to avoid disk leaks
+        logger.exception("Failed to save VoiceMessage to DB; removing orphan audio")
+        try:
+            audio_absolute_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove orphan audio file: %s", audio_absolute_path)
+        raise
+
+    if not transcription:
+        await send_text_message(
+            sender,
+            "🎙️ No pude entender el audio. ¿Puedes escribir tu mensaje por texto?",
+        )
+        return
+
+    # Send acknowledgment showing what we heard
+    # Truncate display to 100 chars for readability
+    display_text = transcription[:100] + ("..." if len(transcription) > 100 else "")
+    await send_text_message(sender, f"🎙️ Te escuché: _{display_text}_")
+
+    # Process the transcription as a normal text message
+    await handle_incoming_message(sender, transcription, wa_message_id=wa_message_id)
+
+
 async def handle_image_message(
     sender: str,
     media_id: str,

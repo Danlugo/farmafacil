@@ -113,6 +113,7 @@ All roles, rules, skills, and user memories are editable via `/admin`.
 | WhatsApp Business Cloud API | Send/receive messages | WHATSAPP_API_TOKEN (System User) |
 | OpenStreetMap Nominatim | Geocode Venezuelan zones | No key — User-Agent header |
 | Anthropic Claude Haiku | Intent detection fallback | ANTHROPIC_API_KEY |
+| OpenAI Whisper API | Voice message transcription (v0.22.0) | OPENAI_API_KEY |
 | NIH RxNorm/RxNav API | Drug interaction checking | No auth required |
 
 ## Database Schema
@@ -208,6 +209,7 @@ Physical store locations, backfilled from Farmatodo API on startup.
 | search_logs | Analytics — query, result count, source (whatsapp/api) |
 | app_settings | Admin-editable key/value config (cache TTL, etc.) |
 | product_keywords | Inverted index of keyword tokens per product (FK → products CASCADE). Added in v0.12.6 (Item 30) so `find_cross_chain_matches` can run a single indexed SQL query (`WHERE keyword IN (...) GROUP BY product_id HAVING COUNT(DISTINCT keyword) = N`) instead of loading every product with keywords into memory. Populated automatically by `_upsert_product → _sync_product_keywords`; idempotent backfill in `init_db()` for existing deployments. |
+| voice_messages | Voice notes: audio_path, transcription (Whisper), language, duration, FK→users + conversation_logs. Translation columns (`translation_es`, `translation_en`) are shell for future use (v0.22.0). |
 
 ## Product Catalog Design
 

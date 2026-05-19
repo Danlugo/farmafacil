@@ -9,11 +9,13 @@ Every incoming message follows this entry path:
 ```
 POST /webhook
   → log_inbound()
-  → handle_incoming_message(sender, text)
-      → get_or_create_user(sender)
-      → validate_user_profile(user)
-      → send_read_receipt(sender, wa_message_id)  ← fire-and-forget
-      → route by onboarding_step or intent
+  → route by msg_type:
+      text     → handle_incoming_message(sender, text)
+      location → handle_location_message(sender, lat, lng)
+      image    → handle_image_message(sender, media_id, mime_type)
+      document → handle_image_message(sender, media_id, mime_type)
+      audio    → handle_voice_message(sender, media_id)        ← v0.22.0
+      interactive → handle_list_reply(sender, reply_id)
 ```
 
 **Read receipt:** A read receipt (`status: "read"`) is sent as fire-and-forget via `asyncio.create_task()` immediately after user validation. This marks the message with blue check marks and triggers the typing indicator bubble. Uses WhatsApp Cloud API v22.0 messages endpoint. Non-blocking — failures are silently logged.
@@ -294,6 +296,34 @@ New `app_setting` `category_menu_enabled` (default `"true"`). Flip to `"false"` 
 ### What the category does NOT do
 
 Category selection is **not** a scraper-side filter in v0.13.2. The drug search runs against all pharmacies unchanged. Adding actual category filtering (Farmatodo Algolia `facetFilters`, VTEX `categoryId`) is deferred to a future item — see IMPROVEMENT-PLAN.md.
+
+---
+
+## Voice Messages (v0.22.0)
+
+When a user sends a voice note, the webhook dispatches to `handle_voice_message()`.
+
+```
+audio msg → download_whatsapp_media(media_id)
+          → save_audio_file(data, user_id, wa_message_id)
+          → transcribe_audio(file_path)  ← OpenAI Whisper API
+          → store VoiceMessage row in DB
+          → send ack: "🎙️ Te escuché: _{transcription}_"
+          → handle_incoming_message(sender, transcription)
+```
+
+| Scenario | Bot response |
+|----------|-------------|
+| Download fails | "No pude descargar el audio. ¿Puedes escribir tu mensaje por texto?" |
+| Audio > 25 MB | "El audio es muy largo. Intenta con un mensaje más corto." |
+| Transcription fails | "No pude entender el audio. ¿Puedes escribir tu mensaje por texto?" |
+| Success | Ack with transcription, then process as normal text message |
+
+**Storage:** Audio files are saved to `/data/audio/{user_id}/{YYYYMMDD}_{wa_msg_id}.ogg`. The `voice_messages` table tracks metadata, transcription, and links to `conversation_logs`.
+
+**Admin:** SQLAdmin read-only view with HTML5 `<audio>` player. Audio served via `GET /api/v1/audio/{voice_message_id}`. Admin chat tools: `list_voice_messages`, `get_voice_message`.
+
+**Translation:** Shell columns (`translation_es`, `translation_en`) reserved for future multi-language support — always NULL in v0.22.0.
 
 ---
 

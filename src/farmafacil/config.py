@@ -48,6 +48,9 @@ MODEL_ALIASES: dict[str, str] = {
     "opus": LLM_MODEL_OPUS,
 }
 
+# OpenAI Whisper API (voice message transcription)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
 # Web search (Brave API — admin chat tool)
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 
