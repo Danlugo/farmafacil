@@ -221,7 +221,11 @@ When results DO exist but some scrapers failed, the header shows `⚠️ No pudi
 
 ---
 
-## Clarification Flow (for vague categories)
+## Clarification Flow (for vague queries)
+
+The `clarify_needed` classification triggers in **two** scenarios: vague product categories and vague symptoms.
+
+### Vague product categories
 
 When a user asks for a CATEGORY that comes in multiple form factors (e.g., "medicinas para la memoria", "algo para dormir", "vitaminas") instead of naming a specific product, the AI classifier returns `action: clarify_needed` with a `CLARIFY_QUESTION` and `CLARIFY_CONTEXT`. The handler then:
 
@@ -249,6 +253,22 @@ On the **next** incoming message from that user, the handler detects the stashed
 - ❌ Never use `clarify_needed` when the user names a specific product, brand, or ingredient: "omeprazol", "protector solar", "aspirina", "Trojan ultradelgado"
 - ❌ Never use `clarify_needed` in mid-onboarding (the check is gated on `step is None`)
 - 💡 **Why this matters (v0.17.2):** clarifying first means no pharmacy API calls (Farmatodo Algolia + 2 VTEX) before we know what to search. Personal-care categories (condones, anticonceptivos, lentes, kit dental, higiene íntima) were added in Item 44 after Jose's "necesito condones" test produced 37 generic results then crashed the turn on a Farmatodo `/stores/nearby` 409.
+
+### Vague symptoms (v0.22.4)
+
+When a user mentions a symptom that is too vague to determine which OTC options to suggest, the AI classifies as `clarify_needed` and asks what type of symptom before listing options. This is different from **specific** symptoms (dolor de cabeza, acidez, gripe) which go to `question` with OTC options immediately.
+
+| User says | Classification | Bot asks |
+|-----------|---------------|----------|
+| "dolor" / "dolores" / "me duele" | `clarify_needed` | "¿Qué tipo de dolor? (cabeza, muscular, articulaciones, espalda, menstrual, estómago)" |
+| "malestar" / "me siento mal" | `clarify_needed` | "¿Qué síntomas tienes? (dolor de cabeza, fiebre, náuseas, gripe, dolor muscular)" |
+| "alergia" / "tengo alergia" | `clarify_needed` | "¿Qué tipo de alergia? (nasal, piel, ojos)" |
+| "fiebre" / "tengo fiebre" (specific) | `question` | Lists Acetaminofén, Ibuprofeno directly |
+| "inflamación" | `clarify_needed` | "¿Dónde tienes la inflamación?" |
+| "dolor de cabeza" (specific) | `question` | Lists Acetaminofén, Ibuprofeno, Aspirina directly |
+| "acidez" (specific) | `question` | Lists Omeprazol, Ranitidina, antiácidos directly |
+
+The handler reuses the same clarification flow as vague categories — stash context, send question, merge answer on next message, search.
 
 If the LLM returns `ACTION: clarify_needed` without a `CLARIFY_QUESTION`, the parser defensively degrades to `drug_search` so the user is never left hanging.
 

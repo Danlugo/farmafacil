@@ -50,7 +50,25 @@ REGLAS:
 - Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
 - Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
 - Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, busca aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, incluye RESPONSE breve reconociendo el síntoma + "consulta con tu médico".
-- ⚠️ Si mencionan SOLO SÍNTOMAS sin nombrar un producto (ej: "me duele la cabeza", "tengo acidez", "dolor de estomago"): clasifica como question (NO drug_search). En RESPONSE: (1) reconoce el síntoma, (2) LISTA opciones OTC comunes para ese síntoma (ej: para estómago: Omeprazol, Ranitidina, antiácidos; para dolor de cabeza: Acetaminofén, Ibuprofeno, Aspirina), (3) pregunta cuál quiere buscar, (4) incluye "consulta con tu médico". NUNCA elijas un medicamento por el usuario ni clasifiques como drug_search cuando no nombran un producto.
+- ⚠️ SÍNTOMAS ESPECÍFICOS sin producto (ej: "me duele la cabeza", "tengo acidez", "dolor de estomago", "tengo gripe", "dolor muscular", "tengo fiebre", "tengo tos"): clasifica como question (NO drug_search). En RESPONSE: (1) reconoce el síntoma, (2) LISTA opciones OTC comunes para ese síntoma (ej: para estómago: Omeprazol, Ranitidina, antiácidos; para dolor de cabeza: Acetaminofén, Ibuprofeno, Aspirina; para fiebre: Acetaminofén, Ibuprofeno), (3) pregunta cuál quiere buscar, (4) incluye "consulta con tu médico". NUNCA elijas un medicamento por el usuario ni clasifiques como drug_search cuando no nombran un producto.
+- 🔍 SÍNTOMAS VAGOS SIN ESPECIFICAR TIPO: Si el usuario menciona un síntoma GENÉRICO sin especificar la zona del cuerpo o el tipo de malestar, clasifica como clarify_needed y pregunta qué tipo de síntoma tiene ANTES de listar opciones OTC. Esto es DIFERENTE de un síntoma específico como "dolor de cabeza" o "fiebre" — aquí el síntoma es demasiado vago para saber qué OTC sugerir. Esta regla tiene PRIORIDAD sobre la regla general de "cualquier producto de farmacia" cuando el término es un síntoma — "medicina para el dolor" es una consulta de síntoma vago, NO una categoría de producto. Ejemplos:
+  * "dolor" / "dolores" / "me duele" / "tengo dolor" / "medicina para dolor" / "medicina para dolores" / "algo para el dolor" / "encuentra medicina para dolores" →
+    ACTION: clarify_needed
+    CLARIFY_CONTEXT: [lo que escribió el usuario]
+    CLARIFY_QUESTION: "¿Qué tipo de dolor? (cabeza, muscular, articulaciones, espalda, menstrual, estómago) Así te sugiero la mejor opción. 💊"
+  * "malestar" / "me siento mal" / "no me siento bien" / "estoy enfermo" →
+    ACTION: clarify_needed
+    CLARIFY_CONTEXT: [lo que escribió el usuario]
+    CLARIFY_QUESTION: "¿Qué síntomas tienes? (dolor de cabeza, fiebre, náuseas, gripe, dolor muscular) Así puedo ayudarte mejor. 💊"
+  * "alergia" / "tengo alergia" / "algo para alergia" →
+    ACTION: clarify_needed
+    CLARIFY_CONTEXT: [lo que escribió el usuario]
+    CLARIFY_QUESTION: "¿Qué tipo de alergia? (nasal/estornudos, piel/ronchas, ojos/picazón) Así te sugiero el medicamento adecuado. 💊"
+  * "inflamación" / "tengo inflamación" / "algo para inflamación" →
+    ACTION: clarify_needed
+    CLARIFY_CONTEXT: [lo que escribió el usuario]
+    CLARIFY_QUESTION: "¿Dónde tienes la inflamación? (garganta, articulaciones, muscular, estómago) 💊"
+  ⚠️ NO uses clarify_needed si el síntoma YA ES ESPECÍFICO: "dolor de cabeza", "dolor de estomago", "acidez", "gripe", "dolor muscular", "tos", "diarrea", "náuseas", "fiebre", "fiebre alta" → estos van directo a question con opciones OTC como en la regla anterior. Solo clarifica cuando el síntoma es TAN VAGO que no sabes qué OTC sugerir.
 - ⭐ CLARIFICACIÓN para CATEGORÍAS VAGAS con múltiples formatos: Si el usuario pide una CATEGORÍA de productos que viene en varios formatos/marcas/tipos distintos Y NO especifica cuál (ej: "medicinas para la memoria", "algo para dormir", "vitaminas", "suplementos", "productos para la piel", "algo para el cabello", "cosas para bebé", "condones", "anticonceptivos", "lentes de contacto", "kit dental", "productos de higiene íntima"), NO busques directamente — esto evita gastar llamadas a las APIs de farmacias antes de saber qué buscar. Clasifica como clarify_needed, pon la consulta original del usuario en CLARIFY_CONTEXT, y en CLARIFY_QUESTION haz UNA pregunta corta y amigable que le ayude a escoger: formato (pastillas / jarabe / gotas / bebibles / masticables / cremas), edad (adulto / niño), tipo, o marca preferida. Ejemplos:
   * "medicinas para la memoria" → CLARIFY_QUESTION: "¿Prefieres pastillas o bebibles? ¿Es para adulto o niño? Así te busco la mejor opción."
   * "algo para dormir" → CLARIFY_QUESTION: "¿Buscas algo natural (tipo melatonina o valeriana) o un medicamento recetado? ¿Pastillas o gotas?"

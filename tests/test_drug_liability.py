@@ -591,23 +591,24 @@ class TestThreeLayerConsistency:
         assert "NUNCA como 'drug_search'" in content or "NO drug_search" in content or "NO como drug_search" in content or "NUNCA como drug_search" in content
 
     def test_classify_says_symptom_only_is_question(self):
-        """Layer 3: CLASSIFY_INSTRUCTIONS says symptom-only = question."""
+        """Layer 3: CLASSIFY_INSTRUCTIONS says specific symptom-only = question."""
         instructions = self._get_classify_instructions()
-        # Must contain the symptom-only rule pointing to question
-        assert "SOLO SÍNTOMAS sin nombrar un producto" in instructions
+        # Must contain the specific-symptom rule pointing to question
+        # (renamed from "SOLO SÍNTOMAS" to "SÍNTOMAS ESPECÍFICOS" in v0.22.4)
+        assert "SÍNTOMAS ESPECÍFICOS sin producto" in instructions
         assert "clasifica como question (NO drug_search)" in instructions
 
     def test_classify_does_not_say_symptom_is_drug_search(self):
         """Layer 3: CLASSIFY_INSTRUCTIONS must NOT say symptom-only = drug_search."""
         instructions = self._get_classify_instructions()
-        # Find the symptom-only rule line and verify it says question
+        # Find the specific-symptom rule line and verify it says question
         for line in instructions.split("\n"):
-            if "SOLO SÍNTOMAS sin nombrar" in line:
+            if "SÍNTOMAS ESPECÍFICOS sin producto" in line:
                 assert "drug_search" not in line.split("question")[0], \
                     f"Symptom-only line says drug_search BEFORE question: {line}"
                 break
         else:
-            pytest.fail("Symptom-only rule not found in CLASSIFY_INSTRUCTIONS")
+            pytest.fail("Specific-symptom rule not found in CLASSIFY_INSTRUCTIONS")
 
     # ── All three layers require doctor disclaimer ──
 

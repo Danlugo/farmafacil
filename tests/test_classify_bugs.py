@@ -1,4 +1,4 @@
-"""Tests for bug #17 and #18 fixes — AI classification prompt improvements.
+"""Tests for AI classification prompt improvements.
 
 Bug #18 (Jose Miguel C, 2026-05-09):
     User asked "puedes decirme si consigues melatonina de laboratorio Arco iris"
@@ -11,6 +11,13 @@ Bug #17 (Jose, 2026-04-29):
     back with no action. Root cause: AI didn't map medical exam mentions to
     pharmacy supplies. Fix: CLASSIFY_INSTRUCTIONS now maps exam types to the
     supplies pharmacies sell (recolector de heces, recolector de orina, etc.).
+
+Vague symptom clarification (Daniel, 2026-05-19):
+    User sent voice note "Encuentra medicina para dolores" → bot listed generic
+    OTC pain meds instead of asking what type of pain. Root cause: symptom rule
+    treated vague "dolores" the same as specific "dolor de cabeza". Fix: new
+    CLASSIFY_INSTRUCTIONS rule sends vague symptoms to clarify_needed to ask
+    what body part / symptom type before listing OTC options.
 """
 
 from __future__ import annotations
@@ -197,6 +204,223 @@ class TestBug17MedicalExamSupplies:
         assert "examen" in result.text.lower()
 
 
+# ── Vague symptom → clarify_needed ───────────────────────────────────
+
+
+class TestVagueSymptomClarification:
+    """Verify CLASSIFY_INSTRUCTIONS handles vague symptoms with clarification."""
+
+    def test_instructions_contain_vague_symptom_rule(self):
+        """CLASSIFY_INSTRUCTIONS includes the vague symptom clarification rule."""
+        assert "SÍNTOMAS VAGOS SIN ESPECIFICAR TIPO" in CLASSIFY_INSTRUCTIONS
+
+    def test_instructions_contain_dolor_example(self):
+        """The dolor/dolores → clarify example is present."""
+        lower = CLASSIFY_INSTRUCTIONS.lower()
+        assert "¿qué tipo de dolor?" in lower
+
+    def test_instructions_contain_malestar_example(self):
+        """The malestar → clarify example is present."""
+        lower = CLASSIFY_INSTRUCTIONS.lower()
+        assert "¿qué síntomas tienes?" in lower
+
+    def test_instructions_fiebre_is_specific_not_vague(self):
+        """Fiebre is specific enough for direct OTC listing, not clarify."""
+        # Fiebre has a narrow OTC set (Acetaminofén/Ibuprofeno) — no need
+        # to ask "what kind of fever". It lives in the specific-symptom rule.
+        specific_section = CLASSIFY_INSTRUCTIONS[
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS ESPECÍFICOS"):
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS")
+        ]
+        assert "fiebre" in specific_section.lower()
+
+    def test_instructions_contain_alergia_example(self):
+        """The alergia → clarify example is present."""
+        lower = CLASSIFY_INSTRUCTIONS.lower()
+        assert "¿qué tipo de alergia?" in lower
+
+    def test_instructions_contain_inflamacion_example(self):
+        """The inflamación → clarify example is present."""
+        lower = CLASSIFY_INSTRUCTIONS.lower()
+        assert "¿dónde tienes la inflamación?" in lower
+
+    def test_instructions_warn_specific_symptoms_no_clarify(self):
+        """Rule explicitly says NOT to clarify specific symptoms."""
+        assert "NO uses clarify_needed si el síntoma YA ES ESPECÍFICO" in CLASSIFY_INSTRUCTIONS
+
+    def test_instructions_list_specific_symptom_exceptions(self):
+        """Specific symptoms that should NOT trigger clarification are listed."""
+        lower = CLASSIFY_INSTRUCTIONS.lower()
+        for specific in ["dolor de cabeza", "dolor de estomago", "acidez", "gripe",
+                         "dolor muscular", "tos", "diarrea", "náuseas", "fiebre",
+                         "fiebre alta"]:
+            assert specific in lower, f"Specific symptom '{specific}' not in exceptions"
+
+    def test_parse_vague_dolor_clarify_response(self):
+        """Parser correctly handles a vague-dolor clarify_needed response.
+
+        This is Daniel's actual repro (2026-05-19): voice note transcribed to
+        "Encuentra medicina para dolores" → should get clarify_needed, not
+        a generic OTC list.
+        """
+        reply = (
+            "ACTION: clarify_needed\n"
+            "CLARIFY_CONTEXT: medicina para dolores\n"
+            "CLARIFY_QUESTION: ¿Qué tipo de dolor? (cabeza, muscular, "
+            "articulaciones, espalda, menstrual, estómago) Así te sugiero "
+            "la mejor opción. 💊"
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "clarify_needed"
+        assert result.clarify_question is not None
+        assert "dolor" in result.clarify_question.lower()
+        assert result.clarify_context is not None
+        assert "dolores" in result.clarify_context.lower()
+
+    def test_parse_vague_malestar_clarify_response(self):
+        """Parser correctly handles a vague-malestar clarify_needed response."""
+        reply = (
+            "ACTION: clarify_needed\n"
+            "CLARIFY_CONTEXT: me siento mal\n"
+            "CLARIFY_QUESTION: ¿Qué síntomas tienes? (dolor de cabeza, "
+            "fiebre, náuseas, gripe, dolor muscular) Así puedo ayudarte "
+            "mejor. 💊"
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "clarify_needed"
+        assert "síntomas" in result.clarify_question.lower()
+        assert "me siento mal" in result.clarify_context.lower()
+
+    def test_parse_fiebre_should_be_question_not_clarify(self):
+        """Fiebre is specific enough — goes to question with OTC options."""
+        reply = (
+            "ACTION: question\n"
+            "RESPONSE: Para la fiebre, opciones comunes de venta libre son "
+            "Acetaminofén e Ibuprofeno. ¿Cuál quieres que te busque? "
+            "Consulta con tu médico."
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "question"
+        assert "acetaminofén" in result.text.lower()
+
+    def test_parse_vague_alergia_clarify_response(self):
+        """Parser correctly handles a vague alergia clarify_needed response."""
+        reply = (
+            "ACTION: clarify_needed\n"
+            "CLARIFY_CONTEXT: algo para alergia\n"
+            "CLARIFY_QUESTION: ¿Qué tipo de alergia? (nasal/estornudos, "
+            "piel/ronchas, ojos/picazón) Así te sugiero el medicamento "
+            "adecuado. 💊"
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "clarify_needed"
+        assert "alergia" in result.clarify_question.lower()
+
+    def test_parse_specific_symptom_should_be_question(self):
+        """Specific symptom 'dolor de cabeza' goes to question, NOT clarify."""
+        reply = (
+            "ACTION: question\n"
+            "RESPONSE: Para dolor de cabeza, opciones comunes de venta "
+            "libre son Acetaminofén, Ibuprofeno y Aspirina. ¿Cuál quieres "
+            "que te busque? Consulta con tu médico."
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "question"
+        assert result.text  # Has OTC options in RESPONSE
+
+    def test_parse_specific_symptom_acidez_should_be_question(self):
+        """Specific symptom 'acidez' goes to question with OTC options."""
+        reply = (
+            "ACTION: question\n"
+            "RESPONSE: Para la acidez, opciones comunes son Omeprazol, "
+            "Ranitidina y antiácidos. ¿Cuál quieres que te busque?"
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "question"
+        assert "omeprazol" in result.text.lower()
+
+    def test_parse_inflamacion_clarify_response(self):
+        """Parser correctly handles a vague inflamación clarify_needed response."""
+        reply = (
+            "ACTION: clarify_needed\n"
+            "CLARIFY_CONTEXT: tengo inflamación\n"
+            "CLARIFY_QUESTION: ¿Dónde tienes la inflamación? "
+            "(garganta, articulaciones, muscular, estómago) 💊"
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "clarify_needed"
+        assert "inflamación" in result.clarify_question.lower()
+
+
+    def test_parse_clarify_needed_missing_context_falls_back_to_none(self):
+        """When LLM omits CLARIFY_CONTEXT, parser sets it to None.
+
+        The handler fallback at handler.py:1905 then uses the raw user text
+        as context. This test documents that the parser returns None (not
+        empty string or error) so the handler fallback is the intended path.
+        """
+        reply = (
+            "ACTION: clarify_needed\n"
+            "CLARIFY_QUESTION: ¿Qué tipo de dolor? (cabeza, muscular, "
+            "articulaciones) 💊"
+            # Note: no CLARIFY_CONTEXT line
+        )
+        result = _parse_structured_response(reply)
+        assert result.action == "clarify_needed"
+        assert result.clarify_question is not None
+        assert result.clarify_context is None  # handler uses raw text as fallback
+
+    def test_instructions_contain_priority_tiebreaker(self):
+        """The vague-symptom rule explicitly states priority over product rule."""
+        assert "PRIORIDAD sobre la regla general" in CLASSIFY_INSTRUCTIONS
+
+    def test_instructions_contain_encuentra_medicina_example(self):
+        """Daniel's exact voice transcription is in the examples."""
+        assert "encuentra medicina para dolores" in CLASSIFY_INSTRUCTIONS.lower()
+
+    def test_fiebre_in_specific_exceptions_list(self):
+        """Fiebre is listed in the exceptions (specific, not vague)."""
+        # Find the exceptions list at the end of the vague-symptom rule
+        vague_section = CLASSIFY_INSTRUCTIONS[
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS"):
+            CLASSIFY_INSTRUCTIONS.index("CATEGORÍAS VAGAS")
+        ]
+        assert "fiebre" in vague_section.lower()
+        assert "fiebre alta" in vague_section.lower()
+
+
+class TestVagueSymptomVsSpecificRegression:
+    """Ensure the vague symptom rule doesn't interfere with specific symptoms."""
+
+    def test_specific_symptom_rule_still_present(self):
+        """The specific-symptom → question rule is still in the instructions."""
+        assert "SÍNTOMAS ESPECÍFICOS sin producto" in CLASSIFY_INSTRUCTIONS
+
+    def test_vague_rule_comes_after_specific_rule(self):
+        """Vague symptom rule is positioned after the specific symptom rule."""
+        specific_pos = CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS ESPECÍFICOS")
+        vague_pos = CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS")
+        assert vague_pos > specific_pos, (
+            "Vague symptom rule must come AFTER specific symptom rule"
+        )
+
+    def test_both_rules_reference_clarify_needed(self):
+        """Vague symptom rule uses clarify_needed, specific uses question."""
+        # Specific symptom rule says "clasifica como question"
+        specific_section = CLASSIFY_INSTRUCTIONS[
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS ESPECÍFICOS"):
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS")
+        ]
+        assert "question" in specific_section
+
+        # Vague symptom rule says "clasifica como clarify_needed"
+        vague_section = CLASSIFY_INSTRUCTIONS[
+            CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS"):
+            CLASSIFY_INSTRUCTIONS.index("CATEGORÍAS VAGAS")
+        ]
+        assert "clarify_needed" in vague_section
+
+
 # ── Regression guards ─────────────────────────────────────────────────
 
 
@@ -205,7 +429,7 @@ class TestClassifyInstructionsRegression:
 
     def test_symptom_rule_still_present(self):
         """Symptom-only → question rule is intact."""
-        assert "SOLO SÍNTOMAS" in CLASSIFY_INSTRUCTIONS
+        assert "SÍNTOMAS ESPECÍFICOS sin producto" in CLASSIFY_INSTRUCTIONS
 
     def test_clarify_vague_categories_still_present(self):
         """Vague category → clarify_needed rule is intact."""
