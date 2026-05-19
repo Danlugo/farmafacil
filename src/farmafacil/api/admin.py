@@ -77,7 +77,8 @@ USER_CHAT_DEBUG_CHOICES: list[tuple[str, str]] = [
 # the steps set by bot/handler.py and services/users.py. See:
 #   services/users.py: "welcome" (initial)
 #   bot/handler.py: "awaiting_name", "awaiting_location",
-#                   "awaiting_feedback", "awaiting_feedback_detail"
+#                   "awaiting_feedback", "awaiting_feedback_detail",
+#                   "awaiting_post_suggestion", "awaiting_post_bug"
 # (services/users.py also references "awaiting_preference" in the validation
 # branch for legacy rows; keep it as a selectable value so admins can repair
 # stuck rows.)
@@ -88,7 +89,9 @@ USER_ONBOARDING_STEP_CHOICES: list[tuple[str, str]] = [
     ("awaiting_location", "awaiting_location"),
     ("awaiting_preference", "awaiting_preference (legacy)"),
     ("awaiting_feedback", "awaiting_feedback"),
-    ("awaiting_feedback_detail", "awaiting_feedback_detail"),
+    ("awaiting_feedback_detail", "awaiting_feedback_detail (legacy)"),
+    ("awaiting_post_suggestion", "awaiting_post_suggestion"),
+    ("awaiting_post_bug", "awaiting_post_bug"),
 ]
 
 # Counter / log-pointer fields rendered as readonly inputs in the edit form.

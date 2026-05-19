@@ -423,6 +423,71 @@ async def _call_llm(
         )
 
 
+# ── Feedback text re-wording (v0.22.2) ────────────────────────────────
+
+_REWORD_SYSTEM_PROMPT = """Eres un asistente que reformula texto de usuarios para un sistema de feedback de una app de farmacia en Venezuela (FarmaFacil).
+
+Tu trabajo: tomar el mensaje crudo del usuario (puede ser una transcripción de audio, con errores o lenguaje coloquial) y reescribirlo como una {feedback_type} clara y concisa en español, preservando el sentido original.
+
+REGLAS:
+- Máximo 2 oraciones.
+- Mantén el idioma español.
+- Preserva TODA la información relevante (nombres de productos, problemas específicos, ideas).
+- Corrige errores de transcripción obvios si los hay.
+- No inventes información que el usuario no dijo.
+- Si el texto ya es claro y corto, devuélvelo igual o con mínimos ajustes.
+- Responde SOLO con el texto reformulado, sin explicación ni prefijo."""
+
+
+_VALID_FEEDBACK_TYPES = ("sugerencia", "reporte de error")
+
+
+async def reword_for_feedback(
+    raw_text: str,
+    feedback_type: str = "sugerencia",
+) -> str:
+    """Re-word raw user text into a clean suggestion or bug report.
+
+    Uses a lightweight LLM call to clean up transcription artifacts,
+    colloquial language, or rambling into a clear, concise DB record.
+    Falls back to the raw text if the LLM is unavailable.
+
+    Args:
+        raw_text: The user's raw message (text or voice transcription).
+        feedback_type: "sugerencia" or "reporte de error" — affects
+            the system prompt tone.
+
+    Returns:
+        The re-worded text, or ``raw_text`` unchanged on failure.
+    """
+    if feedback_type not in _VALID_FEEDBACK_TYPES:
+        feedback_type = "sugerencia"
+
+    if not ANTHROPIC_API_KEY:
+        return raw_text.strip()
+
+    try:
+        # NOTE: blocking I/O in async context — same pattern as _call_llm.
+        # Acceptable for this low-frequency path (post-feedback only).
+        resolved_model = await resolve_user_model()
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=resolved_model,
+            max_tokens=200,
+            system=_REWORD_SYSTEM_PROMPT.format(feedback_type=feedback_type),
+            messages=[{"role": "user", "content": raw_text}],
+        )
+        reworded = response.content[0].text.strip()
+        logger.info(
+            "Reworded feedback (%s): '%s' → '%s'",
+            feedback_type, raw_text[:60], reworded[:60],
+        )
+        return reworded or raw_text.strip()
+    except Exception:
+        logger.warning("Reword failed — using raw text", exc_info=True)
+        return raw_text.strip()
+
+
 # ── Clarified-query refiner ────────────────────────────────────────────
 
 _REFINER_SYSTEM_PROMPT = """Eres un asistente de busqueda de productos de farmacia en Venezuela.

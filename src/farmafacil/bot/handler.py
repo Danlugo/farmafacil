@@ -19,6 +19,7 @@ from farmafacil.services.ai_responder import (
     classify_with_ai,
     generate_response,
     refine_clarified_query,
+    reword_for_feedback,
     run_admin_turn,
 )
 from farmafacil.services.admin_chat import build_tools_manifest
@@ -166,6 +167,35 @@ MSG_ASK_FEEDBACK = "\u00bfTe sirvi\u00f3? (s\u00ed/no)"
 MSG_FEEDBACK_THANKS = "\u00a1Gracias por tu respuesta! \U0001f44d"
 MSG_FEEDBACK_SORRY = "Lamento eso. \u00bfQu\u00e9 buscabas exactamente o qu\u00e9 estuvo mal?"
 MSG_FEEDBACK_DETAIL_THANKS = "Gracias por explicarnos. Vamos a mejorar. \U0001f4aa"
+
+# ── Post-feedback follow-up messages (v0.22.2) ────────────────────────
+MSG_POST_SUGGESTION_OFFER = (
+    "¡Gracias! 🙏 ¿Quieres dejar una sugerencia?\n\n"
+    "Escribe tu sugerencia o envía una nota de voz 🎙️\n"
+    "_Responde 'no' para continuar_"
+)
+MSG_POST_SUGGESTION_PROMPT = (
+    "Perfecto, escribe tu sugerencia o envía una nota de voz 🎙️"
+)
+MSG_POST_SUGGESTION_THANKS = (
+    "✅ ¡Gracias por tu sugerencia!\n\n"
+    "📋 *Sugerencia #{case_id}*\n\n"
+    "La revisaremos pronto."
+)
+MSG_POST_BUG_OFFER = (
+    "Lamento eso. ¿Quieres contarnos qué no funcionó?\n\n"
+    "Escribe tu mensaje o envía una nota de voz 🎙️\n"
+    "_Responde 'no' para continuar_"
+)
+MSG_POST_BUG_PROMPT = (
+    "Escribe tu mensaje o envía una nota de voz 🎙️"
+)
+MSG_POST_BUG_THANKS = (
+    "✅ ¡Gracias por contarnos!\n\n"
+    "📋 *Reporte #{case_id}*\n\n"
+    "Lo revisaremos pronto. 💪"
+)
+MSG_POST_FEEDBACK_SKIP = "No hay problema. ¡Gracias por tu respuesta! 👍"
 
 MSG_FEEDBACK_EMPTY = (
     "Por favor incluye tu {label} despu\u00e9s del comando.\n\n"
@@ -1228,7 +1258,10 @@ async def handle_incoming_message(
         # it BEFORE we do anything else — the `/bug` command is an escape
         # hatch and must release the state even if the feedback save fails
         # or the body is empty.
-        if step in ("awaiting_feedback", "awaiting_feedback_detail"):
+        if step in (
+            "awaiting_feedback", "awaiting_feedback_detail",
+            "awaiting_post_suggestion", "awaiting_post_bug",
+        ):
             await set_onboarding_step(sender, None)
 
         if not body:
@@ -1276,7 +1309,10 @@ async def handle_incoming_message(
     suggestion_body = parse_suggestion_command(text)
     if suggestion_body is not None:
         # Clear stuck feedback state if present (same escape-hatch as /bug)
-        if step in ("awaiting_feedback", "awaiting_feedback_detail"):
+        if step in (
+            "awaiting_feedback", "awaiting_feedback_detail",
+            "awaiting_post_suggestion", "awaiting_post_bug",
+        ):
             await set_onboarding_step(sender, None)
 
         if not suggestion_body:
@@ -1572,13 +1608,15 @@ async def handle_incoming_message(
         if feedback == "yes":
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "yes")
-            await set_onboarding_step(sender, None)
-            await send_text_message(sender, MSG_FEEDBACK_THANKS)
+            # v0.22.2: offer to leave a suggestion instead of just "thanks"
+            await set_onboarding_step(sender, "awaiting_post_suggestion")
+            await send_text_message(sender, MSG_POST_SUGGESTION_OFFER)
         elif feedback == "no":
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "no")
-            await set_onboarding_step(sender, "awaiting_feedback_detail")
-            await send_text_message(sender, MSG_FEEDBACK_SORRY)
+            # v0.22.2: offer to leave a bug report instead of generic detail
+            await set_onboarding_step(sender, "awaiting_post_bug")
+            await send_text_message(sender, MSG_POST_BUG_OFFER)
         else:
             # Not a feedback response — clear step and process normally
             await set_onboarding_step(sender, None)
@@ -1588,10 +1626,86 @@ async def handle_incoming_message(
             return
 
     if step == "awaiting_feedback_detail":
+        # Legacy state from pre-v0.22.2 — users stuck here should still work.
         if user.last_search_log_id:
             await record_feedback_detail(user.last_search_log_id, text)
         await set_onboarding_step(sender, None)
         await send_text_message(sender, MSG_FEEDBACK_DETAIL_THANKS)
+        return
+
+    if step == "awaiting_post_suggestion":
+        # v0.22.2: User was asked "¿Quieres dejar una sugerencia?"
+        feedback_reply = parse_feedback(text)
+        if feedback_reply == "no":
+            # User declined — just say thanks and move on
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_POST_FEEDBACK_SKIP)
+            return
+        if feedback_reply == "yes":
+            # User said "sí" — re-prompt to send actual content
+            await send_text_message(sender, MSG_POST_SUGGESTION_PROMPT)
+            return
+        # User sent actual suggestion text — reword and save
+        reworded = await reword_for_feedback(text, "sugerencia")
+        try:
+            case_id = await create_suggestion(
+                user_id=user.id,
+                phone_number=sender,
+                message=reworded,
+                voice_message_id=voice_message_id,
+            )
+            await set_onboarding_step(sender, None)
+            await send_text_message(
+                sender, MSG_POST_SUGGESTION_THANKS.format(case_id=case_id),
+            )
+        except Exception:
+            logger.exception("Failed to save post-feedback suggestion")
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_SUGGESTION_ERROR)
+        return
+
+    if step == "awaiting_post_bug":
+        # v0.22.2: User was asked "¿Quieres contarnos qué no funcionó?"
+        feedback_reply = parse_feedback(text)
+        if feedback_reply == "no":
+            # User declined — just say thanks and move on
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_POST_FEEDBACK_SKIP)
+            return
+        if feedback_reply == "yes":
+            # User said "sí" — re-prompt to send actual content
+            await send_text_message(sender, MSG_POST_BUG_PROMPT)
+            return
+        # User sent actual bug report text — reword and save
+        reworded = await reword_for_feedback(text, "reporte de error")
+        try:
+            case_id = await create_feedback(
+                user_id=user.id,
+                feedback_type="bug",
+                message=reworded,
+                phone_number=sender,
+                voice_message_id=voice_message_id,
+            )
+        except Exception:
+            logger.exception("Failed to save post-feedback bug report")
+            await set_onboarding_step(sender, None)
+            await send_text_message(sender, MSG_FEEDBACK_ERROR)
+            return
+        # Best-effort: annotate the search log with the bug detail too.
+        # Separated from the create_feedback try/except so users still see
+        # the confirmation even if this secondary write fails.
+        if user.last_search_log_id:
+            try:
+                await record_feedback_detail(user.last_search_log_id, reworded)
+            except Exception:
+                logger.warning(
+                    "Failed to annotate search_log %d with bug detail",
+                    user.last_search_log_id, exc_info=True,
+                )
+        await set_onboarding_step(sender, None)
+        await send_text_message(
+            sender, MSG_POST_BUG_THANKS.format(case_id=case_id),
+        )
         return
 
     # ── Onboarding complete — smart conversational flow ─────────────────

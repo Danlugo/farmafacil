@@ -1,6 +1,6 @@
 # FarmaFacil — WhatsApp Bot Conversation Flow
 
-> Last Updated: 2026-05-18
+> Last Updated: 2026-05-19
 
 ## Overview
 
@@ -365,10 +365,24 @@ After every drug search, the bot asks "¿Te sirvió? (sí/no)". The flow uses `o
 
 | Step | User sends | Bot behavior |
 |------|-----------|-------------|
-| `awaiting_feedback` | "sí", "si", "yes", "👍", "1" | Records positive feedback, thanks user |
-| `awaiting_feedback` | "no", "nop", "nope", "👎", "0" | Records negative feedback, asks follow-up |
+| `awaiting_feedback` | "sí", "si", "yes", "👍", "1" | Records positive feedback → offers suggestion |
+| `awaiting_feedback` | "no", "nop", "nope", "👎", "0" | Records negative feedback → offers bug report |
 | `awaiting_feedback` | anything else (incl. "gracias", "ok", "bien") | Clears step, processes as normal message |
-| `awaiting_feedback_detail` | any text | Records detail, thanks user |
+| `awaiting_post_suggestion` | "no" | Skips, thanks user |
+| `awaiting_post_suggestion` | "sí" | Re-prompts to send content |
+| `awaiting_post_suggestion` | text or voice | AI re-words → creates `user_suggestions` row |
+| `awaiting_post_bug` | "no" | Skips, thanks user |
+| `awaiting_post_bug` | "sí" | Re-prompts to send content |
+| `awaiting_post_bug` | text or voice | AI re-words → creates `user_feedback` row (bug) |
+| `awaiting_feedback_detail` | any text | Legacy state — records detail, thanks user |
+
+### Post-feedback follow-ups (v0.22.2)
+
+After YES feedback, the bot offers "¿Quieres dejar una sugerencia?" The user can write text or send a voice note. The text is re-worded via AI (`reword_for_feedback` in `ai_responder.py`) to clean up transcription artifacts and colloquial language, then saved to `user_suggestions`.
+
+After NO feedback, the bot offers "¿Quieres contarnos qué no funcionó?" Same text/voice input, re-worded via AI, saved to `user_feedback` as a bug report. The reworded text is also annotated on `search_logs.feedback_detail` (best-effort).
+
+Voice notes sent during these states flow naturally: `handle_voice_message` → transcribe → `handle_incoming_message` → state machine picks up the transcription.
 
 The positive/negative match sets are intentionally tight — ambiguous words like `gracias`, `ok`, `bien`, `perfecto` are common farewells and must NOT auto-record feedback (regression from Item 28: user Jose Lugo got the "thanks for feedback" message immediately after typing "gracias").
 
@@ -389,7 +403,7 @@ Users can submit bug reports or comments at any time via slash commands. The com
 
 **Confirmation format:** `✅ ¡Gracias! Tu reporte ha sido registrado. 📋 Caso #{id}. Nuestro equipo lo revisará pronto.`
 
-**Escape hatch behavior:** If the user is in `awaiting_feedback` or `awaiting_feedback_detail` state, the step is cleared BEFORE the `create_feedback()` call. Even if the DB write fails, the user is freed from the stuck state and sees an error message they can act on.
+**Escape hatch behavior:** If the user is in `awaiting_feedback`, `awaiting_feedback_detail`, `awaiting_post_suggestion`, or `awaiting_post_bug` state, the step is cleared BEFORE the `create_feedback()` call. Even if the DB write fails, the user is freed from the stuck state and sees an error message they can act on.
 
 Submissions are reviewed via the SQLAdmin dashboard at `/admin/user-feedback/` — reviewers can only edit `reviewed`, `reviewer_notes`, and `reviewed_at`. Each row links back to the latest inbound `conversation_logs` entry for context.
 

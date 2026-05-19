@@ -105,6 +105,9 @@ class TestOnboardingStepChoices:
             "awaiting_location",
             "awaiting_feedback",
             "awaiting_feedback_detail",
+            # v0.22.2: post-feedback follow-up states
+            "awaiting_post_suggestion",
+            "awaiting_post_bug",
             # Legacy step still referenced in services/users.py
             # validate_user_profile branch — keep selectable for repair.
             "awaiting_preference",
