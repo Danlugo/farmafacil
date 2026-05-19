@@ -21,12 +21,13 @@ from farmafacil.api.admin import (
     USER_DISPLAY_PREFERENCE_CHOICES,
     USER_FORM_TOOLTIPS,
     USER_ONBOARDING_STEP_CHOICES,
+    USER_POST_FEEDBACK_CHOICES,
     USER_READONLY_FIELDS,
     USER_RESPONSE_MODE_CHOICES,
     UserAdmin,
     _coerce_optional_str,
 )
-from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES
+from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES, _VALID_TOGGLE
 from farmafacil.services.store_backfill import FARMATODO_CITIES
 
 
@@ -89,6 +90,24 @@ class TestChatDebugChoices:
         assert non_blank == set(_VALID_DEBUG)
 
 
+class TestPostFeedbackChoices:
+    """post_feedback_suggestion / post_feedback_bug_report dropdowns come from
+    settings._VALID_TOGGLE."""
+
+    def test_blank_option_first(self):
+        # NULL means "use global".
+        assert USER_POST_FEEDBACK_CHOICES[0][0] == ""
+
+    def test_non_blank_values_match_valid_toggle(self):
+        non_blank = {value for value, _ in USER_POST_FEEDBACK_CHOICES if value}
+        assert non_blank == set(_VALID_TOGGLE)
+
+    def test_true_and_false_present(self):
+        values = {value for value, _ in USER_POST_FEEDBACK_CHOICES}
+        assert "true" in values
+        assert "false" in values
+
+
 class TestOnboardingStepChoices:
     """onboarding_step dropdown covers all states the bot writes."""
 
@@ -133,6 +152,12 @@ class TestFormOverrides:
     def test_chat_debug_is_select(self):
         assert UserAdmin.form_overrides["chat_debug"] is SelectField
 
+    def test_post_feedback_suggestion_is_select(self):
+        assert UserAdmin.form_overrides["post_feedback_suggestion"] is SelectField
+
+    def test_post_feedback_bug_report_is_select(self):
+        assert UserAdmin.form_overrides["post_feedback_bug_report"] is SelectField
+
     def test_onboarding_step_is_select(self):
         assert UserAdmin.form_overrides["onboarding_step"] is SelectField
 
@@ -171,6 +196,18 @@ class TestFormArgs:
         coerce = UserAdmin.form_args["chat_debug"]["coerce"]
         assert coerce("") is None
         assert coerce("enabled") == "enabled"
+
+    def test_post_feedback_suggestion_coerce_is_nullable(self):
+        coerce = UserAdmin.form_args["post_feedback_suggestion"]["coerce"]
+        assert coerce("") is None
+        assert coerce("true") == "true"
+        assert coerce("false") == "false"
+
+    def test_post_feedback_bug_report_coerce_is_nullable(self):
+        coerce = UserAdmin.form_args["post_feedback_bug_report"]["coerce"]
+        assert coerce("") is None
+        assert coerce("true") == "true"
+        assert coerce("false") == "false"
 
     def test_onboarding_step_coerce_is_nullable(self):
         coerce = UserAdmin.form_args["onboarding_step"]["coerce"]

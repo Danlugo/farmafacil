@@ -37,14 +37,18 @@ DEFAULTS: dict[str, tuple[str, str]] = {
         "itself always uses Opus regardless of this setting. (Item 35, v0.14.0)",
     ),
     "post_feedback_suggestion": (
-        "true",
+        "false",
         "After YES feedback on drug search, ask user if they want to leave "
-        "a suggestion (text or voice). Values: 'true' or 'false'. (v0.22.2)",
+        "a suggestion (text or voice). Values: 'true' or 'false'. Per-user "
+        "override via users.post_feedback_suggestion column. "
+        "(v0.22.2; default changed to 'false' in v0.22.5)",
     ),
     "post_feedback_bug_report": (
-        "true",
+        "false",
         "After NO feedback on drug search, ask user if they want to leave "
-        "a bug report (text or voice). Values: 'true' or 'false'. (v0.22.2)",
+        "a bug report (text or voice). Values: 'true' or 'false'. Per-user "
+        "override via users.post_feedback_bug_report column. "
+        "(v0.22.2; default changed to 'false' in v0.22.5)",
     ),
 }
 
@@ -135,6 +139,7 @@ async def set_setting(key: str, value: str) -> None:
 
 _VALID_MODES = {"hybrid", "ai_only"}
 _VALID_DEBUG = {"enabled", "disabled"}
+_VALID_TOGGLE = {"true", "false"}
 
 
 def resolve_response_mode(user_mode: str | None, global_mode: str) -> str:
@@ -263,3 +268,30 @@ def resolve_chat_debug(user_debug: str | None, global_debug: str) -> bool:
         logger.warning("Invalid global chat_debug '%s' — defaulting to disabled", global_debug)
         return False
     return global_debug == "enabled"
+
+
+def resolve_post_feedback(user_override: str | None, global_value: str) -> bool:
+    """Resolve whether a post-feedback feature is enabled for a user.
+
+    Used for both ``post_feedback_suggestion`` and
+    ``post_feedback_bug_report``.  The user column (nullable) takes
+    priority; NULL falls through to the global ``app_settings`` value.
+
+    Args:
+        user_override: The user's per-user column value (None = use global).
+        global_value: The global app setting (``"true"`` or ``"false"``).
+
+    Returns:
+        True if the feature is enabled, False otherwise.
+    """
+    normalized = (user_override or "").strip().lower()
+    if normalized in _VALID_TOGGLE:
+        return normalized == "true"
+    global_norm = (global_value or "").strip().lower()
+    if global_norm not in _VALID_TOGGLE:
+        logger.warning(
+            "Invalid global post_feedback setting '%s' — defaulting to false",
+            global_value,
+        )
+        return False
+    return global_norm == "true"

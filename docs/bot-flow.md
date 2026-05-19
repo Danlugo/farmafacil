@@ -398,11 +398,16 @@ After every drug search, the bot asks "¿Te sirvió? (sí/no)". The flow uses `o
 | `awaiting_post_bug` | other text or voice | AI re-words → creates `user_feedback` row (bug) |
 | `awaiting_feedback_detail` | any text | Legacy state — records detail, thanks user |
 
-### Post-feedback follow-ups (v0.22.2)
+### Post-feedback follow-ups (v0.22.2, per-user v0.22.5)
 
-Each feature has an independent on/off toggle in `app_settings`:
-- `post_feedback_suggestion` (default `"true"`) — YES feedback → suggestion offer
-- `post_feedback_bug_report` (default `"true"`) — NO feedback → bug report offer
+Each feature has an independent on/off toggle with per-user override:
+
+| Setting key | Global default | Per-user column | Effect |
+|---|---|---|---|
+| `post_feedback_suggestion` | `"false"` | `users.post_feedback_suggestion` | YES feedback → suggestion offer |
+| `post_feedback_bug_report` | `"false"` | `users.post_feedback_bug_report` | NO feedback → bug report offer |
+
+Resolution order: user column (if non-NULL "true"/"false") → global `app_settings` → `"false"`. Uses `resolve_post_feedback()` from `services/settings.py`.
 
 When disabled, YES reverts to the original "¡Gracias!" response, and NO reverts to `awaiting_feedback_detail` ("¿Qué buscabas?").
 

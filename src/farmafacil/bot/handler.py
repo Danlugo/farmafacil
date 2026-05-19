@@ -51,6 +51,7 @@ from farmafacil.services.settings import (
     get_default_model,
     get_setting,
     resolve_chat_debug,
+    resolve_post_feedback,
     resolve_response_mode,
     set_default_model,
 )
@@ -1614,7 +1615,11 @@ async def handle_incoming_message(
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "yes")
             # v0.22.2: offer to leave a suggestion (if feature is enabled)
-            suggestion_on = (await get_setting("post_feedback_suggestion")).lower() == "true"
+            # v0.22.5: per-user override → global fallback
+            suggestion_on = resolve_post_feedback(
+                user.post_feedback_suggestion,
+                await get_setting("post_feedback_suggestion"),
+            )
             if suggestion_on:
                 try:
                     await send_text_message(sender, MSG_POST_SUGGESTION_OFFER)
@@ -1629,7 +1634,11 @@ async def handle_incoming_message(
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "no")
             # v0.22.2: offer to leave a bug report (if feature is enabled)
-            bug_on = (await get_setting("post_feedback_bug_report")).lower() == "true"
+            # v0.22.5: per-user override → global fallback
+            bug_on = resolve_post_feedback(
+                user.post_feedback_bug_report,
+                await get_setting("post_feedback_bug_report"),
+            )
             if bug_on:
                 try:
                     await send_text_message(sender, MSG_POST_BUG_OFFER)

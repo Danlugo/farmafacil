@@ -33,7 +33,7 @@ from farmafacil.models.database import (
     UserSuggestion,
     VoiceMessage,
 )
-from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES
+from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES, _VALID_TOGGLE
 from farmafacil.services.store_backfill import FARMATODO_CITIES
 
 
@@ -71,6 +71,14 @@ USER_RESPONSE_MODE_CHOICES: list[tuple[str, str]] = [
 USER_CHAT_DEBUG_CHOICES: list[tuple[str, str]] = [
     ("", "— use global —"),
     *[(v, v) for v in sorted(_VALID_DEBUG)],
+]
+
+# post_feedback_suggestion / post_feedback_bug_report: nullable on the model.
+# NULL = use global app setting. Valid non-null values come from
+# settings._VALID_TOGGLE ("true" / "false").
+USER_POST_FEEDBACK_CHOICES: list[tuple[str, str]] = [
+    ("", "— use global —"),
+    *[(v, v) for v in sorted(_VALID_TOGGLE)],
 ]
 
 # onboarding_step: nullable. NULL = onboarding complete. Non-null values are
@@ -178,6 +186,8 @@ class UserAdmin(ModelView, model=User):
         User.display_preference,
         User.response_mode,
         User.chat_debug,
+        User.post_feedback_suggestion,
+        User.post_feedback_bug_report,
         User.chat_admin,
         User.admin_mode_active,
         User.total_tokens_in,
@@ -214,6 +224,8 @@ class UserAdmin(ModelView, model=User):
         "display_preference": "Display Preference",
         "response_mode": "Response Mode",
         "chat_debug": "Chat Debug",
+        "post_feedback_suggestion": "Post-Feedback Suggestion",
+        "post_feedback_bug_report": "Post-Feedback Bug Report",
         "chat_admin": "Chat Admin (UI-only)",
         "admin_mode_active": "Admin Mode Active",
         "total_tokens_in": "Tokens In (total)",
@@ -297,6 +309,8 @@ class UserAdmin(ModelView, model=User):
         User.display_preference,
         User.response_mode,
         User.chat_debug,
+        User.post_feedback_suggestion,
+        User.post_feedback_bug_report,
         # Onboarding / stuck-state recovery
         User.onboarding_step,
         User.awaiting_clarification_context,
@@ -329,6 +343,8 @@ class UserAdmin(ModelView, model=User):
         "display_preference": SelectField,
         "response_mode": SelectField,
         "chat_debug": SelectField,
+        "post_feedback_suggestion": SelectField,
+        "post_feedback_bug_report": SelectField,
         "onboarding_step": SelectField,
     }
 
@@ -367,6 +383,16 @@ class UserAdmin(ModelView, model=User):
         },
         "chat_debug": {
             "choices": USER_CHAT_DEBUG_CHOICES,
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        "post_feedback_suggestion": {
+            "choices": USER_POST_FEEDBACK_CHOICES,
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+        "post_feedback_bug_report": {
+            "choices": USER_POST_FEEDBACK_CHOICES,
             "coerce": _coerce_optional_str,
             "validate_choice": False,
         },

@@ -129,6 +129,20 @@ async def init_db() -> None:
             "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
             "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
         ),
+        # v0.22.5 — per-user overrides for post-feedback follow-up toggles.
+        # NULL = use global app_settings value; "true"/"false" = user override.
+        (
+            "users",
+            "post_feedback_suggestion",
+            "VARCHAR(10)",
+            "VARCHAR(10)",
+        ),
+        (
+            "users",
+            "post_feedback_bug_report",
+            "VARCHAR(10)",
+            "VARCHAR(10)",
+        ),
     ]
 
     async with engine.begin() as conn:

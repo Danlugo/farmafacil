@@ -15,6 +15,7 @@ search flow instead of saving them as suggestions/bugs.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from wtforms import SelectField
 
 from farmafacil.services.intent import Intent
 
@@ -41,6 +42,8 @@ def _make_user(
     user.city_code = "CCS"
     user.response_mode = None
     user.chat_debug = None
+    user.post_feedback_suggestion = None
+    user.post_feedback_bug_report = None
     user.admin_mode_active = False
     user.awaiting_clarification = None
     user.awaiting_category_search = None
@@ -49,8 +52,8 @@ def _make_user(
 
 
 _SETTING_DEFAULTS = {
-    "post_feedback_suggestion": "true",
-    "post_feedback_bug_report": "true",
+    "post_feedback_suggestion": "false",
+    "post_feedback_bug_report": "false",
     "response_mode": "hybrid",
     "chat_debug": "disabled",
     "category_menu_enabled": "true",
@@ -58,23 +61,23 @@ _SETTING_DEFAULTS = {
 }
 
 
+async def _setting_both_on(key: str) -> str:
+    """Mock get_setting with both post-feedback features enabled globally."""
+    if key in ("post_feedback_suggestion", "post_feedback_bug_report"):
+        return "true"
+    return _SETTING_DEFAULTS.get(key, "")
+
+
 async def _setting_lookup(key: str) -> str:
-    """Mock get_setting that returns realistic defaults."""
+    """Mock get_setting that returns realistic defaults (features OFF)."""
     return _SETTING_DEFAULTS.get(key, "")
 
 
-async def _setting_suggestion_off(key: str) -> str:
-    """Mock get_setting with post_feedback_suggestion disabled."""
-    if key == "post_feedback_suggestion":
-        return "false"
-    return _SETTING_DEFAULTS.get(key, "")
-
-
-async def _setting_bug_off(key: str) -> str:
-    """Mock get_setting with post_feedback_bug_report disabled."""
-    if key == "post_feedback_bug_report":
-        return "false"
-    return _SETTING_DEFAULTS.get(key, "")
+# _setting_suggestion_off and _setting_bug_off are aliases for _setting_lookup
+# since the global defaults are now "false" for both. Kept as named aliases
+# for test readability — they make the intent explicit at the call site.
+_setting_suggestion_off = _setting_lookup
+_setting_bug_off = _setting_lookup
 
 
 # ── YES → Suggestion offer flow ─────────────────────────────────────────
@@ -85,8 +88,9 @@ class TestYesFeedbackToSuggestionOffer:
 
     @pytest.mark.asyncio
     async def test_yes_feedback_transitions_to_suggestion_offer(self):
-        """YES feedback + feature ON → state=awaiting_post_suggestion + offer."""
+        """YES feedback + feature ON (per-user) → state=awaiting_post_suggestion + offer."""
         user = _make_user(step="awaiting_feedback")
+        user.post_feedback_suggestion = "true"  # per-user override ON
 
         with (
             patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
@@ -109,8 +113,9 @@ class TestYesFeedbackToSuggestionOffer:
 
     @pytest.mark.asyncio
     async def test_yes_feedback_feature_off_sends_thanks(self):
-        """YES feedback + feature OFF → original MSG_FEEDBACK_THANKS."""
+        """YES feedback + feature OFF (global default false, no user override) → thanks."""
         user = _make_user(step="awaiting_feedback")
+        # user.post_feedback_suggestion = None → falls through to global "false"
 
         with (
             patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
@@ -348,8 +353,9 @@ class TestNoFeedbackToBugOffer:
 
     @pytest.mark.asyncio
     async def test_no_feedback_transitions_to_bug_offer(self):
-        """NO feedback + feature ON → state=awaiting_post_bug + offer."""
+        """NO feedback + feature ON (per-user) → state=awaiting_post_bug + offer."""
         user = _make_user(step="awaiting_feedback")
+        user.post_feedback_bug_report = "true"  # per-user override ON
 
         with (
             patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
@@ -371,8 +377,9 @@ class TestNoFeedbackToBugOffer:
 
     @pytest.mark.asyncio
     async def test_no_feedback_feature_off_goes_to_detail(self):
-        """NO feedback + feature OFF → original awaiting_feedback_detail."""
+        """NO feedback + feature OFF (global default false, no user override) → detail."""
         user = _make_user(step="awaiting_feedback")
+        # user.post_feedback_bug_report = None → falls through to global "false"
 
         with (
             patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
@@ -828,7 +835,7 @@ class TestSettingsDefaults:
 
         assert "post_feedback_suggestion" in DEFAULTS
         value, desc = DEFAULTS["post_feedback_suggestion"]
-        assert value == "true"
+        assert value == "false"  # v0.22.5: default OFF, per-user override available
         assert "suggestion" in desc.lower() or "sugerencia" in desc.lower()
 
     def test_bug_report_setting_in_defaults(self):
@@ -836,7 +843,7 @@ class TestSettingsDefaults:
 
         assert "post_feedback_bug_report" in DEFAULTS
         value, desc = DEFAULTS["post_feedback_bug_report"]
-        assert value == "true"
+        assert value == "false"  # v0.22.5: default OFF, per-user override available
         assert "bug" in desc.lower() or "report" in desc.lower()
 
     def test_settings_are_independent(self):
@@ -845,3 +852,252 @@ class TestSettingsDefaults:
 
         assert "post_feedback_suggestion" != "post_feedback_bug_report"
         assert DEFAULTS["post_feedback_suggestion"] is not DEFAULTS["post_feedback_bug_report"]
+
+
+# ── Per-user override resolution (v0.22.5) ────────────────────────────
+
+
+class TestResolvePostFeedback:
+    """Unit tests for resolve_post_feedback in settings.py."""
+
+    def test_user_true_overrides_global_false(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback("true", "false") is True
+
+    def test_user_false_overrides_global_true(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback("false", "true") is False
+
+    def test_user_none_falls_through_to_global_true(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback(None, "true") is True
+
+    def test_user_none_falls_through_to_global_false(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback(None, "false") is False
+
+    def test_empty_string_treated_as_none(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback("", "true") is True
+
+    def test_whitespace_treated_as_none(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback("   ", "false") is False
+
+    def test_invalid_global_defaults_to_false(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback(None, "garbage") is False
+
+    def test_case_insensitive_user(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback("TRUE", "false") is True
+        assert resolve_post_feedback("True", "false") is True
+
+    def test_case_insensitive_global(self):
+        from farmafacil.services.settings import resolve_post_feedback
+
+        assert resolve_post_feedback(None, "TRUE") is True
+
+
+class TestPerUserSuggestionOverride:
+    """Integration: per-user post_feedback_suggestion overrides global."""
+
+    @pytest.mark.asyncio
+    async def test_user_on_global_off_enables_suggestion(self):
+        """user.post_feedback_suggestion='true', global='false' → offer shown."""
+        user = _make_user(step="awaiting_feedback")
+        user.post_feedback_suggestion = "true"
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "sí")
+
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_suggestion")
+            sent_text = mock_send.call_args[0][1]
+            assert "sugerencia" in sent_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_user_off_global_on_disables_suggestion(self):
+        """user.post_feedback_suggestion='false', global='true' → thanks only."""
+        user = _make_user(step="awaiting_feedback")
+        user.post_feedback_suggestion = "false"
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_both_on),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "sí")
+
+            mock_step.assert_called_once_with(SENDER, None)
+            sent_text = mock_send.call_args[0][1]
+            assert "gracias" in sent_text.lower()
+            assert "sugerencia" not in sent_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_user_null_global_on_enables_suggestion(self):
+        """user.post_feedback_suggestion=None, global='true' → offer shown."""
+        user = _make_user(step="awaiting_feedback")
+        # user.post_feedback_suggestion is already None from _make_user
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_both_on),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "sí")
+
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_suggestion")
+            sent_text = mock_send.call_args[0][1]
+            assert "sugerencia" in sent_text.lower()
+
+
+class TestPerUserBugReportOverride:
+    """Integration: per-user post_feedback_bug_report overrides global."""
+
+    @pytest.mark.asyncio
+    async def test_user_on_global_off_enables_bug_report(self):
+        """user.post_feedback_bug_report='true', global='false' → offer shown."""
+        user = _make_user(step="awaiting_feedback")
+        user.post_feedback_bug_report = "true"
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "no")
+
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_bug")
+            sent_text = mock_send.call_args[0][1]
+            assert "nota de voz" in sent_text.lower() or "no funcionó" in sent_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_user_off_global_on_disables_bug_report(self):
+        """user.post_feedback_bug_report='false', global='true' → detail flow."""
+        user = _make_user(step="awaiting_feedback")
+        user.post_feedback_bug_report = "false"
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_both_on),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "no")
+
+            mock_step.assert_called_once_with(SENDER, "awaiting_feedback_detail")
+            sent_text = mock_send.call_args[0][1]
+            assert "buscabas" in sent_text.lower() or "estuvo mal" in sent_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_user_null_global_on_enables_bug_report(self):
+        """user.post_feedback_bug_report=None, global='true' → offer shown."""
+        user = _make_user(step="awaiting_feedback")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_both_on),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "no")
+
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_bug")
+
+
+class TestAdminPostFeedbackDropdowns:
+    """Admin form includes per-user post-feedback dropdowns."""
+
+    def test_post_feedback_suggestion_in_form_overrides(self):
+        from farmafacil.api.admin import UserAdmin
+        assert UserAdmin.form_overrides["post_feedback_suggestion"] is SelectField
+
+    def test_post_feedback_bug_report_in_form_overrides(self):
+        from farmafacil.api.admin import UserAdmin
+        assert UserAdmin.form_overrides["post_feedback_bug_report"] is SelectField
+
+    def test_post_feedback_suggestion_choices(self):
+        from farmafacil.api.admin import USER_POST_FEEDBACK_CHOICES
+        values = {v for v, _ in USER_POST_FEEDBACK_CHOICES}
+        assert "" in values  # "— use global —"
+        assert "true" in values
+        assert "false" in values
+
+    def test_post_feedback_bug_report_choices(self):
+        from farmafacil.api.admin import UserAdmin
+        choices = UserAdmin.form_args["post_feedback_bug_report"]["choices"]
+        values = {v for v, _ in choices}
+        assert "" in values
+        assert "true" in values
+        assert "false" in values
+
+    def test_coerce_is_nullable(self):
+        from farmafacil.api.admin import UserAdmin
+        for field in ("post_feedback_suggestion", "post_feedback_bug_report"):
+            coerce = UserAdmin.form_args[field]["coerce"]
+            assert coerce("") is None
+            assert coerce("true") == "true"
+            assert coerce("false") == "false"
+
+    def test_post_feedback_in_column_list(self):
+        from farmafacil.api.admin import UserAdmin
+        col_names = {
+            (col.key if hasattr(col, "key") else str(col))
+            for col in UserAdmin.column_list
+        }
+        assert "post_feedback_suggestion" in col_names
+        assert "post_feedback_bug_report" in col_names
+
+    def test_post_feedback_in_form_columns(self):
+        from farmafacil.api.admin import UserAdmin
+        col_names = {
+            (col.key if hasattr(col, "key") else str(col))
+            for col in UserAdmin.form_columns
+        }
+        assert "post_feedback_suggestion" in col_names
+        assert "post_feedback_bug_report" in col_names
+
+    def test_post_feedback_in_column_labels(self):
+        from farmafacil.api.admin import UserAdmin
+        assert "post_feedback_suggestion" in UserAdmin.column_labels
+        assert "post_feedback_bug_report" in UserAdmin.column_labels

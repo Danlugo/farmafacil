@@ -61,6 +61,14 @@ class User(Base):
         String(20), nullable=True, default=None,
         comment="Override chat debug: NULL=use global, enabled, disabled",
     )
+    post_feedback_suggestion: Mapped[str | None] = mapped_column(
+        String(10), nullable=True, default=None,
+        comment="Override post-feedback suggestion offer: NULL=use global, true, false",
+    )
+    post_feedback_bug_report: Mapped[str | None] = mapped_column(
+        String(10), nullable=True, default=None,
+        comment="Override post-feedback bug report offer: NULL=use global, true, false",
+    )
     last_search_query: Mapped[str | None] = mapped_column(
         String(300), nullable=True,
         comment="Last drug search query for 'ver similares' feature",
