@@ -623,8 +623,13 @@ async def handle_voice_message(
     display_text = transcription[:100] + ("..." if len(transcription) > 100 else "")
     await send_text_message(sender, f"🎙️ Te escuché: _{display_text}_")
 
-    # Process the transcription as a normal text message
-    await handle_incoming_message(sender, transcription, wa_message_id=wa_message_id)
+    # Process the transcription as a normal text message — thread voice_message_id
+    # so the resulting search/feedback/suggestion is linked back to this audio.
+    await handle_incoming_message(
+        sender, transcription,
+        wa_message_id=wa_message_id,
+        voice_message_id=voice_msg.id,
+    )
 
 
 async def handle_image_message(
@@ -1181,7 +1186,10 @@ async def handle_list_reply(
 
 
 async def handle_incoming_message(
-    sender: str, message_text: str, wa_message_id: str = "",
+    sender: str,
+    message_text: str,
+    wa_message_id: str = "",
+    voice_message_id: int | None = None,
 ) -> None:
     """Process an incoming WhatsApp message with smart profile detection.
 
@@ -1192,6 +1200,8 @@ async def handle_incoming_message(
         sender: The WhatsApp phone number of the sender.
         message_text: The message text.
         wa_message_id: The WhatsApp message ID (for read receipts).
+        voice_message_id: Optional ID of the voice message that originated
+            this text (threaded to search_logs/user_feedback/user_suggestions).
     """
     text = message_text.strip()
     if not text:
@@ -1233,6 +1243,7 @@ async def handle_incoming_message(
                 feedback_type=feedback_type,
                 message=body,
                 phone_number=sender,
+                voice_message_id=voice_message_id,
             )
         except ValueError as exc:
             logger.warning("Invalid feedback submission from %s: %s", sender, exc)
@@ -1276,6 +1287,7 @@ async def handle_incoming_message(
                 user_id=user.id,
                 phone_number=sender,
                 message=suggestion_body,
+                voice_message_id=voice_message_id,
             )
         except ValueError as exc:
             logger.warning("Invalid suggestion from %s: %s", sender, exc)
@@ -1385,6 +1397,7 @@ async def handle_incoming_message(
             debug_on=resolve_chat_debug(
                 user.chat_debug, await get_setting("chat_debug")
             ),
+            voice_message_id=voice_message_id,
         )
         # Remember the chosen preference so we don't ask again next time.
         await _update_memory_safe(
@@ -1425,6 +1438,7 @@ async def handle_incoming_message(
             debug_on=resolve_chat_debug(
                 user.chat_debug, await get_setting("chat_debug"),
             ),
+            voice_message_id=voice_message_id,
         )
         await _update_memory_safe(
             user.id, user.name or "amigo",
@@ -1705,6 +1719,7 @@ async def handle_incoming_message(
                 debug_on=debug_on, ai_result=ai_result,
                 temp_location=_ai_temp_loc,
                 best_price=ai_result.modifier == "best_price",
+                voice_message_id=voice_message_id,
             )
             return
 
@@ -1849,6 +1864,7 @@ async def handle_incoming_message(
             sender, user, query, display_name,
             debug_on=debug_on, temp_location=_temp_location,
             best_price=best_price,
+            voice_message_id=voice_message_id,
         )
 
     elif intent.action == "clarify_needed" and intent.clarify_question:
@@ -1963,6 +1979,7 @@ async def _handle_drug_search(
     ai_result=None,
     temp_location: dict | None = None,
     best_price: bool = False,
+    voice_message_id: int | None = None,
 ) -> None:
     """Perform a drug search and send results to the user.
 
@@ -1981,6 +1998,8 @@ async def _handle_drug_search(
             Dict with lat, lng, zone_name, city keys.  When provided, the
             search uses these coordinates instead of the user's saved profile.
             The user's saved location is NOT modified.
+        voice_message_id: Optional ID of the voice message that originated
+            this search (NULL when the user typed text).
     """
     # Use temporary location if provided, otherwise user's saved location.
     # geocode_zone() returns {"lat", "lng", "zone_name", "city"} — but
@@ -2048,7 +2067,7 @@ async def _handle_drug_search(
 
     # Log the search and save the log ID for feedback tracking
     results_count = len(response.results) if response.results else 0
-    search_log_id = await log_search(user.id, query, results_count)
+    search_log_id = await log_search(user.id, query, results_count, voice_message_id=voice_message_id)
     await update_last_search(sender, query, search_log_id)
 
     # Send individual product images FIRST, then text summary below

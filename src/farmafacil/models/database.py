@@ -604,7 +604,16 @@ class SearchLog(Base):
         Text, nullable=True,
         comment="User explanation when feedback is negative",
     )
+    voice_message_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("voice_messages.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Link to voice message that triggered this search (NULL = typed text)",
+    )
     searched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    voice_message: Mapped["VoiceMessage | None"] = relationship(
+        "VoiceMessage", foreign_keys=[voice_message_id],
+    )
 
 
 class UserFeedback(Base):
@@ -635,6 +644,11 @@ class UserFeedback(Base):
         nullable=True, index=True,
         comment="Link to the inbound message that triggered this feedback",
     )
+    voice_message_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("voice_messages.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Link to voice message that triggered this feedback (NULL = typed text)",
+    )
     reviewed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0",
         comment="Whether a team member has reviewed this feedback",
@@ -648,6 +662,9 @@ class UserFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship("User")
+    voice_message: Mapped["VoiceMessage | None"] = relationship(
+        "VoiceMessage", foreign_keys=[voice_message_id],
+    )
 
     def __repr__(self) -> str:
         return f"#{self.id} [{self.feedback_type}]"
@@ -687,8 +704,16 @@ class UserSuggestion(Base):
     admin_notes: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="Notes from the reviewing admin",
     )
+    voice_message_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("voice_messages.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Link to voice message that triggered this suggestion (NULL = typed text)",
+    )
 
     user: Mapped["User"] = relationship("User")
+    voice_message: Mapped["VoiceMessage | None"] = relationship(
+        "VoiceMessage", foreign_keys=[voice_message_id],
+    )
 
     def __repr__(self) -> str:
         return f"#{self.id} [sugerencia]"

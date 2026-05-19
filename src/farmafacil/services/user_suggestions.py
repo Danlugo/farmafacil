@@ -20,6 +20,7 @@ async def create_suggestion(
     user_id: int,
     phone_number: str,
     message: str,
+    voice_message_id: int | None = None,
 ) -> int:
     """Create a suggestion record and return its DB-generated ID.
 
@@ -27,6 +28,8 @@ async def create_suggestion(
         user_id: The user's database ID.
         phone_number: The user's phone number (E.164 format).
         message: The user's suggestion text (body after the command).
+        voice_message_id: Optional ID of the voice message that triggered
+            this suggestion (NULL when the user typed text).
 
     Returns:
         The new suggestion ID (stored in DB, shown to the user).
@@ -45,6 +48,7 @@ async def create_suggestion(
             user_id=user_id,
             phone_number=phone_number,
             message=message,
+            voice_message_id=voice_message_id,
         )
         session.add(entry)
         await session.commit()

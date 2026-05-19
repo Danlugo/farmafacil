@@ -209,7 +209,7 @@ Physical store locations, backfilled from Farmatodo API on startup.
 | search_logs | Analytics — query, result count, source (whatsapp/api) |
 | app_settings | Admin-editable key/value config (cache TTL, etc.) |
 | product_keywords | Inverted index of keyword tokens per product (FK → products CASCADE). Added in v0.12.6 (Item 30) so `find_cross_chain_matches` can run a single indexed SQL query (`WHERE keyword IN (...) GROUP BY product_id HAVING COUNT(DISTINCT keyword) = N`) instead of loading every product with keywords into memory. Populated automatically by `_upsert_product → _sync_product_keywords`; idempotent backfill in `init_db()` for existing deployments. |
-| voice_messages | Voice notes: audio_path, transcription (Whisper), language, duration, FK→users + conversation_logs. Translation columns (`translation_es`, `translation_en`) are shell for future use (v0.22.0). |
+| voice_messages | Voice notes: audio_path, transcription (Whisper), language, duration, FK→users + conversation_logs. Translation columns (`translation_es`, `translation_en`) are shell for future use (v0.22.0). Voice-to-action linking (v0.22.1): `voice_message_id` FK added to `search_logs`, `user_feedback`, `user_suggestions` to connect voice notes to the actions they triggered. |
 
 ## Product Catalog Design
 

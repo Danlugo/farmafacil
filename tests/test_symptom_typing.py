@@ -186,8 +186,8 @@ class TestReadReceipt:
                 receipt_line = i
                 break
         assert receipt_line is not None, "send_read_receipt not found in handler"
-        # Should be within the first 25 lines of the function (after docstring)
-        assert receipt_line < 25, f"Read receipt at line {receipt_line}, should be early"
+        # Should be within the first 35 lines of the function (after docstring + params)
+        assert receipt_line < 35, f"Read receipt at line {receipt_line}, should be early"
 
     def test_read_receipt_function_exists(self):
         """send_read_receipt should be a callable async function."""

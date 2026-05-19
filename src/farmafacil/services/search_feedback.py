@@ -40,13 +40,20 @@ def parse_feedback(text: str) -> str | None:
 # ── Database operations ───────────────────────────────────────────────────
 
 
-async def log_search(user_id: int, query: str, results_count: int) -> int:
+async def log_search(
+    user_id: int,
+    query: str,
+    results_count: int,
+    voice_message_id: int | None = None,
+) -> int:
     """Create a search log entry and return its ID.
 
     Args:
         user_id: The user's database ID.
         query: The search query string.
         results_count: Number of results found.
+        voice_message_id: Optional ID of the voice message that triggered
+            this search (NULL when the user typed text).
 
     Returns:
         The search log ID (used to attach feedback later).
@@ -57,6 +64,7 @@ async def log_search(user_id: int, query: str, results_count: int) -> int:
             query=query,
             results_count=results_count,
             source="whatsapp",
+            voice_message_id=voice_message_id,
         )
         session.add(entry)
         await session.commit()

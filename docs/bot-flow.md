@@ -299,7 +299,7 @@ Category selection is **not** a scraper-side filter in v0.13.2. The drug search 
 
 ---
 
-## Voice Messages (v0.22.0)
+## Voice Messages (v0.22.0+)
 
 When a user sends a voice note, the webhook dispatches to `handle_voice_message()`.
 
@@ -307,9 +307,12 @@ When a user sends a voice note, the webhook dispatches to `handle_voice_message(
 audio msg → download_whatsapp_media(media_id)
           → save_audio_file(data, user_id, wa_message_id)
           → transcribe_audio(file_path)  ← OpenAI Whisper API
-          → store VoiceMessage row in DB
+          → store VoiceMessage row in DB (gets voice_msg.id)
           → send ack: "🎙️ Te escuché: _{transcription}_"
-          → handle_incoming_message(sender, transcription)
+          → handle_incoming_message(sender, transcription, voice_message_id=voice_msg.id)
+              ↳ drug search → log_search(voice_message_id=...)  → search_logs.voice_message_id
+              ↳ /bug, /comentario → create_feedback(voice_message_id=...)  → user_feedback.voice_message_id
+              ↳ /sugerencia → create_suggestion(voice_message_id=...)  → user_suggestions.voice_message_id
 ```
 
 | Scenario | Bot response |
@@ -320,6 +323,8 @@ audio msg → download_whatsapp_media(media_id)
 | Success | Ack with transcription, then process as normal text message |
 
 **Storage:** Audio files are saved to `/data/audio/{user_id}/{YYYYMMDD}_{wa_msg_id}.ogg`. The `voice_messages` table tracks metadata, transcription, and links to `conversation_logs`.
+
+**Voice-to-action linking (v0.22.1):** The `voice_message_id` FK on `search_logs`, `user_feedback`, and `user_suggestions` connects each voice note to the action it triggered. Admin views show bidirectional links (voice → action, action → voice). The `get_voice_message` admin chat tool shows all linked searches, feedback, and suggestions.
 
 **Admin:** SQLAdmin read-only view with HTML5 `<audio>` player. Audio served via `GET /api/v1/audio/{voice_message_id}`. Admin chat tools: `list_voice_messages`, `get_voice_message`.
 

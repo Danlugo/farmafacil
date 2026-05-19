@@ -720,6 +720,7 @@ class SearchLogAdmin(ModelView, model=SearchLog):
         SearchLog.query,
         SearchLog.results_count,
         SearchLog.feedback,
+        SearchLog.voice_message_id,
         SearchLog.source,
         SearchLog.searched_at,
     ]
@@ -739,8 +740,16 @@ class SearchLogAdmin(ModelView, model=SearchLog):
         "results_count": "Results Found",
         "feedback": "Feedback",
         "feedback_detail": "Feedback Detail",
+        "voice_message_id": "🎙️ Voice",
         "source": "Source",
         "searched_at": "Searched At",
+    }
+
+    column_formatters = {
+        SearchLog.voice_message_id: lambda m, _: Markup(
+            f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
+            f"🎙️ #{int(m.voice_message_id)}</a>"
+        ) if m.voice_message_id else "—",
     }
 
     can_create = False
@@ -967,6 +976,7 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
         UserFeedback.feedback_type,
         UserFeedback.message,
         UserFeedback.conversation_log_id,
+        UserFeedback.voice_message_id,
         UserFeedback.reviewed,
         UserFeedback.created_at,
     ]
@@ -985,10 +995,18 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
         "feedback_type": "Type",
         "message": "Message",
         "conversation_log_id": "Conversation Log ID",
+        "voice_message_id": "🎙️ Voice",
         "reviewed": "Reviewed",
         "reviewer_notes": "Reviewer Notes",
         "reviewed_at": "Reviewed At",
         "created_at": "Submitted At",
+    }
+
+    column_formatters = {
+        UserFeedback.voice_message_id: lambda m, _: Markup(
+            f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
+            f"🎙️ #{int(m.voice_message_id)}</a>"
+        ) if m.voice_message_id else "—",
     }
 
     form_widget_args = {
@@ -997,8 +1015,10 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
     }
     form_excluded_columns = [
         UserFeedback.user,
+        UserFeedback.voice_message,
         UserFeedback.user_id,
         UserFeedback.conversation_log_id,
+        UserFeedback.voice_message_id,
         UserFeedback.feedback_type,
         UserFeedback.message,
         UserFeedback.created_at,
@@ -1024,6 +1044,7 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
         UserSuggestion.user_id,
         UserSuggestion.phone_number,
         UserSuggestion.message,
+        UserSuggestion.voice_message_id,
         UserSuggestion.reviewed,
         UserSuggestion.reviewed_at,
         UserSuggestion.created_at,
@@ -1041,10 +1062,18 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
         "user_id": "User ID",
         "phone_number": "Phone",
         "message": "Suggestion",
+        "voice_message_id": "🎙️ Voice",
         "reviewed": "Reviewed",
         "reviewed_at": "Reviewed At",
         "admin_notes": "Admin Notes",
         "created_at": "Submitted At",
+    }
+
+    column_formatters = {
+        UserSuggestion.voice_message_id: lambda m, _: Markup(
+            f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
+            f"🎙️ #{int(m.voice_message_id)}</a>"
+        ) if m.voice_message_id else "—",
     }
 
     form_widget_args = {
@@ -1053,8 +1082,10 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
     }
     form_excluded_columns = [
         UserSuggestion.user,
+        UserSuggestion.voice_message,
         UserSuggestion.user_id,
         UserSuggestion.phone_number,
+        UserSuggestion.voice_message_id,
         UserSuggestion.message,
         UserSuggestion.created_at,
     ]

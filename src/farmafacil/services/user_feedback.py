@@ -47,6 +47,7 @@ async def create_feedback(
     feedback_type: str,
     message: str,
     phone_number: str,
+    voice_message_id: int | None = None,
 ) -> int:
     """Create a feedback case and return its DB-generated ID.
 
@@ -55,6 +56,8 @@ async def create_feedback(
         feedback_type: One of "bug", "comentario".
         message: The user's feedback text (body after the command).
         phone_number: The user's phone, used to link to their latest inbound log.
+        voice_message_id: Optional ID of the voice message that triggered
+            this feedback (NULL when the user typed text).
 
     Returns:
         The new feedback case ID (stored in DB, shown to the user).
@@ -81,6 +84,7 @@ async def create_feedback(
             feedback_type=feedback_type,
             message=message,
             conversation_log_id=conversation_log_id,
+            voice_message_id=voice_message_id,
         )
         session.add(entry)
         await session.commit()

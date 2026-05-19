@@ -109,6 +109,26 @@ async def init_db() -> None:
             "BOOLEAN",
             "BOOLEAN",
         ),
+        # v0.22.1 — voice-to-action linking: connect voice messages to searches,
+        # feedback, and suggestions they triggered.
+        (
+            "search_logs",
+            "voice_message_id",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+        ),
+        (
+            "user_feedback",
+            "voice_message_id",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+        ),
+        (
+            "user_suggestions",
+            "voice_message_id",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+            "INTEGER REFERENCES voice_messages(id) ON DELETE SET NULL",
+        ),
     ]
 
     async with engine.begin() as conn:

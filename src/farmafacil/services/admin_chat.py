@@ -374,7 +374,7 @@ async def _tool_list_voice_messages(args: dict[str, Any]) -> str:
 
 
 async def _tool_get_voice_message(args: dict[str, Any]) -> str:
-    """Get full details of a single voice message by ID."""
+    """Get full details of a single voice message by ID, including linked actions."""
     vm_id = int(args.get("id") or 0)
     if not vm_id:
         return "Falta id."
@@ -383,24 +383,54 @@ async def _tool_get_voice_message(args: dict[str, Any]) -> str:
             select(VoiceMessage).where(VoiceMessage.id == vm_id)
         )
         vm = result.scalar_one_or_none()
-    if not vm:
-        return f"Mensaje de voz #{vm_id} no existe."
+        if not vm:
+            return f"Mensaje de voz #{vm_id} no existe."
+
+        # Find linked actions (searches, feedback, suggestions)
+        linked_searches = (await session.execute(
+            select(SearchLog).where(SearchLog.voice_message_id == vm_id)
+        )).scalars().all()
+        linked_feedback = (await session.execute(
+            select(UserFeedback).where(UserFeedback.voice_message_id == vm_id)
+        )).scalars().all()
+        linked_suggestions = (await session.execute(
+            select(UserSuggestion).where(UserSuggestion.voice_message_id == vm_id)
+        )).scalars().all()
+
     dur = f"{vm.duration_seconds:.1f}s" if vm.duration_seconds else "(desconocido)"
-    return (
-        f"Mensaje de voz #{vm.id}\n"
-        f"Usuario_id: {vm.user_id}\n"
-        f"Teléfono: {vm.phone_number}\n"
-        f"Idioma: {vm.original_language or '(no detectado)'}\n"
-        f"Duración: {dur}\n"
-        f"Audio: {vm.audio_path}\n"
-        f"Transcripción: {vm.transcription or '(sin transcripción)'}\n"
-        f"Traducción ES: {vm.translation_es or '(pendiente)'}\n"
-        f"Traducción EN: {vm.translation_en or '(pendiente)'}\n"
-        f"Modelo: {vm.transcription_model or '(desconocido)'}\n"
-        f"WA msg: {vm.wa_message_id}\n"
-        f"Conversación: #{vm.conversation_log_id or '(no vinculado)'}\n"
-        f"Fecha: {vm.created_at:%Y-%m-%d %H:%M}"
-    )
+    lines = [
+        f"Mensaje de voz #{vm.id}",
+        f"Usuario_id: {vm.user_id}",
+        f"Teléfono: {vm.phone_number}",
+        f"Idioma: {vm.original_language or '(no detectado)'}",
+        f"Duración: {dur}",
+        f"Audio: {vm.audio_path}",
+        f"Transcripción: {vm.transcription or '(sin transcripción)'}",
+        f"Traducción ES: {vm.translation_es or '(pendiente)'}",
+        f"Traducción EN: {vm.translation_en or '(pendiente)'}",
+        f"Modelo: {vm.transcription_model or '(desconocido)'}",
+        f"WA msg: {vm.wa_message_id}",
+        f"Conversación: #{vm.conversation_log_id or '(no vinculado)'}",
+        f"Fecha: {vm.created_at:%Y-%m-%d %H:%M}",
+    ]
+
+    # Append linked action summary
+    if linked_searches:
+        lines.append(f"\n🔍 Búsquedas vinculadas ({len(linked_searches)}):")
+        for s in linked_searches:
+            lines.append(f"  #{s.id}: '{s.query}' → {s.results_count} resultados, feedback={s.feedback or '—'}")
+    if linked_feedback:
+        lines.append(f"\n🐛 Feedback vinculado ({len(linked_feedback)}):")
+        for fb in linked_feedback:
+            lines.append(f"  #{fb.id}: [{fb.feedback_type}] {_truncate(fb.message, 60)}")
+    if linked_suggestions:
+        lines.append(f"\n💡 Sugerencias vinculadas ({len(linked_suggestions)}):")
+        for s in linked_suggestions:
+            lines.append(f"  #{s.id}: {_truncate(s.message, 60)}")
+    if not (linked_searches or linked_feedback or linked_suggestions):
+        lines.append("\n(Sin acciones vinculadas)")
+
+    return "\n".join(lines)
 
 
 # ── Conversation log tools ─────────────────────────────────────────────
