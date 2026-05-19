@@ -148,6 +148,74 @@ async def _cleanup_old_logs(task: ScheduledTask) -> str:
     return f"Deleted {deleted} conversation logs older than 90 days"
 
 
+async def _cleanup_old_voice_messages(task: ScheduledTask) -> str:
+    """Delete voice_messages and their audio files older than 90 days.
+
+    Steps:
+      1. SELECT rows older than cutoff to get audio_path values.
+      2. Delete the physical OGG files from disk (tolerates missing files).
+      3. DELETE the DB rows (FKs in search_logs, user_feedback,
+         user_suggestions are ON DELETE SET NULL — handled by the DB).
+      4. Remove empty user audio subdirectories left behind.
+    """
+    import os
+    from pathlib import Path
+
+    from sqlalchemy import delete as sa_delete
+
+    from farmafacil.models.database import VoiceMessage
+    import farmafacil.services.voice as _voice_mod
+
+    cutoff = datetime.now(tz=UTC) - timedelta(days=90)
+    cutoff_naive = cutoff.replace(tzinfo=None)
+
+    # Step 1: gather audio paths before deletion.
+    async with async_session() as session:
+        result = await session.execute(
+            select(VoiceMessage.audio_path).where(
+                VoiceMessage.created_at < cutoff_naive
+            )
+        )
+        audio_paths: list[str] = [row[0] for row in result.fetchall()]
+
+    # Step 2: remove audio files from disk.
+    files_deleted = 0
+    parent_dirs: set[Path] = set()
+    audio_base = _voice_mod.AUDIO_BASE_DIR
+    for rel_path in audio_paths:
+        abs_path = audio_base.parent / rel_path
+        try:
+            if abs_path.is_file():
+                os.remove(abs_path)
+                files_deleted += 1
+                parent_dirs.add(abs_path.parent)
+        except OSError:
+            logger.warning("Could not delete audio file: %s", abs_path)
+
+    # Step 3: delete DB rows.
+    async with async_session() as session:
+        result = await session.execute(
+            sa_delete(VoiceMessage).where(
+                VoiceMessage.created_at < cutoff_naive
+            )
+        )
+        rows_deleted = result.rowcount
+        await session.commit()
+
+    # Step 4: clean up empty user subdirectories (best-effort).
+    for d in parent_dirs:
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass  # non-critical — dir still in use or already gone
+
+    return (
+        f"Deleted {rows_deleted} voice messages + "
+        f"{files_deleted} audio files older than 90 days"
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 TASK_REGISTRY: dict[str, TaskFunc] = {
@@ -155,6 +223,7 @@ TASK_REGISTRY: dict[str, TaskFunc] = {
     "backfill_stores": _backfill_stores,
     "rescore_products": _rescore_products,
     "cleanup_old_logs": _cleanup_old_logs,
+    "cleanup_old_voice_messages": _cleanup_old_voice_messages,
     "osm_backfill": _osm_backfill,
     "zone_backfill": _zone_backfill,
     "geocode_cache_cleanup": _geocode_cache_cleanup,
@@ -173,6 +242,8 @@ DEFAULT_TASKS: list[tuple[str, str, int, bool]] = [
     ("Pharmacy zone backfill", "zone_backfill", 1440, True),
     # v0.19.0 Item 47 — weekly is fine; cache rows do no harm just sitting there
     ("Geocode cache cleanup", "geocode_cache_cleanup", 10080, True),
+    # v0.22.6 — weekly; deletes voice_messages + audio files older than 90 days
+    ("Cleanup old voice messages", "cleanup_old_voice_messages", 10080, True),
 ]
 
 
