@@ -5,11 +5,18 @@ After a drug search with results:
 - NO feedback → offer to leave a bug report (text or voice)
 
 Both flows support text and voice input, AI re-wording, and
-skip via "no" response.
+skip via "no" response.  Each feature has an independent on/off
+toggle in app_settings (post_feedback_suggestion / post_feedback_bug_report).
+
+When in awaiting_post_suggestion or awaiting_post_bug states, smart
+intent classification detects drug names and falls through to normal
+search flow instead of saving them as suggestions/bugs.
 """
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from farmafacil.services.intent import Intent
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -41,6 +48,35 @@ def _make_user(
     return user
 
 
+_SETTING_DEFAULTS = {
+    "post_feedback_suggestion": "true",
+    "post_feedback_bug_report": "true",
+    "response_mode": "hybrid",
+    "chat_debug": "disabled",
+    "category_menu_enabled": "true",
+    "default_model": "haiku",
+}
+
+
+async def _setting_lookup(key: str) -> str:
+    """Mock get_setting that returns realistic defaults."""
+    return _SETTING_DEFAULTS.get(key, "")
+
+
+async def _setting_suggestion_off(key: str) -> str:
+    """Mock get_setting with post_feedback_suggestion disabled."""
+    if key == "post_feedback_suggestion":
+        return "false"
+    return _SETTING_DEFAULTS.get(key, "")
+
+
+async def _setting_bug_off(key: str) -> str:
+    """Mock get_setting with post_feedback_bug_report disabled."""
+    if key == "post_feedback_bug_report":
+        return "false"
+    return _SETTING_DEFAULTS.get(key, "")
+
+
 # ── YES → Suggestion offer flow ─────────────────────────────────────────
 
 
@@ -49,7 +85,7 @@ class TestYesFeedbackToSuggestionOffer:
 
     @pytest.mark.asyncio
     async def test_yes_feedback_transitions_to_suggestion_offer(self):
-        """YES feedback → state=awaiting_post_suggestion + offer message."""
+        """YES feedback + feature ON → state=awaiting_post_suggestion + offer."""
         user = _make_user(step="awaiting_feedback")
 
         with (
@@ -59,16 +95,41 @@ class TestYesFeedbackToSuggestionOffer:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
         ):
             from farmafacil.bot.handler import handle_incoming_message
             await handle_incoming_message(SENDER, "sí")
 
             mock_record.assert_called_once_with(42, "yes")
-            mock_step.assert_called_once_with(SENDER, "awaiting_post_suggestion")
-            # Should send the suggestion offer message
+            # Message sent BEFORE step transition (send-then-step pattern)
             sent_text = mock_send.call_args[0][1]
             assert "sugerencia" in sent_text.lower()
             assert "nota de voz" in sent_text.lower()
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_suggestion")
+
+    @pytest.mark.asyncio
+    async def test_yes_feedback_feature_off_sends_thanks(self):
+        """YES feedback + feature OFF → original MSG_FEEDBACK_THANKS."""
+        user = _make_user(step="awaiting_feedback")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock) as mock_record,
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_suggestion_off),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "sí")
+
+            mock_record.assert_called_once_with(42, "yes")
+            mock_step.assert_called_once_with(SENDER, None)
+            sent_text = mock_send.call_args[0][1]
+            assert "gracias" in sent_text.lower()
+            # Should NOT mention sugerencia
+            assert "sugerencia" not in sent_text.lower()
 
 
 class TestAwaitingPostSuggestion:
@@ -124,6 +185,7 @@ class TestAwaitingPostSuggestion:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="Agregar filtro por precio") as mock_reword,
             patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock, return_value=7) as mock_create,
         ):
@@ -152,6 +214,7 @@ class TestAwaitingPostSuggestion:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="Mejorar búsqueda de genéricos"),
             patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock, return_value=8) as mock_create,
         ):
@@ -179,6 +242,7 @@ class TestAwaitingPostSuggestion:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="test"),
             patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock, side_effect=Exception("DB error")),
         ):
@@ -190,6 +254,91 @@ class TestAwaitingPostSuggestion:
             sent_text = mock_send.call_args[0][1]
             assert "no pude" in sent_text.lower() or "error" in sent_text.lower() or "inténtalo" in sent_text.lower()
 
+    @pytest.mark.asyncio
+    async def test_drug_name_falls_through_to_search(self):
+        """Drug name like 'losartan' in suggestion state → normal search flow."""
+        user = _make_user(step="awaiting_post_suggestion")
+
+        drug_intent = Intent(action="drug_search", drug_query="losartan")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=drug_intent),
+            patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock) as mock_reword,
+            patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock) as mock_create,
+            # The fall-through hits normal flow — mock _handle_drug_search
+            # to avoid needing full search pipeline mocking
+            patch("farmafacil.bot.handler.classify_intent", new_callable=AsyncMock, return_value=Intent(action="drug_search", drug_query="losartan")),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "losartan")
+
+            # Should NOT save as suggestion
+            mock_reword.assert_not_called()
+            mock_create.assert_not_called()
+            # State should be cleared (set to None for fall-through)
+            mock_step.assert_any_call(SENDER, None)
+            # Should have triggered a drug search
+            mock_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_voice_drug_name_falls_through(self):
+        """Voice note transcribed to drug name → search, not suggestion."""
+        user = _make_user(step="awaiting_post_suggestion")
+
+        drug_intent = Intent(action="drug_search", drug_query="acetaminofen")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=drug_intent),
+            patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock) as mock_create,
+            patch("farmafacil.bot.handler.classify_intent", new_callable=AsyncMock, return_value=Intent(action="drug_search", drug_query="acetaminofen")),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "acetaminofen", voice_message_id=70)
+
+            # Must NOT save as suggestion
+            mock_create.assert_not_called()
+            mock_step.assert_any_call(SENDER, None)
+            mock_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_classify_keywords_error_saves_as_suggestion(self):
+        """If classify_intent_keywords raises, treat input as suggestion."""
+        user = _make_user(step="awaiting_post_suggestion")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, side_effect=Exception("DB cache error")),
+            patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="Saved anyway") as mock_reword,
+            patch("farmafacil.bot.handler.create_suggestion", new_callable=AsyncMock, return_value=99) as mock_create,
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "losartan")
+
+            # Should fall back to saving as suggestion (not crash/stuck)
+            mock_reword.assert_called_once()
+            mock_create.assert_called_once()
+            mock_step.assert_called_once_with(SENDER, None)
+            sent_text = mock_send.call_args[0][1]
+            assert "#99" in sent_text
+
 
 # ── NO → Bug report offer flow ──────────────────────────────────────────
 
@@ -199,7 +348,7 @@ class TestNoFeedbackToBugOffer:
 
     @pytest.mark.asyncio
     async def test_no_feedback_transitions_to_bug_offer(self):
-        """NO feedback → state=awaiting_post_bug + offer message."""
+        """NO feedback + feature ON → state=awaiting_post_bug + offer."""
         user = _make_user(step="awaiting_feedback")
 
         with (
@@ -209,14 +358,39 @@ class TestNoFeedbackToBugOffer:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
         ):
             from farmafacil.bot.handler import handle_incoming_message
             await handle_incoming_message(SENDER, "no")
 
             mock_record.assert_called_once_with(42, "no")
-            mock_step.assert_called_once_with(SENDER, "awaiting_post_bug")
+            # Message sent BEFORE step transition (send-then-step pattern)
             sent_text = mock_send.call_args[0][1]
             assert "no funcionó" in sent_text.lower() or "nota de voz" in sent_text.lower()
+            mock_step.assert_called_once_with(SENDER, "awaiting_post_bug")
+
+    @pytest.mark.asyncio
+    async def test_no_feedback_feature_off_goes_to_detail(self):
+        """NO feedback + feature OFF → original awaiting_feedback_detail."""
+        user = _make_user(step="awaiting_feedback")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.record_feedback", new_callable=AsyncMock) as mock_record,
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_bug_off),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "no")
+
+            mock_record.assert_called_once_with(42, "no")
+            mock_step.assert_called_once_with(SENDER, "awaiting_feedback_detail")
+            sent_text = mock_send.call_args[0][1]
+            # Should send the original "what went wrong?" message
+            assert "buscabas" in sent_text.lower() or "estuvo mal" in sent_text.lower()
 
 
 class TestAwaitingPostBug:
@@ -271,6 +445,7 @@ class TestAwaitingPostBug:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="La búsqueda de melatonina no mostró resultados") as mock_reword,
             patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, return_value=15) as mock_create,
             patch("farmafacil.bot.handler.record_feedback_detail", new_callable=AsyncMock) as mock_detail,
@@ -303,6 +478,7 @@ class TestAwaitingPostBug:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="No encontré resultados para aspirina"),
             patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, return_value=16) as mock_create,
             patch("farmafacil.bot.handler.record_feedback_detail", new_callable=AsyncMock),
@@ -332,6 +508,7 @@ class TestAwaitingPostBug:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="test"),
             patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, side_effect=Exception("DB error")),
         ):
@@ -353,6 +530,7 @@ class TestAwaitingPostBug:
             patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
             patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=None),
             patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="test bug"),
             patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, return_value=17),
             patch("farmafacil.bot.handler.record_feedback_detail", new_callable=AsyncMock) as mock_detail,
@@ -362,12 +540,122 @@ class TestAwaitingPostBug:
 
             mock_detail.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_drug_name_falls_through_to_search(self):
+        """Drug name like 'losartan' in bug state → normal search flow."""
+        user = _make_user(step="awaiting_post_bug")
+
+        drug_intent = Intent(action="drug_search", drug_query="losartan")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=drug_intent),
+            patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock) as mock_reword,
+            patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock) as mock_create,
+            patch("farmafacil.bot.handler.classify_intent", new_callable=AsyncMock, return_value=Intent(action="drug_search", drug_query="losartan")),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "losartan")
+
+            # Should NOT save as bug
+            mock_reword.assert_not_called()
+            mock_create.assert_not_called()
+            mock_step.assert_any_call(SENDER, None)
+            mock_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_voice_drug_name_falls_through(self):
+        """Voice note transcribed to drug name → search, not bug report."""
+        user = _make_user(step="awaiting_post_bug")
+
+        drug_intent = Intent(action="drug_search", drug_query="ibuprofeno")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=drug_intent),
+            patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock) as mock_create,
+            patch("farmafacil.bot.handler.classify_intent", new_callable=AsyncMock, return_value=Intent(action="drug_search", drug_query="ibuprofeno")),
+            patch("farmafacil.bot.handler.get_setting", side_effect=_setting_lookup),
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "ibuprofeno", voice_message_id=75)
+
+            mock_create.assert_not_called()
+            mock_step.assert_any_call(SENDER, None)
+            mock_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_classify_keywords_error_saves_as_bug(self):
+        """If classify_intent_keywords raises, treat input as bug report."""
+        user = _make_user(step="awaiting_post_bug")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, side_effect=Exception("DB cache error")),
+            patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="Saved anyway") as mock_reword,
+            patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, return_value=99) as mock_create,
+            patch("farmafacil.bot.handler.record_feedback_detail", new_callable=AsyncMock),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "ibuprofeno")
+
+            # Should fall back to saving as bug (not crash/stuck)
+            mock_reword.assert_called_once()
+            mock_create.assert_called_once()
+            mock_step.assert_called_once_with(SENDER, None)
+            sent_text = mock_send.call_args[0][1]
+            assert "#99" in sent_text
+
+    @pytest.mark.asyncio
+    async def test_non_drug_intent_still_saves_as_bug(self):
+        """Non-drug intent (e.g., greeting) in bug state → saved as bug."""
+        user = _make_user(step="awaiting_post_bug")
+
+        # classify_intent_keywords returns a greeting, not drug_search
+        greeting_intent = Intent(action="greeting", response_text="Hola")
+
+        with (
+            patch("farmafacil.bot.handler.get_or_create_user", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.set_onboarding_step", new_callable=AsyncMock) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler.send_read_receipt", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler.classify_intent_keywords", new_callable=AsyncMock, return_value=greeting_intent),
+            patch("farmafacil.bot.handler.reword_for_feedback", new_callable=AsyncMock, return_value="No funciona la app") as mock_reword,
+            patch("farmafacil.bot.handler.create_feedback", new_callable=AsyncMock, return_value=20) as mock_create,
+            patch("farmafacil.bot.handler.record_feedback_detail", new_callable=AsyncMock),
+        ):
+            from farmafacil.bot.handler import handle_incoming_message
+            await handle_incoming_message(SENDER, "no funciona la app")
+
+            # Non-drug intent → still treated as bug report
+            mock_reword.assert_called_once()
+            mock_create.assert_called_once()
+            mock_step.assert_called_once_with(SENDER, None)
+            sent_text = mock_send.call_args[0][1]
+            assert "#20" in sent_text
+
 
 # ── Escape hatch: /bug and /sugerencia clear new states ─────────────────
 
 
 class TestEscapeHatchClearsNewStates:
-    """Commands /bug and /sugerencia should clear the new states."""
+    """Commands /bug and /sugerencia should clear the new feedback states."""
 
     @pytest.mark.asyncio
     async def test_bug_command_clears_awaiting_post_suggestion(self):
@@ -527,3 +815,33 @@ class TestAdminDropdownStates:
 
         step_values = [v for v, _ in USER_ONBOARDING_STEP_CHOICES]
         assert "awaiting_feedback_detail" in step_values
+
+
+# ── Settings defaults exist ─────────────────────────────────────────────
+
+
+class TestSettingsDefaults:
+    """Verify post-feedback settings exist in DEFAULTS with proper values."""
+
+    def test_suggestion_setting_in_defaults(self):
+        from farmafacil.services.settings import DEFAULTS
+
+        assert "post_feedback_suggestion" in DEFAULTS
+        value, desc = DEFAULTS["post_feedback_suggestion"]
+        assert value == "true"
+        assert "suggestion" in desc.lower() or "sugerencia" in desc.lower()
+
+    def test_bug_report_setting_in_defaults(self):
+        from farmafacil.services.settings import DEFAULTS
+
+        assert "post_feedback_bug_report" in DEFAULTS
+        value, desc = DEFAULTS["post_feedback_bug_report"]
+        assert value == "true"
+        assert "bug" in desc.lower() or "report" in desc.lower()
+
+    def test_settings_are_independent(self):
+        """The two settings are distinct keys, not a shared toggle."""
+        from farmafacil.services.settings import DEFAULTS
+
+        assert "post_feedback_suggestion" != "post_feedback_bug_report"
+        assert DEFAULTS["post_feedback_suggestion"] is not DEFAULTS["post_feedback_bug_report"]

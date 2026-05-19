@@ -370,17 +370,27 @@ After every drug search, the bot asks "¿Te sirvió? (sí/no)". The flow uses `o
 | `awaiting_feedback` | anything else (incl. "gracias", "ok", "bien") | Clears step, processes as normal message |
 | `awaiting_post_suggestion` | "no" | Skips, thanks user |
 | `awaiting_post_suggestion` | "sí" | Re-prompts to send content |
-| `awaiting_post_suggestion` | text or voice | AI re-words → creates `user_suggestions` row |
+| `awaiting_post_suggestion` | drug name (e.g., "losartan") | Smart classification detects drug → clears state → normal search |
+| `awaiting_post_suggestion` | other text or voice | AI re-words → creates `user_suggestions` row |
 | `awaiting_post_bug` | "no" | Skips, thanks user |
 | `awaiting_post_bug` | "sí" | Re-prompts to send content |
-| `awaiting_post_bug` | text or voice | AI re-words → creates `user_feedback` row (bug) |
+| `awaiting_post_bug` | drug name (e.g., "losartan") | Smart classification detects drug → clears state → normal search |
+| `awaiting_post_bug` | other text or voice | AI re-words → creates `user_feedback` row (bug) |
 | `awaiting_feedback_detail` | any text | Legacy state — records detail, thanks user |
 
 ### Post-feedback follow-ups (v0.22.2)
 
-After YES feedback, the bot offers "¿Quieres dejar una sugerencia?" The user can write text or send a voice note. The text is re-worded via AI (`reword_for_feedback` in `ai_responder.py`) to clean up transcription artifacts and colloquial language, then saved to `user_suggestions`.
+Each feature has an independent on/off toggle in `app_settings`:
+- `post_feedback_suggestion` (default `"true"`) — YES feedback → suggestion offer
+- `post_feedback_bug_report` (default `"true"`) — NO feedback → bug report offer
 
-After NO feedback, the bot offers "¿Quieres contarnos qué no funcionó?" Same text/voice input, re-worded via AI, saved to `user_feedback` as a bug report. The reworded text is also annotated on `search_logs.feedback_detail` (best-effort).
+When disabled, YES reverts to the original "¡Gracias!" response, and NO reverts to `awaiting_feedback_detail` ("¿Qué buscabas?").
+
+After YES feedback (if enabled), the bot offers "¿Quieres dejar una sugerencia?" The user can write text or send a voice note. The text is re-worded via AI (`reword_for_feedback` in `ai_responder.py`) to clean up transcription artifacts and colloquial language, then saved to `user_suggestions`.
+
+After NO feedback (if enabled), the bot offers "¿Quieres contarnos qué no funcionó?" Same text/voice input, re-worded via AI, saved to `user_feedback` as a bug report. The reworded text is also annotated on `search_logs.feedback_detail` (best-effort).
+
+**Smart intent classification:** In both `awaiting_post_suggestion` and `awaiting_post_bug` states, the bot runs `classify_intent_keywords(text)` before saving. If the keyword classifier detects the input is a drug search (e.g., user sends "losartan" or a voice note transcribed to a drug name), the state is cleared and the message falls through to normal search flow. This prevents voice notes containing drug names from being accidentally saved as suggestions/bugs. If the classifier raises an exception, the input is treated as a suggestion/bug (safe fallback).
 
 Voice notes sent during these states flow naturally: `handle_voice_message` → transcribe → `handle_incoming_message` → state machine picks up the transcription.
 

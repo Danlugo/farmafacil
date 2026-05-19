@@ -26,7 +26,12 @@ from farmafacil.services.admin_chat import build_tools_manifest
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.user_memory import auto_update_memory, get_memory
 from farmafacil.services.geocode import geocode_zone, reverse_geocode
-from farmafacil.services.intent import HELP_MESSAGE, _get_keyword_cache, classify_intent
+from farmafacil.services.intent import (
+    HELP_MESSAGE,
+    _get_keyword_cache,
+    classify_intent,
+    classify_intent_keywords,
+)
 from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
 from farmafacil.services.search_feedback import (
     log_search,
@@ -1608,15 +1613,33 @@ async def handle_incoming_message(
         if feedback == "yes":
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "yes")
-            # v0.22.2: offer to leave a suggestion instead of just "thanks"
-            await set_onboarding_step(sender, "awaiting_post_suggestion")
-            await send_text_message(sender, MSG_POST_SUGGESTION_OFFER)
+            # v0.22.2: offer to leave a suggestion (if feature is enabled)
+            suggestion_on = (await get_setting("post_feedback_suggestion")).lower() == "true"
+            if suggestion_on:
+                try:
+                    await send_text_message(sender, MSG_POST_SUGGESTION_OFFER)
+                    await set_onboarding_step(sender, "awaiting_post_suggestion")
+                except Exception:
+                    logger.exception("Failed to send suggestion offer")
+                    await set_onboarding_step(sender, None)
+            else:
+                await set_onboarding_step(sender, None)
+                await send_text_message(sender, MSG_FEEDBACK_THANKS)
         elif feedback == "no":
             if user.last_search_log_id:
                 await record_feedback(user.last_search_log_id, "no")
-            # v0.22.2: offer to leave a bug report instead of generic detail
-            await set_onboarding_step(sender, "awaiting_post_bug")
-            await send_text_message(sender, MSG_POST_BUG_OFFER)
+            # v0.22.2: offer to leave a bug report (if feature is enabled)
+            bug_on = (await get_setting("post_feedback_bug_report")).lower() == "true"
+            if bug_on:
+                try:
+                    await send_text_message(sender, MSG_POST_BUG_OFFER)
+                    await set_onboarding_step(sender, "awaiting_post_bug")
+                except Exception:
+                    logger.exception("Failed to send bug report offer")
+                    await set_onboarding_step(sender, None)
+            else:
+                await set_onboarding_step(sender, "awaiting_feedback_detail")
+                await send_text_message(sender, MSG_FEEDBACK_SORRY)
         else:
             # Not a feedback response — clear step and process normally
             await set_onboarding_step(sender, None)
@@ -1626,7 +1649,8 @@ async def handle_incoming_message(
             return
 
     if step == "awaiting_feedback_detail":
-        # Legacy state from pre-v0.22.2 — users stuck here should still work.
+        # Legacy state (pre-v0.22.2) AND fallback when bug_report feature
+        # is disabled — users here should still record detail normally.
         if user.last_search_log_id:
             await record_feedback_detail(user.last_search_log_id, text)
         await set_onboarding_step(sender, None)
@@ -1637,76 +1661,114 @@ async def handle_incoming_message(
         # v0.22.2: User was asked "¿Quieres dejar una sugerencia?"
         feedback_reply = parse_feedback(text)
         if feedback_reply == "no":
-            # User declined — just say thanks and move on
             await set_onboarding_step(sender, None)
             await send_text_message(sender, MSG_POST_FEEDBACK_SKIP)
             return
         if feedback_reply == "yes":
-            # User said "sí" — re-prompt to send actual content
             await send_text_message(sender, MSG_POST_SUGGESTION_PROMPT)
             return
-        # User sent actual suggestion text — reword and save
-        reworded = await reword_for_feedback(text, "sugerencia")
+        # Smart classification: if this looks like a drug search, clear
+        # the feedback state and let normal intent routing handle it.
+        # This prevents voice notes like "losartan" from being saved as
+        # a suggestion instead of triggering a search.
+        # NOTE: classify_intent_keywords depends on the DB keyword cache;
+        # if it raises we treat the input as a suggestion (safe fallback).
         try:
-            case_id = await create_suggestion(
-                user_id=user.id,
-                phone_number=sender,
-                message=reworded,
-                voice_message_id=voice_message_id,
-            )
-            await set_onboarding_step(sender, None)
-            await send_text_message(
-                sender, MSG_POST_SUGGESTION_THANKS.format(case_id=case_id),
-            )
+            kw_intent = await classify_intent_keywords(text)
         except Exception:
-            logger.exception("Failed to save post-feedback suggestion")
+            logger.warning(
+                "classify_intent_keywords failed in post-suggestion state",
+                exc_info=True,
+            )
+            kw_intent = None
+        if kw_intent and kw_intent.action == "drug_search":
+            logger.info(
+                "Post-suggestion text '%s' classified as drug_search — "
+                "falling through to normal flow", text[:50],
+            )
             await set_onboarding_step(sender, None)
-            await send_text_message(sender, MSG_SUGGESTION_ERROR)
-        return
+            step = None
+            # Fall through — do NOT return
+        else:
+            # Treat as suggestion text — reword and save
+            reworded = await reword_for_feedback(text, "sugerencia")
+            try:
+                case_id = await create_suggestion(
+                    user_id=user.id,
+                    phone_number=sender,
+                    message=reworded,
+                    voice_message_id=voice_message_id,
+                )
+                await set_onboarding_step(sender, None)
+                await send_text_message(
+                    sender, MSG_POST_SUGGESTION_THANKS.format(case_id=case_id),
+                )
+            except Exception:
+                logger.exception("Failed to save post-feedback suggestion")
+                await set_onboarding_step(sender, None)
+                await send_text_message(sender, MSG_SUGGESTION_ERROR)
+            return
 
     if step == "awaiting_post_bug":
         # v0.22.2: User was asked "¿Quieres contarnos qué no funcionó?"
         feedback_reply = parse_feedback(text)
         if feedback_reply == "no":
-            # User declined — just say thanks and move on
             await set_onboarding_step(sender, None)
             await send_text_message(sender, MSG_POST_FEEDBACK_SKIP)
             return
         if feedback_reply == "yes":
-            # User said "sí" — re-prompt to send actual content
             await send_text_message(sender, MSG_POST_BUG_PROMPT)
             return
-        # User sent actual bug report text — reword and save
-        reworded = await reword_for_feedback(text, "reporte de error")
+        # Smart classification: if this looks like a drug search, clear
+        # the feedback state and let normal intent routing handle it.
+        # NOTE: classify_intent_keywords depends on the DB keyword cache;
+        # if it raises we treat the input as a bug report (safe fallback).
         try:
-            case_id = await create_feedback(
-                user_id=user.id,
-                feedback_type="bug",
-                message=reworded,
-                phone_number=sender,
-                voice_message_id=voice_message_id,
-            )
+            kw_intent = await classify_intent_keywords(text)
         except Exception:
-            logger.exception("Failed to save post-feedback bug report")
+            logger.warning(
+                "classify_intent_keywords failed in post-bug state",
+                exc_info=True,
+            )
+            kw_intent = None
+        if kw_intent and kw_intent.action == "drug_search":
+            logger.info(
+                "Post-bug text '%s' classified as drug_search — "
+                "falling through to normal flow", text[:50],
+            )
             await set_onboarding_step(sender, None)
-            await send_text_message(sender, MSG_FEEDBACK_ERROR)
-            return
-        # Best-effort: annotate the search log with the bug detail too.
-        # Separated from the create_feedback try/except so users still see
-        # the confirmation even if this secondary write fails.
-        if user.last_search_log_id:
+            step = None
+            # Fall through — do NOT return
+        else:
+            # Treat as bug report text — reword and save
+            reworded = await reword_for_feedback(text, "reporte de error")
             try:
-                await record_feedback_detail(user.last_search_log_id, reworded)
-            except Exception:
-                logger.warning(
-                    "Failed to annotate search_log %d with bug detail",
-                    user.last_search_log_id, exc_info=True,
+                case_id = await create_feedback(
+                    user_id=user.id,
+                    feedback_type="bug",
+                    message=reworded,
+                    phone_number=sender,
+                    voice_message_id=voice_message_id,
                 )
-        await set_onboarding_step(sender, None)
-        await send_text_message(
-            sender, MSG_POST_BUG_THANKS.format(case_id=case_id),
-        )
-        return
+            except Exception:
+                logger.exception("Failed to save post-feedback bug report")
+                await set_onboarding_step(sender, None)
+                await send_text_message(sender, MSG_FEEDBACK_ERROR)
+                return
+            # Best-effort: annotate the search log with the bug detail too.
+            if user.last_search_log_id:
+                try:
+                    await record_feedback_detail(user.last_search_log_id, reworded)
+                except Exception:
+                    logger.warning(
+                        "Failed to annotate search_log %d with bug detail",
+                        user.last_search_log_id, exc_info=True,
+                    )
+            await set_onboarding_step(sender, None)
+            await send_text_message(
+                sender, MSG_POST_BUG_THANKS.format(case_id=case_id),
+            )
+            return
 
     # ── Onboarding complete — smart conversational flow ─────────────────
 

@@ -36,6 +36,16 @@ DEFAULTS: dict[str, tuple[str, str]] = {
         "'opus'. Editable via /model <alias> in admin chat. The admin AI "
         "itself always uses Opus regardless of this setting. (Item 35, v0.14.0)",
     ),
+    "post_feedback_suggestion": (
+        "true",
+        "After YES feedback on drug search, ask user if they want to leave "
+        "a suggestion (text or voice). Values: 'true' or 'false'. (v0.22.2)",
+    ),
+    "post_feedback_bug_report": (
+        "true",
+        "After NO feedback on drug search, ask user if they want to leave "
+        "a bug report (text or voice). Values: 'true' or 'false'. (v0.22.2)",
+    ),
 }
 
 # Model alias set — must match config.MODEL_ALIASES
