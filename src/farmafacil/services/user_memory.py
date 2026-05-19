@@ -12,7 +12,6 @@ preferred products, and behavioral patterns. It can reference profile data
 
 import logging
 
-import anthropic
 from anthropic import APIConnectionError, APIError
 from sqlalchemy import select, func
 from sqlalchemy.exc import SQLAlchemyError
@@ -148,11 +147,12 @@ async def auto_update_memory(
         # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before, so
         # admin set_default_model didn't change which model maintained
         # user memory either.)
+        from farmafacil.services.ai_responder import _get_client
         from farmafacil.services.settings import resolve_user_model
 
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=500,
             system=(

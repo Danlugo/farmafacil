@@ -191,19 +191,24 @@ async def update_last_search(
 ) -> None:
     """Store the user's last search query and search log ID.
 
+    Uses a direct UPDATE (no SELECT) to reduce DB round-trips.
+    (Item 59, v0.24.0 — was SELECT + UPDATE before.)
+
     Args:
         phone_number: WhatsApp phone number.
         query: The drug search query.
         search_log_id: Optional search_logs.id for feedback tracking.
     """
+    values: dict = {"last_search_query": query}
+    if search_log_id is not None:
+        values["last_search_log_id"] = search_log_id
+
     async with async_session() as session:
-        result = await session.execute(
-            select(User).where(User.phone_number == phone_number)
+        await session.execute(
+            update(User)
+            .where(User.phone_number == phone_number)
+            .values(**values)
         )
-        user = result.scalar_one()
-        user.last_search_query = query
-        if search_log_id is not None:
-            user.last_search_log_id = search_log_id
         await session.commit()
 
 
@@ -374,22 +379,20 @@ async def set_admin_mode(phone_number: str, active: bool) -> None:
         await session.commit()
 
 
-async def set_onboarding_step(phone_number: str, step: str | None) -> User:
+async def set_onboarding_step(phone_number: str, step: str | None) -> None:
     """Set the user's current onboarding step.
+
+    Uses a direct UPDATE (no SELECT) to reduce DB round-trips.
+    (Item 59, v0.24.0 — was SELECT + UPDATE before.)
 
     Args:
         phone_number: WhatsApp phone number.
         step: Onboarding step or None (complete).
-
-    Returns:
-        Updated User record.
     """
     async with async_session() as session:
-        result = await session.execute(
-            select(User).where(User.phone_number == phone_number)
+        await session.execute(
+            update(User)
+            .where(User.phone_number == phone_number)
+            .values(onboarding_step=step)
         )
-        user = result.scalar_one()
-        user.onboarding_step = step
         await session.commit()
-        await session.refresh(user)
-        return user

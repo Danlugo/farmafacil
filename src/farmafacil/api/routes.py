@@ -2,6 +2,7 @@
 
 import csv
 import io
+import re
 from html import escape
 
 import secrets
@@ -820,6 +821,15 @@ async def export_conversations(
     return _export_as_csv(messages, users_by_phone, phone, session)
 
 
+def _sanitize_filename_part(value: str | None) -> str:
+    """Strip unsafe characters from a string used in Content-Disposition filenames.
+
+    Prevents header injection via crafted phone/session parameters.
+    (Item 61, v0.24.0.)
+    """
+    return re.sub(r"[^A-Za-z0-9_\-]", "_", value or "")[:30]
+
+
 def _export_as_csv(messages, users_by_phone, phone, session_iso):
     """Produce a CSV export."""
     buffer = io.StringIO()
@@ -841,9 +851,9 @@ def _export_as_csv(messages, users_by_phone, phone, session_iso):
         ])
 
     buffer.seek(0)
-    suffix = f"_{phone}" if phone else "_all"
+    suffix = f"_{_sanitize_filename_part(phone)}" if phone else "_all"
     if session_iso:
-        suffix += f"_session_{session_iso.replace(':', '').replace('-', '')[:15]}"
+        suffix += f"_session_{_sanitize_filename_part(session_iso)}"
     filename = f"conversations{suffix}.csv"
 
     return StreamingResponse(
@@ -904,9 +914,9 @@ def _export_as_docx(messages, users_by_phone, phone, session_iso):
     doc.save(buffer)
     buffer.seek(0)
 
-    suffix = f"_{phone}" if phone else "_all"
+    suffix = f"_{_sanitize_filename_part(phone)}" if phone else "_all"
     if session_iso:
-        suffix += f"_session_{session_iso.replace(':', '').replace('-', '')[:15]}"
+        suffix += f"_session_{_sanitize_filename_part(session_iso)}"
     filename = f"conversations{suffix}.docx"
 
     return StreamingResponse(

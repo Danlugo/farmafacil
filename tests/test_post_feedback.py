@@ -717,11 +717,11 @@ class TestRewordForFeedback:
         mock_response.usage.output_tokens = 10
 
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic", return_value=mock_client),
+            patch("farmafacil.services.ai_responder._get_client", return_value=mock_client),
             patch("farmafacil.services.ai_responder.resolve_user_model", new_callable=AsyncMock, return_value="claude-haiku-4-5-20251001"),
         ):
             from farmafacil.services.ai_responder import reword_for_feedback
@@ -738,11 +738,11 @@ class TestRewordForFeedback:
         mock_response.content = [MagicMock(text="Error en búsqueda")]
 
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic", return_value=mock_client),
+            patch("farmafacil.services.ai_responder._get_client", return_value=mock_client),
             patch("farmafacil.services.ai_responder.resolve_user_model", new_callable=AsyncMock, return_value="claude-haiku-4-5-20251001"),
         ):
             from farmafacil.services.ai_responder import reword_for_feedback
@@ -765,11 +765,11 @@ class TestRewordForFeedback:
     async def test_reword_fallback_on_api_error(self):
         """On API error, returns raw text."""
         mock_client = MagicMock()
-        mock_client.messages.create.side_effect = Exception("API timeout")
+        mock_client.messages.create = AsyncMock(side_effect=Exception("API timeout"))
 
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic", return_value=mock_client),
+            patch("farmafacil.services.ai_responder._get_client", return_value=mock_client),
             patch("farmafacil.services.ai_responder.resolve_user_model", new_callable=AsyncMock, return_value="claude-haiku-4-5-20251001"),
         ):
             from farmafacil.services.ai_responder import reword_for_feedback

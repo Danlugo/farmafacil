@@ -27,6 +27,21 @@ from farmafacil.services.user_memory import get_memory
 
 logger = logging.getLogger(__name__)
 
+# ── Module-level async client singleton ─────────────────────────────────
+# A single AsyncAnthropic instance reuses the underlying httpx connection
+# pool across all LLM calls, avoiding per-call TLS handshakes.  The client
+# is safe for concurrent use from multiple asyncio tasks.
+# (Item 56, v0.24.0 — was creating a new sync Anthropic() per call.)
+_async_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    """Return the module-level async Anthropic client, creating it lazily."""
+    global _async_client
+    if _async_client is None:
+        _async_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    return _async_client
+
 # ── Classification instructions appended to every classify_with_ai call ──
 # Extracted as a module-level constant so test_drug_liability.py can verify
 # consistency with the seed rules (no_drug_recommendations, symptom_acknowledgment).
@@ -337,8 +352,8 @@ async def classify_with_ai(
         # the admin /model command (and admin chat tool set_default_model)
         # actually changes which model the bot uses. (v0.19.2, Item 49.)
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=500,
             system=system_prompt,
@@ -404,8 +419,8 @@ async def _call_llm(
         # Resolve the user-facing model from app_settings.default_model.
         # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before.)
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=500,
             system=system_prompt,
@@ -485,11 +500,9 @@ async def reword_for_feedback(
         return raw_text.strip()
 
     try:
-        # NOTE: blocking I/O in async context — same pattern as _call_llm.
-        # Acceptable for this low-frequency path (post-feedback only).
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=200,
             system=_REWORD_SYSTEM_PROMPT.format(feedback_type=feedback_type),
@@ -574,8 +587,8 @@ async def refine_clarified_query(
         # Resolve the user-facing model from app_settings.default_model.
         # (v0.19.2, Item 49 — was hardcoded to LLM_MODEL/haiku before.)
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=40,
             system=_REFINER_SYSTEM_PROMPT,
@@ -753,7 +766,7 @@ async def run_admin_turn(
     tools_used: list[str] = []
 
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = _get_client()
     except Exception:  # noqa: BLE001 — client init failure must not kill handler
         logger.error("run_admin_turn: failed to init Anthropic client", exc_info=True)
         return AdminTurnResult(
@@ -762,7 +775,7 @@ async def run_admin_turn(
 
     for step in range(1, MAX_ADMIN_STEPS + 1):
         try:
-            response = client.messages.create(
+            response = await client.messages.create(
                 model=LLM_MODEL_OPUS,
                 max_tokens=1024,
                 system=system_prompt,

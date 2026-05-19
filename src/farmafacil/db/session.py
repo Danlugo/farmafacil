@@ -21,8 +21,16 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     connect_args=_connect_args,
-    # pool_size / max_overflow only apply to Postgres; SQLite uses StaticPool
-    **({"pool_size": 5, "max_overflow": 10} if not _is_sqlite else {}),
+    # pool_size / max_overflow / pool_pre_ping only apply to Postgres;
+    # SQLite uses StaticPool and ignores pool settings.
+    # pool_pre_ping=True pings idle connections before reuse so stale
+    # connections (dropped by Postgres tcp_keepalives_idle or firewalls)
+    # are replaced transparently. (Item 60, v0.24.0.)
+    **(
+        {"pool_size": 5, "max_overflow": 10, "pool_pre_ping": True}
+        if not _is_sqlite
+        else {}
+    ),
 )
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

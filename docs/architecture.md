@@ -254,6 +254,15 @@ On application start (`lifespan` in `app.py`):
 3. `seed_settings()` — insert default app settings
 4. `backfill_stores()` — fetch Farmatodo store locations (all 18 cities), upsert
 
+## Performance Architecture (v0.24.0)
+
+- **Async LLM client:** Module-level `AsyncAnthropic` singleton in `ai_responder._get_client()` — reuses httpx connection pool across all 8 LLM call sites, non-blocking `await` on event loop.
+- **Settings cache:** In-memory `{key: (value, expire_ts)}` dict with 60s TTL in `settings.py`. Invalidated on writes (`set_setting`, `set_default_model`). Avoids 8+ DB round-trips per message.
+- **Non-blocking webhook:** `webhook.py` returns 200 to Meta immediately; handler runs as `asyncio.create_task()` via `_fire_and_forget()` with `_safe_handle()` error wrapper. Dedup check + `log_inbound` remain synchronous.
+- **Direct UPDATE:** `set_onboarding_step` and `update_last_search` use `update(User).where().values()` — no SELECT first.
+- **Pool pre-ping:** Postgres engine uses `pool_pre_ping=True` to detect and replace stale connections transparently.
+- **Filename sanitization:** `_sanitize_filename_part()` in routes.py strips non-alphanumeric chars from Content-Disposition filenames via allowlist regex.
+
 ## Supported Cities
 
 Farmatodo city codes used throughout the system:

@@ -148,11 +148,10 @@ class TestRefineClarifiedQueryUnit:
         fake_message.usage = MagicMock(input_tokens=85, output_tokens=6)
 
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = fake_message
+        fake_client.messages.create = AsyncMock(return_value=fake_message)
 
-        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+        with patch.object(ai_responder, "_get_client", return_value=fake_client), \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
-            mock_anthropic.Anthropic.return_value = fake_client
             result = await ai_responder.refine_clarified_query(
                 "medicinas para la memoria",
                 "gomitas, adulto",
@@ -179,11 +178,10 @@ class TestRefineClarifiedQueryUnit:
         fake_message.usage = MagicMock(input_tokens=50, output_tokens=4)
 
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = fake_message
+        fake_client.messages.create = AsyncMock(return_value=fake_message)
 
-        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+        with patch.object(ai_responder, "_get_client", return_value=fake_client), \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
-            mock_anthropic.Anthropic.return_value = fake_client
             refined, _, _, _ = await ai_responder.refine_clarified_query(
                 "algo para dormir", "pastillas",
             )
@@ -202,11 +200,10 @@ class TestRefineClarifiedQueryUnit:
         fake_message.usage = MagicMock(input_tokens=40, output_tokens=1)
 
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = fake_message
+        fake_client.messages.create = AsyncMock(return_value=fake_message)
 
-        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+        with patch.object(ai_responder, "_get_client", return_value=fake_client), \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
-            mock_anthropic.Anthropic.return_value = fake_client
             refined, tin, tout, _ = await ai_responder.refine_clarified_query(
                 "vitaminas", "para niño bebible",
             )
@@ -224,11 +221,10 @@ class TestRefineClarifiedQueryUnit:
         from farmafacil.services import ai_responder
 
         fake_client = MagicMock()
-        fake_client.messages.create.side_effect = RuntimeError("API 500")
+        fake_client.messages.create = AsyncMock(side_effect=RuntimeError("API 500"))
 
-        with patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic, \
+        with patch.object(ai_responder, "_get_client", return_value=fake_client), \
              patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"):
-            mock_anthropic.Anthropic.return_value = fake_client
             refined, tin, tout, model = await ai_responder.refine_clarified_query(
                 "medicinas para la memoria", "gomitas adulto",
             )

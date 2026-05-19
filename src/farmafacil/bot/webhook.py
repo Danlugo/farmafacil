@@ -1,5 +1,13 @@
-"""WhatsApp Business API webhook endpoint."""
+"""WhatsApp Business API webhook endpoint.
 
+Meta retries webhooks when the POST doesn't return 200 within ~5 seconds.
+To avoid duplicate processing, we return 200 immediately and dispatch the
+handler logic to a background ``asyncio.Task`` (Item 58, v0.24.0).
+The existing dedup guard (``is_duplicate_message``) prevents re-processing
+if Meta retries before the task starts.
+"""
+
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,7 +29,39 @@ from farmafacil.services.conversation_log import is_duplicate_message, log_inbou
 
 logger = logging.getLogger(__name__)
 
+# Keep references to background tasks so they aren't GC'd before finishing.
+# The set auto-prunes via the done callback.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    """Schedule a coroutine as a background task with error logging."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 webhook_router = APIRouter()
+
+
+async def _safe_handle(coro, sender: str, wa_id: str) -> None:
+    """Await *coro* inside a try/except so background tasks never crash silently.
+
+    Must be called from within a running asyncio event loop (via
+    ``_fire_and_forget``).  ``CancelledError`` is re-raised so Uvicorn
+    shutdown can cancel in-flight tasks cleanly.
+    """
+    try:
+        await coro
+    except asyncio.CancelledError:
+        logger.info(
+            "Background handler cancelled for %s (wa_id=%s)", sender, wa_id,
+        )
+        raise
+    except Exception:
+        logger.error(
+            "Background handler failed for %s (wa_id=%s)",
+            sender, wa_id, exc_info=True,
+        )
 
 
 def _verify_signature(payload: bytes, signature_header: str) -> bool:
@@ -128,7 +168,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                     text = message.get("text", {}).get("body", "")
                     logger.info("Received message from %s: %s", sender, text[:100])
 
-                    # Log inbound message
+                    # Log inbound message synchronously (fast DB insert)
                     await log_inbound(
                         phone_number=sender,
                         message_text=text,
@@ -136,7 +176,10 @@ async def receive_webhook(request: Request) -> dict | Response:
                         wa_message_id=wa_id,
                     )
 
-                    await handle_incoming_message(sender, text, wa_message_id=wa_id)
+                    # Dispatch handler as background task — return 200 immediately
+                    _fire_and_forget(
+                        _safe_handle(handle_incoming_message(sender, text, wa_message_id=wa_id), sender, wa_id)
+                    )
 
                 elif msg_type == "location":
                     loc = message.get("location", {})
@@ -164,15 +207,23 @@ async def receive_webhook(request: Request) -> dict | Response:
                             "Malformed location payload from %s: %r, %r",
                             sender, lat_raw, lng_raw,
                         )
-                        await send_text_message(
-                            sender,
-                            "No pude leer las coordenadas que compartiste. "
-                            "Por favor envia tu zona por texto.",
+                        _fire_and_forget(
+                            _safe_handle(
+                                send_text_message(
+                                    sender,
+                                    "No pude leer las coordenadas que compartiste. "
+                                    "Por favor envia tu zona por texto.",
+                                ),
+                                sender, wa_id,
+                            )
                         )
                         continue
 
-                    await handle_location_message(
-                        sender, lat, lng, wa_message_id=wa_id,
+                    _fire_and_forget(
+                        _safe_handle(
+                            handle_location_message(sender, lat, lng, wa_message_id=wa_id),
+                            sender, wa_id,
+                        )
                     )
 
                 elif msg_type == "interactive":
@@ -201,8 +252,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                     )
 
                     if itype == "list_reply" and reply_id:
-                        await handle_list_reply(
-                            sender, reply_id, wa_message_id=wa_id,
+                        _fire_and_forget(
+                            _safe_handle(
+                                handle_list_reply(sender, reply_id, wa_message_id=wa_id),
+                                sender, wa_id,
+                            )
                         )
                     else:
                         logger.warning(
@@ -226,9 +280,14 @@ async def receive_webhook(request: Request) -> dict | Response:
                         wa_message_id=wa_id,
                     )
                     if media_id:
-                        await handle_image_message(
-                            sender, media_id, mime_type,
-                            caption=caption, wa_message_id=wa_id,
+                        _fire_and_forget(
+                            _safe_handle(
+                                handle_image_message(
+                                    sender, media_id, mime_type,
+                                    caption=caption, wa_message_id=wa_id,
+                                ),
+                                sender, wa_id,
+                            )
                         )
 
                 elif msg_type == "document":
@@ -248,9 +307,14 @@ async def receive_webhook(request: Request) -> dict | Response:
                         wa_message_id=wa_id,
                     )
                     if media_id:
-                        await handle_image_message(
-                            sender, media_id, mime_type,
-                            caption=caption or filename, wa_message_id=wa_id,
+                        _fire_and_forget(
+                            _safe_handle(
+                                handle_image_message(
+                                    sender, media_id, mime_type,
+                                    caption=caption or filename, wa_message_id=wa_id,
+                                ),
+                                sender, wa_id,
+                            )
                         )
 
                 elif msg_type == "audio":
@@ -268,8 +332,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                         wa_message_id=wa_id,
                     )
                     if media_id:
-                        await handle_voice_message(
-                            sender, media_id, wa_message_id=wa_id,
+                        _fire_and_forget(
+                            _safe_handle(
+                                handle_voice_message(sender, media_id, wa_message_id=wa_id),
+                                sender, wa_id,
+                            )
                         )
 
                 else:

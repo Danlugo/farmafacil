@@ -803,9 +803,8 @@ async def _extract_drug_name_from_image(
     Returns:
         The drug name string, or None if not found.
     """
-    import anthropic
-
     from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.ai_responder import _get_client
     from farmafacil.services.settings import resolve_user_model
 
     if not ANTHROPIC_API_KEY:
@@ -828,8 +827,8 @@ async def _extract_drug_name_from_image(
         # Resolve from app_settings so admin /model takes effect on Vision
         # too. (v0.19.2, Item 49.)
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=100,
             messages=[{"role": "user", "content": content}],
@@ -848,9 +847,8 @@ async def _extract_drug_name_from_image(
 
 async def _extract_drug_name_from_text(text: str) -> str | None:
     """Use AI to extract a drug name from document text."""
-    import anthropic
-
     from farmafacil.config import ANTHROPIC_API_KEY
+    from farmafacil.services.ai_responder import _get_client
     from farmafacil.services.settings import resolve_user_model
 
     if not ANTHROPIC_API_KEY:
@@ -863,8 +861,8 @@ async def _extract_drug_name_from_text(text: str) -> str | None:
         # Resolve from app_settings so admin /model takes effect on document
         # extraction too. (v0.19.2, Item 49.)
         resolved_model = await resolve_user_model()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
+        client = _get_client()
+        response = await client.messages.create(
             model=resolved_model,
             max_tokens=100,
             messages=[{

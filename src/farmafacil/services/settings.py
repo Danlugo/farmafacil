@@ -1,6 +1,13 @@
-"""App settings service — admin-editable config stored in DB."""
+"""App settings service — admin-editable config stored in DB.
+
+Includes a lightweight in-memory cache (Item 57, v0.24.0) so
+``get_setting()`` doesn't hit the database on every call.  The cache
+uses a per-key TTL of 60 seconds and is invalidated on writes
+(``set_setting``, ``set_default_model``).
+"""
 
 import logging
+import time
 
 from sqlalchemy import select
 
@@ -8,6 +15,20 @@ from farmafacil.db.session import async_session
 from farmafacil.models.database import AppSetting
 
 logger = logging.getLogger(__name__)
+
+# ── In-memory settings cache ─────────────────────────────────────────────
+# Maps key → (value, expire_timestamp). Entries older than _CACHE_TTL
+# seconds are treated as stale and refreshed from the DB on next access.
+_cache: dict[str, tuple[str, float]] = {}
+_CACHE_TTL: float = 60.0  # seconds
+
+
+def clear_settings_cache() -> None:
+    """Flush the entire settings cache.
+
+    Primarily for tests that need deterministic DB reads.
+    """
+    _cache.clear()
 
 # Default settings with descriptions
 DEFAULTS: dict[str, tuple[str, str]] = {
@@ -71,23 +92,38 @@ async def seed_settings() -> None:
 async def get_setting(key: str) -> str:
     """Get a setting value by key.
 
+    Uses a 60-second in-memory cache to avoid hitting the DB on every call.
+    Cache is invalidated on writes (``set_setting``, ``set_default_model``).
+
     Args:
         key: Setting key.
 
     Returns:
         Setting value as string. Falls back to default if not in DB.
     """
+    # Check cache first
+    now = time.monotonic()
+    cached = _cache.get(key)
+    if cached is not None:
+        value, expires = cached
+        if now < expires:
+            return value
+
+    # Cache miss or expired — read from DB
     async with async_session() as session:
         result = await session.execute(
             select(AppSetting).where(AppSetting.key == key)
         )
         setting = result.scalar_one_or_none()
         if setting:
+            _cache[key] = (setting.value, now + _CACHE_TTL)
             return setting.value
 
-    # Fallback to defaults
+    # Fallback to defaults (also cache so repeated misses don't hit DB)
     if key in DEFAULTS:
-        return DEFAULTS[key][0]
+        default_val = DEFAULTS[key][0]
+        _cache[key] = (default_val, now + _CACHE_TTL)
+        return default_val
     return ""
 
 
@@ -121,6 +157,8 @@ async def set_setting(key: str, value: str) -> None:
     without leaving WhatsApp. Mirrors the ``set_default_model`` upsert
     pattern — creates a new row with the DEFAULTS description if one exists,
     otherwise inserts without a description.
+
+    Invalidates the in-memory cache for this key on success.
     """
     async with async_session() as session:
         result = await session.execute(
@@ -135,6 +173,9 @@ async def set_setting(key: str, value: str) -> None:
         else:
             setting.value = value
         await session.commit()
+
+    # Invalidate cache after successful write
+    _cache.pop(key, None)
 
 
 _VALID_MODES = {"hybrid", "ai_only"}
@@ -215,6 +256,9 @@ async def set_default_model(alias: str) -> str:
         else:
             setting.value = normalized
         await session.commit()
+
+    # Invalidate cache after successful write
+    _cache.pop("default_model", None)
 
     return normalized
 

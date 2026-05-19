@@ -118,10 +118,10 @@ class TestUserFacingCallSitesRespectDefault:
             fake_message.usage = MagicMock(input_tokens=10, output_tokens=5)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
                 patch.object(
                     ai_responder, "get_role",
@@ -136,7 +136,6 @@ class TestUserFacingCallSitesRespectDefault:
                     new=AsyncMock(return_value=None),
                 ),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 result = await ai_responder.classify_with_ai(
                     "me duele la cabeza", user_id=1, user_name="Daniel",
                 )
@@ -167,13 +166,12 @@ class TestUserFacingCallSitesRespectDefault:
             fake_message.usage = MagicMock(input_tokens=20, output_tokens=10)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 text, tin, tout, model = await ai_responder._call_llm(
                     "system prompt", "hola", "Daniel",
                 )
@@ -197,13 +195,12 @@ class TestUserFacingCallSitesRespectDefault:
             fake_message.usage = MagicMock(input_tokens=80, output_tokens=6)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 refined, tin, tout, model = await ai_responder.refine_clarified_query(
                     "medicinas para la memoria", "gomitas adulto",
                 )
@@ -227,10 +224,10 @@ class TestUserFacingCallSitesRespectDefault:
             fake_message.usage = MagicMock(input_tokens=30, output_tokens=8)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(user_memory, "anthropic", MagicMock()) as mock_anthropic,
+                patch("farmafacil.services.ai_responder._get_client", return_value=fake_client),
                 patch.object(user_memory, "ANTHROPIC_API_KEY", "sk-test"),
                 patch.object(
                     user_memory, "get_memory",
@@ -244,7 +241,6 @@ class TestUserFacingCallSitesRespectDefault:
                     user_memory, "update_memory", new=AsyncMock(),
                 ),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 await user_memory.auto_update_memory(
                     user_id=1, user_name="Daniel",
                     user_message="me duele la cabeza",
@@ -279,13 +275,12 @@ class TestAdminAlwaysOpus:
             fake_message.usage = MagicMock(input_tokens=15, output_tokens=4)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 result = await ai_responder.run_admin_turn(
                     "hola admin", "system prompt for admin",
                     history=[], admin_user_id=1,
@@ -312,13 +307,12 @@ class TestAdminAlwaysOpus:
             fake_message.usage = MagicMock(input_tokens=15, output_tokens=4)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 await ai_responder.run_admin_turn(
                     "hola admin", "system prompt for admin",
                     history=[], admin_user_id=1,
@@ -357,10 +351,10 @@ class TestEndToEndAdminThenUser:
             fake_message.usage = MagicMock(input_tokens=10, output_tokens=5)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
                 patch.object(
                     ai_responder, "get_role",
@@ -375,7 +369,6 @@ class TestEndToEndAdminThenUser:
                     new=AsyncMock(return_value=None),
                 ),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 result = await ai_responder.classify_with_ai(
                     "me duele la cabeza", user_id=1, user_name="Daniel",
                 )
@@ -407,10 +400,10 @@ class TestEndToEndAdminThenUser:
             fake_message.usage = MagicMock(input_tokens=8, output_tokens=3)
 
             fake_client = MagicMock()
-            fake_client.messages.create.return_value = fake_message
+            fake_client.messages.create = AsyncMock(return_value=fake_message)
 
             with (
-                patch.object(ai_responder, "anthropic", MagicMock()) as mock_anthropic,
+                patch.object(ai_responder, "_get_client", return_value=fake_client),
                 patch.object(ai_responder, "ANTHROPIC_API_KEY", "sk-test"),
                 patch.object(
                     ai_responder, "get_role",
@@ -425,7 +418,6 @@ class TestEndToEndAdminThenUser:
                     new=AsyncMock(return_value=None),
                 ),
             ):
-                mock_anthropic.Anthropic.return_value = fake_client
                 result = await ai_responder.classify_with_ai(
                     "hola", user_id=1, user_name="Daniel",
                 )

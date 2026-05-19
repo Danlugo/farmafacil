@@ -67,57 +67,57 @@
 ## Phase 2 — Performance Unlock (P1)
 
 ### Item 56: Switch to async Anthropic SDK
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Med (~3 hours)
 - **Problem:** `anthropic.Anthropic().messages.create()` is synchronous blocking I/O in async handlers. Freezes the entire event loop for 1-5s per LLM call. Two simultaneous users = one waits for the other's Claude call. Also creates a new client instance per call (8 sites) with repeated TLS handshake overhead.
-- **Fix:** Replace all 8 `anthropic.Anthropic` instantiations with a module-level `anthropic.AsyncAnthropic` singleton. Change all `client.messages.create(...)` to `await client.messages.create(...)`.
-- **Files:** `src/farmafacil/services/ai_responder.py` (5 sites), `src/farmafacil/bot/handler.py` (2 sites), `src/farmafacil/services/user_memory.py` (1 site)
+- **Fix:** Module-level `_get_client()` returns lazy `AsyncAnthropic` singleton. All 8 call sites now use `await client.messages.create(...)`.
+- **Files:** `ai_responder.py` (5 sites + singleton), `handler.py` (2 extractors), `user_memory.py` (1 site)
 - **Found by:** Performance, SRE, Code Quality, Architecture (4 agents)
 
 ### Item 57: Add settings cache
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Low (~1 hour)
 - **Problem:** `get_setting()` opens a fresh DB session and SELECT per call. 8+ calls per drug-search message for values that change at most once per admin session.
-- **Fix:** Add module-level `{key: (value, expire_ts)}` dict with 60-second TTL. Invalidate in `set_setting()` and `set_default_model()`.
-- **Files:** `src/farmafacil/services/settings.py`
+- **Fix:** Module-level `_cache: dict[str, tuple[str, float]]` with 60s TTL via `time.monotonic()`. Explicit invalidation in `set_setting()` and `set_default_model()`. `clear_settings_cache()` exposed for tests.
+- **Files:** `services/settings.py`
 - **Found by:** Performance, Code Quality, Architecture (3 agents)
 
 ### Item 58: Make webhook processing non-blocking
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Med (~2 hours)
 - **Problem:** Full handler execution (AI + pharmacy APIs + WhatsApp sends) happens before returning 200 to Meta. Voice transcription or slow Algolia can exceed Meta's 5s retry window, causing duplicate webhooks.
-- **Fix:** Wrap handler calls in `asyncio.create_task()` and return 200 immediately. Dedup guard already in place. Add try/except inside task for error logging.
-- **Files:** `src/farmafacil/bot/webhook.py`
+- **Fix:** `_fire_and_forget()` wraps handler in `asyncio.create_task()`, `_safe_handle()` catches exceptions with logging and re-raises `CancelledError` for clean shutdown. `_background_tasks` set prevents GC. `log_inbound` + dedup check remain synchronous before 200.
+- **Files:** `bot/webhook.py`
 - **Found by:** SRE, Architecture
 
 ### Item 59: Consolidate user DB round-trips
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Med (~3 hours)
 - **Problem:** `set_onboarding_step`, `update_last_search`, etc. each re-SELECT the full User row before UPDATE. 10-12 user-table round-trips per drug search message.
-- **Fix:** Use `update(User).where(...).values(...)` pattern (already used by `increment_token_usage`). Batch `set_onboarding_step + update_last_search` into single UPDATE at end of `_handle_drug_search`.
-- **Files:** `src/farmafacil/services/users.py`, `src/farmafacil/bot/handler.py`
+- **Fix:** `set_onboarding_step` and `update_last_search` now use direct `update(User).where().values()` — no SELECT. `set_onboarding_step` returns `None` (callers never used return value).
+- **Files:** `services/users.py`
 - **Found by:** Performance, Code Quality
 
 ### Item 60: Add `pool_pre_ping=True` to Postgres engine
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Low (~5 min)
 - **Problem:** Idle connections beyond server `tcp_keepalives_idle` are silently dropped. Next query on stale connection raises `OperationalError`. Causes sporadic 500 errors.
-- **Fix:** Add `pool_pre_ping=True` to `create_async_engine()` call.
-- **Files:** `src/farmafacil/db/session.py`
+- **Fix:** Added `pool_pre_ping=True` to Postgres engine kwargs alongside `pool_size=5, max_overflow=10`.
+- **Files:** `db/session.py`
 - **Found by:** SRE
 
 ### Item 61: Sanitize Content-Disposition filename in export endpoints
-- **Status:** PENDING
+- **Status:** ✅ DONE (2026-05-19, v0.24.0)
 - **Priority:** P1
 - **Effort:** Low (~15 min)
 - **Problem:** Export endpoints build filename from unsanitized `phone` parameter. Crafted values can inject response headers.
-- **Fix:** `re.sub(r'[^A-Za-z0-9_\-]', '_', phone or '')[:30]`
-- **Files:** `src/farmafacil/api/routes.py`
+- **Fix:** `_sanitize_filename_part(value)` strips non-alphanumeric chars via allowlist regex `[A-Za-z0-9_\-]`, truncates to 30 chars. Applied to CSV and DOCX export filenames.
+- **Files:** `api/routes.py`
 - **Found by:** Security
 
 ---

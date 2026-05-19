@@ -648,12 +648,14 @@ class TestRunAdminTurn:
     @pytest.mark.asyncio
     async def test_final_response_short_circuits(self):
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = _mock_anthropic_response(
-            "ACTION: FINAL\nRESPONSE: Todo OK admin!"
+        fake_client.messages.create = AsyncMock(
+            return_value=_mock_anthropic_response(
+                "ACTION: FINAL\nRESPONSE: Todo OK admin!"
+            )
         )
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "sk-test"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic",
+            patch("farmafacil.services.ai_responder._get_client",
                   return_value=fake_client),
         ):
             result = await run_admin_turn(
@@ -671,7 +673,7 @@ class TestRunAdminTurn:
     async def test_tool_call_then_final(self):
         """First reply is TOOL_CALL, second is FINAL — 2 API calls."""
         fake_client = MagicMock()
-        fake_client.messages.create.side_effect = [
+        fake_client.messages.create = AsyncMock(side_effect=[
             _mock_anthropic_response(
                 'ACTION: TOOL_CALL\nTOOL: counts\nARGS: {}',
                 in_toks=5, out_toks=6,
@@ -680,11 +682,11 @@ class TestRunAdminTurn:
                 "ACTION: FINAL\nRESPONSE: Tenemos 42 usuarios.",
                 in_toks=7, out_toks=8,
             ),
-        ]
+        ])
         fake_tool = AsyncMock(return_value="usuarios: 42\nfeedback: 0")
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "sk-test"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic",
+            patch("farmafacil.services.ai_responder._get_client",
                   return_value=fake_client),
             patch("farmafacil.services.admin_chat.execute_tool", new=fake_tool),
         ):
@@ -714,8 +716,10 @@ class TestRunAdminTurn:
         """Malformed history elements must be dropped and the Anthropic API
         must never receive any sentinel fields like `_admin_user_id`."""
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = _mock_anthropic_response(
-            "ACTION: FINAL\nRESPONSE: ok"
+        fake_client.messages.create = AsyncMock(
+            return_value=_mock_anthropic_response(
+                "ACTION: FINAL\nRESPONSE: ok"
+            )
         )
         # Mix valid messages with malformed / sentinel entries
         history = [
@@ -729,7 +733,7 @@ class TestRunAdminTurn:
         ]
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "sk-test"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic",
+            patch("farmafacil.services.ai_responder._get_client",
                   return_value=fake_client),
         ):
             await run_admin_turn(
@@ -755,14 +759,16 @@ class TestRunAdminTurn:
     async def test_step_budget_exhausted(self):
         """Every reply is a TOOL_CALL — should hit MAX_ADMIN_STEPS cap."""
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = _mock_anthropic_response(
-            'ACTION: TOOL_CALL\nTOOL: counts\nARGS: {}',
-            in_toks=1, out_toks=1,
+        fake_client.messages.create = AsyncMock(
+            return_value=_mock_anthropic_response(
+                'ACTION: TOOL_CALL\nTOOL: counts\nARGS: {}',
+                in_toks=1, out_toks=1,
+            )
         )
         fake_tool = AsyncMock(return_value="usuarios: 1")
         with (
             patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "sk-test"),
-            patch("farmafacil.services.ai_responder.anthropic.Anthropic",
+            patch("farmafacil.services.ai_responder._get_client",
                   return_value=fake_client),
             patch("farmafacil.services.admin_chat.execute_tool", new=fake_tool),
             patch("farmafacil.services.ai_responder.MAX_ADMIN_STEPS", 3),
