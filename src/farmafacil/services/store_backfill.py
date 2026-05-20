@@ -342,7 +342,7 @@ async def backfill_zone_names(batch_size: int = 50) -> dict[str, int]:
     """
     import asyncio
 
-    from farmafacil.services.geocode import reverse_geocode_zone
+    from farmafacil.services.location import reverse_geocode_zone
 
     async with async_session() as session:
         result = await session.execute(

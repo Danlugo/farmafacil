@@ -48,14 +48,8 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("cambiar barrio", None),
         ("otra ubicacion", None),
     ],
-    "preference_change": [
-        ("cambiar preferencia", None),
-        ("cambiar vista", None),
-        ("cambiar modo", None),
-        ("otra vista", None),
-        ("otro modo", None),
-        ("cambiar formato", None),
-    ],
+    # preference_change removed in v0.25.0 — feature deprecated since v0.15.2,
+    # no handler branch existed, users got zero response.  (Item 62)
     "name_change": [
         ("cambiar nombre", None),
         ("nuevo nombre", None),
@@ -79,14 +73,14 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("tiendas cercanas", None),
     ],
     "farewell": [
-        ("gracias", "De nada! Cuando necesites buscar productos de farmacia, aqui estare. \U0001f48a"),
-        ("chao", "Chao! Cuidate mucho. \U0001f48a"),
-        ("bye", "Bye! Aqui estare cuando me necesites. \U0001f48a"),
-        ("hasta luego", "Hasta luego! Cuidate. \U0001f48a"),
-        ("adios", "Adios! Cuando necesites productos de farmacia, escribeme. \U0001f48a"),
-        ("thanks", "De nada! Estoy aqui para ayudarte. \U0001f48a"),
-        ("thank you", "De nada! Aqui estare. \U0001f48a"),
-        ("muchas gracias", "Con mucho gusto! Cuidate. \U0001f48a"),
+        ("gracias", "¡De nada! Cuando necesites buscar productos de farmacia, aquí estaré. \U0001f48a"),
+        ("chao", "¡Chao! Cuídate mucho. \U0001f48a"),
+        ("bye", "¡Bye! Aquí estaré cuando me necesites. \U0001f48a"),
+        ("hasta luego", "¡Hasta luego! Cuídate. \U0001f48a"),
+        ("adios", "¡Adiós! Cuando necesites productos de farmacia, escríbeme. \U0001f48a"),
+        ("thanks", "¡De nada! Estoy aquí para ayudarte. \U0001f48a"),
+        ("thank you", "¡De nada! Aquí estaré. \U0001f48a"),
+        ("muchas gracias", "¡Con mucho gusto! Cuídate. \U0001f48a"),
     ],
 }
 

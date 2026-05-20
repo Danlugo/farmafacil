@@ -1,7 +1,6 @@
 """Location service — single front door for every coordinate operation.
 
-v0.19.0 (Items 47/48). Wraps the existing Nominatim integration in
-``services.geocode`` with three things the raw geocoder lacks:
+v0.19.0 (Items 47/48). Provides:
 
 1. **Caching.** Forward and reverse queries are persisted in
    ``geocode_cache``. Repeat queries (every "La Boyera" onboarding,
@@ -20,8 +19,11 @@ v0.19.0 (Items 47/48). Wraps the existing Nominatim integration in
    and persist the result, so the admin chat tools can fix a bad coord
    from WhatsApp without anyone SSH-ing into prod.
 
-The legacy ``geocode_zone`` / ``reverse_geocode`` functions in
-``services.geocode`` keep working — they delegate here under the hood.
+4. **Back-compat wrappers.** ``geocode_zone``, ``reverse_geocode``, and
+   ``reverse_geocode_zone`` provide the legacy dict-shaped return values
+   that ``bot/handler.py`` and ``services/store_backfill.py`` expect.
+   ``_extract_city_code`` and ``STATE_TO_CITY_CODE`` are also defined
+   here; ``services.geocode`` was removed in v0.25.0 (Item 75).
 """
 
 import hashlib
@@ -37,6 +39,95 @@ from farmafacil.db.session import async_session
 from farmafacil.models.database import GeocodeCache, PharmacyLocation, User
 
 logger = logging.getLogger(__name__)
+
+# ── Venezuelan state/city → Farmatodo city code ───────────────────────
+# Nominatim returns the state or municipality in the address — we match
+# against this to assign the correct city code for search routing.
+# Moved here from services.geocode in v0.25.0 (Item 75).
+
+STATE_TO_CITY_CODE: dict[str, str] = {
+    # Distrito Capital / Miranda (Caracas metro)
+    "distrito capital": "CCS",
+    "distrito metropolitano de caracas": "CCS",
+    "municipio libertador": "CCS",
+    "municipio chacao": "CCS",
+    "municipio baruta": "CCS",
+    "municipio el hatillo": "CCS",
+    "municipio sucre": "CCS",
+    "miranda": "CCS",
+    "caracas": "CCS",
+    # Zulia
+    "zulia": "MCBO",
+    "maracaibo": "MCBO",
+    # Carabobo
+    "carabobo": "VAL",
+    "valencia": "VAL",
+    # Lara
+    "lara": "BAR",
+    "barquisimeto": "BAR",
+    # Aragua
+    "aragua": "MAT",
+    "maracay": "MAT",
+    # Merida
+    "mérida": "MER",
+    "merida": "MER",
+    # Bolivar
+    "bolívar": "PTO",
+    "bolivar": "PTO",
+    "puerto ordaz": "PTO",
+    # Tachira
+    "táchira": "SAC",
+    "tachira": "SAC",
+    "san cristóbal": "SAC",
+    "san cristobal": "SAC",
+    # Anzoategui
+    "anzoátegui": "PDM",
+    "anzoategui": "PDM",
+    "puerto la cruz": "PDM",
+    "barcelona": "PDM",
+    # Nueva Esparta
+    "nueva esparta": "POR",
+    "porlamar": "POR",
+    # Falcon
+    "falcón": "PTC",
+    "falcon": "PTC",
+    "punto fijo": "PTC",
+    # Monagas
+    "monagas": "MAT",
+    # Portuguesa
+    "portuguesa": "BAR",
+    # Barinas
+    "barinas": "COR",
+    # Guarenas/Guatire
+    "guarenas": "GUAC",
+    "guatire": "GUAC",
+}
+
+
+def _extract_city_code(hit: dict) -> str:
+    """Extract Farmatodo city code from Nominatim address details.
+
+    Args:
+        hit: Nominatim search result with addressdetails.
+
+    Returns:
+        Farmatodo city code (defaults to "CCS" if unknown).
+    """
+    address = hit.get("address", {})
+    display = hit.get("display_name", "").lower()
+
+    for field in ["city", "town", "municipality", "county", "state", "suburb"]:
+        value = address.get(field, "").lower()
+        if value in STATE_TO_CITY_CODE:
+            return STATE_TO_CITY_CODE[value]
+
+    for key, code in STATE_TO_CITY_CODE.items():
+        if key in display:
+            return code
+
+    logger.warning("Could not determine city code from: %s", display)
+    return "CCS"  # Default to Caracas
+
 
 # How long a cache entry is considered fresh. Pharmacies do not move and
 # user-typed zone names do not change, so 30 days is comfortable. The
@@ -306,7 +397,6 @@ async def resolve(
         # of "did you mean?" options — but mark confidence so the caller
         # knows to ask for confirmation.
 
-    from farmafacil.services.geocode import _extract_city_code  # avoid cycle
     result = LocationResult(
         lat=float(top["lat"]),
         lng=float(top["lon"]),
@@ -351,7 +441,6 @@ async def reverse(lat: float, lng: float) -> LocationResult | None:
         or address.get("county")
         or address.get("state")
     )
-    from farmafacil.services.geocode import _extract_city_code
     result = LocationResult(
         lat=lat,
         lng=lng,
@@ -601,3 +690,108 @@ async def _nominatim_reverse(lat: float, lng: float) -> dict | None:
     if not isinstance(data, dict) or "address" not in data:
         return None
     return data
+
+
+# ── Back-compat wrappers (moved from services.geocode in v0.25.0) ─────
+#
+# These functions preserve the legacy dict-shaped return values that
+# bot/handler.py and services/store_backfill.py depend on. New code
+# should call ``resolve()`` and ``reverse()`` directly for richer results.
+
+
+async def geocode_zone(zone_text: str) -> dict | None:
+    """Resolve a zone/neighborhood name to coordinates and city code.
+
+    Thin wrapper over ``resolve`` that returns the legacy dict shape
+    expected by ``bot/handler.py`` and callers that predate v0.19.0.
+
+    Args:
+        zone_text: User-provided zone name (e.g., "La Boyera", "El Cafetal").
+
+    Returns:
+        Dict with lat, lng, city, zone_name — or None if not found.
+    """
+    result = await resolve(zone_text)
+    if result is None:
+        logger.warning("Geocode returned no result for '%s'", zone_text)
+        return None
+
+    logger.info(
+        "Geocoded '%s' → %s (%.4f, %.4f) city=%s confidence=%.2f source=%s",
+        zone_text, result.zone_name, result.lat, result.lng,
+        result.city_code, result.confidence, result.source,
+    )
+    return {
+        "lat": result.lat,
+        "lng": result.lng,
+        "city": result.city_code,
+        "zone_name": result.zone_name,
+    }
+
+
+async def reverse_geocode(lat: float, lng: float) -> dict | None:
+    """Reverse-geocode a (latitude, longitude) pair into a city + zone name.
+
+    Used when a user shares their WhatsApp location pin during onboarding.
+    Performs a Venezuelan country-code guard before calling ``reverse``
+    so non-VE coordinates are explicitly rejected rather than silently
+    accepted. Falls back to the "Ubicación compartida" sentinel when no
+    specific zone field was returned, preserving legacy UX strings.
+
+    Returns ``None`` for non-Venezuelan coordinates or when Nominatim
+    returns nothing usable.
+    """
+    # Country-code guard: reject non-VE coordinates before calling
+    # reverse(), which trusts whatever Nominatim sends back.
+    raw = await _nominatim_reverse(lat, lng)
+    if raw is None:
+        return None
+    country_code = ((raw.get("address") or {}).get("country_code") or "").lower()
+    if country_code and country_code != "ve":
+        logger.warning(
+            "Reverse geocode rejected — (%.4f, %.4f) is in %s, not Venezuela",
+            lat, lng, country_code,
+        )
+        return None
+
+    result = await reverse(lat, lng)
+    if result is None:
+        return None
+
+    zone_name = result.zone_name or "Ubicación compartida"
+    logger.info(
+        "Reverse-geocoded (%.4f, %.4f) → %s city=%s source=%s",
+        lat, lng, zone_name, result.city_code, result.source,
+    )
+    return {
+        "lat": lat,
+        "lng": lng,
+        "city": result.city_code,
+        "zone_name": zone_name,
+    }
+
+
+async def reverse_geocode_zone(lat: float, lng: float) -> str | None:
+    """Reverse-geocode coordinates to a neighborhood/zone name only.
+
+    Thin wrapper around ``reverse_geocode`` that returns just the
+    ``zone_name`` string. Used by the zone backfill task to label
+    pharmacy_locations rows with their neighborhood.
+
+    Returns None if reverse geocoding failed or returned only the
+    "Ubicación compartida" fallback sentinel.
+
+    Args:
+        lat: Latitude in decimal degrees.
+        lng: Longitude in decimal degrees.
+
+    Returns:
+        Zone/neighborhood name, or None.
+    """
+    result = await reverse_geocode(lat, lng)
+    if not result:
+        return None
+    zone = result.get("zone_name")
+    if not zone or zone == "Ubicación compartida":
+        return None
+    return zone

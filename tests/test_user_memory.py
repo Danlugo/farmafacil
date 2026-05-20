@@ -17,8 +17,12 @@ from farmafacil.services.user_memory import (
 
 @pytest.fixture
 async def test_user():
-    """Create a test user with a unique phone number for memory tests."""
-    phone = f"555{random.randint(1000000, 9999999)}"
+    """Create a test user with a unique phone number for memory tests.
+
+    Uses a wider random range to minimize phone collisions with users
+    created by other test files (e.g. test_admin_stats).
+    """
+    phone = f"55577{random.randint(10000000, 99999999)}"
     async with async_session() as session:
         user = User(
             phone_number=phone,

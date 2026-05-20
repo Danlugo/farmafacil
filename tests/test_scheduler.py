@@ -10,6 +10,7 @@ Tests cover:
 
 import pytest
 from datetime import datetime, timedelta, UTC
+from unittest.mock import patch
 from sqlalchemy import delete, select
 
 from farmafacil.db.session import async_session
@@ -178,7 +179,17 @@ class TestRunTaskNow:
 
 
 class TestSchedulerLoop:
-    """Verify the scheduler loop finds and runs due tasks."""
+    """Verify the scheduler loop finds and runs due tasks.
+
+    Task registry functions are mocked to avoid live Nominatim / Overpass
+    API calls that cause 429 flakes.  The loop logic (due-date check,
+    status update, next_run_at advancement) is what we're testing, not
+    the individual task implementations.
+    """
+
+    @staticmethod
+    async def _noop_task(task):
+        return "noop completed"
 
     @pytest.mark.asyncio
     async def test_due_task_is_executed(self):
@@ -197,7 +208,19 @@ class TestSchedulerLoop:
             await session.commit()
             task_id = task.id
 
-        await _check_and_run_due_tasks()
+        # Also push all OTHER tasks into the future so only our target runs
+        async with async_session() as session:
+            result = await session.execute(select(ScheduledTask))
+            all_tasks = result.scalars().all()
+            for t in all_tasks:
+                if t.id != task_id:
+                    t.next_run_at = datetime.now(tz=UTC).replace(tzinfo=None) + timedelta(hours=24)
+            await session.commit()
+
+        # Mock the registry so the task doesn't hit external APIs
+        mock_registry = {k: self._noop_task for k in TASK_REGISTRY}
+        with patch.dict("farmafacil.services.scheduler.TASK_REGISTRY", mock_registry):
+            await _check_and_run_due_tasks()
 
         async with async_session() as session:
             result = await session.execute(
@@ -225,7 +248,18 @@ class TestSchedulerLoop:
             await session.commit()
             task_id = task.id
 
-        await _check_and_run_due_tasks()
+        # Push all OTHER tasks into the future
+        async with async_session() as session:
+            result = await session.execute(select(ScheduledTask))
+            all_tasks = result.scalars().all()
+            for t in all_tasks:
+                if t.id != task_id:
+                    t.next_run_at = datetime.now(tz=UTC).replace(tzinfo=None) + timedelta(hours=24)
+            await session.commit()
+
+        mock_registry = {k: self._noop_task for k in TASK_REGISTRY}
+        with patch.dict("farmafacil.services.scheduler.TASK_REGISTRY", mock_registry):
+            await _check_and_run_due_tasks()
 
         async with async_session() as session:
             result = await session.execute(
@@ -241,18 +275,20 @@ class TestSchedulerLoop:
         """A task with next_run_at in the future is not executed."""
         await seed_scheduled_tasks()
 
+        # Push ALL tasks into the future
         async with async_session() as session:
-            result = await session.execute(
-                select(ScheduledTask).where(
-                    ScheduledTask.task_key == "rescore_products"
-                )
-            )
-            task = result.scalar_one()
-            task.next_run_at = datetime.now(tz=UTC).replace(tzinfo=None) + timedelta(hours=1)
+            result = await session.execute(select(ScheduledTask))
+            all_tasks = result.scalars().all()
+            for t in all_tasks:
+                t.next_run_at = datetime.now(tz=UTC).replace(tzinfo=None) + timedelta(hours=1)
             await session.commit()
-            task_id = task.id
+            # Remember the rescore task for assertion
+            rescore = [t for t in all_tasks if t.task_key == "rescore_products"][0]
+            task_id = rescore.id
 
-        await _check_and_run_due_tasks()
+        mock_registry = {k: self._noop_task for k in TASK_REGISTRY}
+        with patch.dict("farmafacil.services.scheduler.TASK_REGISTRY", mock_registry):
+            await _check_and_run_due_tasks()
 
         async with async_session() as session:
             result = await session.execute(

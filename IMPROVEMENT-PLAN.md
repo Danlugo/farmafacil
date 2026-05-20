@@ -125,7 +125,7 @@
 ## Phase 3 — UX Polish (P1/P2)
 
 ### Item 62: Remove dead "cambiar preferencia" keyword
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P1
 - **Effort:** Low (~15 min)
 - **Problem:** `preference_change` keyword is seeded and recognized but no handler branch exists. User gets zero response. Feature deprecated since v0.15.2.
@@ -134,7 +134,7 @@
 - **Found by:** Product
 
 ### Item 63: Add Google Maps links to nearby-store results
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P1
 - **Effort:** Low (~15 min)
 - **Problem:** `format_nearby_stores()` shows distance + address but no navigation link. `format_store_info()` already includes Maps links — inconsistency.
@@ -143,7 +143,7 @@
 - **Found by:** Product
 
 ### Item 64: Reply to unsupported message types
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P2
 - **Effort:** Low (~15 min)
 - **Problem:** Stickers, contacts, and other unsupported types get silent non-response. Users think bot is broken.
@@ -152,7 +152,7 @@
 - **Found by:** Product
 
 ### Item 65: Guard feedback prompt after empty nearby-store results
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P2
 - **Effort:** Low (~10 min)
 - **Problem:** "Te sirvio? (si/no)" appears even when 0 stores found — makes no sense.
@@ -161,7 +161,7 @@
 - **Found by:** Product
 
 ### Item 66: Add WhatsApp message length guard
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P2
 - **Effort:** Med (~1 hour)
 - **Problem:** WhatsApp has 4096-char limit. Long search results with 8 products across 3 chains can exceed it, causing silent truncation.
@@ -170,7 +170,7 @@
 - **Found by:** Product
 
 ### Item 67: Fix Spanish register consistency (vos/tu mixing) and missing accents
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.24.0, 2026-05-19)
 - **Priority:** P2
 - **Effort:** Low (~30 min)
 - **Problem:** Some messages use voseo ("Elegi", "Podes", "Volves"), most use tuteo. Missing accents on "ubicacion", "Que estas buscando", etc.
@@ -179,7 +179,7 @@
 - **Found by:** Product
 
 ### Item 68: Expand HELP_MESSAGE with discoverable features
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Low (~15 min)
 - **Problem:** HELP_MESSAGE omits voice notes, image/prescription photos, location pin sharing, "ver similares", "farmacias cercanas", `/stats`.
@@ -192,7 +192,7 @@
 ## Phase 4 — Test Hardening (P1/P2)
 
 ### Item 69: Add tests for untested security-boundary services
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P1
 - **Effort:** Low (~2 hours)
 - **Problem:** `file_manager.py` (path traversal guard), `web_search.py` (Brave API), `media.py` (size limits, Vision encoding) have zero test coverage. `file_manager.py` is a security boundary.
@@ -201,7 +201,7 @@
 - **Found by:** Test Engineer
 
 ### Item 70: Fix 7 known flaky tests
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P1
 - **Effort:** Low (~2 hours)
 - **Problem:** Root causes identified: `test_chat_debug` ×2 — no row cleanup for phone `5558812222`; `test_location_sharing` ×3 — unmocked Nominatim HTTP calls; `test_user_memory` ×1 — fixture `return` instead of `yield` (no teardown); `test_handler` ×1 — phone collision from incomplete cleanup.
@@ -210,7 +210,7 @@
 - **Found by:** Test Engineer
 
 ### Item 71: Add HTTP-level tests for audio endpoint
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~1 hour)
 - **Problem:** `GET /api/v1/audio/{id}` is security-sensitive (serves user audio PII) but only checked structurally. No HTTP test verifies 401 for unauthenticated, 404 for missing, 403 for path traversal.
@@ -223,7 +223,7 @@
 ## Phase 5 — Structural Refactor (P1-P2, future)
 
 ### Item 72: Decompose handler.py into focused modules
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P1
 - **Effort:** High (~8 hours)
 - **Problem:** 2,524-line monolith mixes 7 responsibilities. Single largest maintenance risk in the codebase.
@@ -232,7 +232,7 @@
 - **Found by:** Code Quality, Architecture
 
 ### Item 73: Split admin_chat.py into domain modules
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~3 hours)
 - **Problem:** 1,785 lines, 40+ tool functions in a flat file.
@@ -241,7 +241,7 @@
 - **Found by:** Architecture, Code Quality
 
 ### Item 74: Bulk product upsert
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** High (~4 hours)
 - **Problem:** Row-by-row upsert: ~40 ORM operations per 10-result cache-miss search.
@@ -250,7 +250,7 @@
 - **Found by:** Performance
 
 ### Item 75: Consolidate geocoding modules
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~2 hours)
 - **Problem:** `geocode.py` (legacy) and `location.py` (v0.19.0 authoritative) overlap. Three callers still use the old module.
@@ -259,7 +259,7 @@
 - **Found by:** Code Quality
 
 ### Item 76: Remove dead `image_grid.py` module
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Low (~15 min)
 - **Problem:** Zero production imports since v0.15.2. Dead code with tests for a removed feature.
@@ -272,7 +272,7 @@
 ## Phase 6 — Infrastructure & Observability (P2-P3, future)
 
 ### Item 77: Add CSRF protection to admin dashboard
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~2 hours)
 - **Problem:** SQLAdmin cookie-based sessions with no CSRF token on form submissions.
@@ -281,7 +281,7 @@
 - **Found by:** Security
 
 ### Item 78: Create module-level httpx clients with connection pooling
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~2 hours)
 - **Problem:** New `httpx.AsyncClient()` created on every API call — no connection pooling, repeated TLS handshakes.
@@ -290,7 +290,7 @@
 - **Found by:** Architecture
 
 ### Item 79: Add scheduler task timeout
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~1 hour)
 - **Problem:** Tasks run without timeout. OSM backfill can block scheduler loop for 27+ minutes.
@@ -299,7 +299,7 @@
 - **Found by:** Architecture, SRE
 
 ### Item 80: Fix rate limiting behind ngrok (X-Forwarded-For)
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Med (~1 hour)
 - **Problem:** `get_remote_address` reads ngrok's internal IP — all traffic shares one rate-limit bucket.
@@ -308,7 +308,7 @@
 - **Found by:** Security, SRE
 
 ### Item 81: Add prompt injection delimiter defense
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Low (~15 min)
 - **Problem:** User messages passed to Claude without delimiters. Crafted messages could attempt to override structured output format.
@@ -317,7 +317,7 @@
 - **Found by:** Security
 
 ### Item 82: Enhance health check with DB connectivity
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P3
 - **Effort:** Low (~15 min)
 - **Problem:** `/health` returns `{"status":"ok"}` without verifying DB. Docker marks container healthy even when Postgres is down.
@@ -326,7 +326,7 @@
 - **Found by:** SRE
 
 ### Item 83: Add composite index on conversation_logs
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P3
 - **Effort:** Low (~15 min)
 - **Problem:** No index on `(phone_number, created_at)` — the most common query pattern. Full table scan as logs grow.
@@ -335,7 +335,7 @@
 - **Found by:** SRE, Architecture
 
 ### Item 84: Update architecture docs
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P3
 - **Effort:** Med (~2 hours)
 - **Problem:** `docs/architecture.md` last updated 2026-03-31. Missing voice messages, scheduler, admin chat, AI role system, 6+ tables, relevance filter details.
@@ -344,7 +344,7 @@
 - **Found by:** Architecture
 
 ### Item 85: Clean up temp image files after send
-- **Status:** PENDING
+- **Status:** ✅ DONE (v0.25.0, 2026-05-20)
 - **Priority:** P2
 - **Effort:** Low (~15 min)
 - **Problem:** `generate_product_grid` creates temp files with `delete=False`. No cleanup after `send_local_image`. Slowly fills `/tmp`.
@@ -358,10 +358,10 @@
 
 | Phase | Items | Priority | Total Effort | Status |
 |-------|-------|----------|-------------|--------|
-| 1 — Security Hotfix | 50-55 (6 items) | P0 | ~4 hours | PENDING |
-| 2 — Performance Unlock | 56-61 (6 items) | P1 | ~10 hours | PENDING |
-| 3 — UX Polish | 62-68 (7 items) | P1-P2 | ~3 hours | PENDING |
-| 4 — Test Hardening | 69-71 (3 items) | P1-P2 | ~5 hours | PENDING |
-| 5 — Structural Refactor | 72-76 (5 items) | P1-P2 | ~17 hours | PENDING |
-| 6 — Infrastructure | 77-85 (9 items) | P2-P3 | ~10 hours | PENDING |
+| 1 — Security Hotfix | 50-55 (6 items) | P0 | ~4 hours | ✅ DONE (v0.23.0) |
+| 2 — Performance Unlock | 56-61 (6 items) | P1 | ~10 hours | ✅ DONE (v0.24.0) |
+| 3 — UX Polish | 62-68 (7 items) | P1-P2 | ~3 hours | ✅ DONE (v0.25.0) |
+| 4 — Test Hardening | 69-71 (3 items) | P1-P2 | ~5 hours | ✅ DONE (v0.25.0) |
+| 5 — Structural Refactor | 72-76 (5 items) | P1-P2 | ~17 hours | ✅ DONE (v0.25.0) |
+| 6 — Infrastructure | 77-85 (8+1 N/A items) | P2-P3 | ~10 hours | ✅ DONE (v0.25.0) |
 | **Total** | **36 items** | | **~49 hours** | |

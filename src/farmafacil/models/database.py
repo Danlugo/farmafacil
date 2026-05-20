@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
@@ -221,6 +222,17 @@ class ConversationLog(Base):
         String(200), nullable=True, comment="WhatsApp message ID for dedup",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Composite index optimising the common access pattern:
+    # fetch all messages for a user ordered by time.
+    # (Item 83, v0.25.0)
+    __table_args__ = (
+        Index(
+            "ix_conversation_logs_phone_created",
+            "phone_number",
+            "created_at",
+        ),
+    )
 
 
 class IntentKeyword(Base):

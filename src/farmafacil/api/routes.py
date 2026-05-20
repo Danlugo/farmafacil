@@ -2,15 +2,16 @@
 
 import csv
 import io
+import logging
 import re
 from html import escape
 
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from farmafacil import __version__
 from farmafacil.api.limiter import limiter
@@ -24,6 +25,7 @@ from farmafacil.services.search import search_drug
 
 router = APIRouter()
 _http_basic = HTTPBasic()
+logger = logging.getLogger(__name__)
 
 
 def _require_admin(
@@ -45,10 +47,29 @@ def _require_admin(
     return credentials.username
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """Health check endpoint."""
-    return HealthResponse(version=__version__)
+@router.get("/health", response_model=None)
+async def health_check() -> HealthResponse | JSONResponse:
+    """Health check endpoint with DB connectivity probe.
+
+    Executes ``SELECT 1`` against the application database.  Returns HTTP 200
+    with ``{"status": "ok", ...}`` on success, or HTTP 503 with
+    ``{"status": "unhealthy", ...}`` when the database is unreachable.
+
+    Docker and uptime monitors rely on this endpoint — the ``status`` key
+    is preserved for backwards compatibility.
+
+    (Item 82, v0.25.0 — added DB probe.)
+    """
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+        return HealthResponse(status="ok", version=__version__)
+    except Exception:
+        logger.error("Health check DB probe failed", exc_info=True)
+        return JSONResponse(
+            content={"status": "unhealthy", "version": __version__},
+            status_code=503,
+        )
 
 
 @router.post("/api/v1/search", response_model=SearchResponse)

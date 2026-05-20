@@ -1,18 +1,37 @@
 """Tests for admin user stats page."""
 
+import random
+
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 
 from farmafacil.api.app import app
 from farmafacil.db.session import async_session
 from farmafacil.models.database import ConversationLog, SearchLog, User
 from tests.conftest import TEST_ADMIN_PASS, TEST_ADMIN_USER, admin_auth_headers
 
+# Use random phone prefixes to avoid collisions with other test runs
+# that share the same persistent SQLite DB.
+_PHONE_PREFIX = "55599"
 
-async def _create_test_user(phone: str = "5551234567", name: str = "TestUser") -> User:
+
+def _rand_phone() -> str:
+    """Generate a random test phone number unlikely to collide."""
+    return f"{_PHONE_PREFIX}{random.randint(100000, 999999)}"
+
+
+async def _create_test_user(phone: str | None = None, name: str = "TestUser") -> User:
     """Insert a test user into the DB and return it."""
+    if phone is None:
+        phone = _rand_phone()
+    # Clean up any leftover row with this phone from a prior run
+    async with async_session() as session:
+        await session.execute(delete(User).where(User.phone_number == phone))
+        await session.commit()
+
     async with async_session() as session:
         user = User(
             phone_number=phone,
@@ -73,8 +92,8 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_returns_html_with_user_stats(self):
         """Stats page returns 200 with user name and key metrics."""
-        user = await _create_test_user(phone="5559910001", name="StatsUser")
-        await _add_conversation_logs("5559910001", count=8)
+        user = await _create_test_user(name="StatsUser")
+        await _add_conversation_logs(user.phone_number, count=8)
         await _add_search_logs(user.id, total=5, positive=3)
 
         async with AsyncClient(
@@ -104,7 +123,7 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_shows_cost_estimates(self):
         """Stats page includes estimated cost values."""
-        user = await _create_test_user(phone="5559910002", name="CostUser")
+        user = await _create_test_user(name="CostUser")
 
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -118,7 +137,7 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_shows_success_rate(self):
         """Stats page calculates and displays success rate."""
-        user = await _create_test_user(phone="5559910003", name="RateUser")
+        user = await _create_test_user(name="RateUser")
         await _add_search_logs(user.id, total=10, positive=5)
 
         async with AsyncClient(
@@ -133,7 +152,7 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_shows_recent_searches(self):
         """Stats page lists recent search queries."""
-        user = await _create_test_user(phone="5559910004", name="SearchUser")
+        user = await _create_test_user(name="SearchUser")
         await _add_search_logs(user.id, total=3, positive=1)
 
         async with AsyncClient(
@@ -148,7 +167,7 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_json_api_link_present(self):
         """Stats page includes a link to the JSON API endpoint."""
-        user = await _create_test_user(phone="5559910005", name="LinkUser")
+        user = await _create_test_user(name="LinkUser")
 
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -163,7 +182,7 @@ class TestAdminUserStatsPage:
     async def test_escapes_user_name_to_prevent_xss(self):
         """User name containing a <script> tag must be HTML-escaped."""
         user = await _create_test_user(
-            phone="5559910006", name="<script>alert(1)</script>"
+            name="<script>alert(1)</script>",
         )
 
         async with AsyncClient(
@@ -178,7 +197,7 @@ class TestAdminUserStatsPage:
     @pytest.mark.asyncio
     async def test_escapes_search_query_to_prevent_xss(self):
         """A malicious search query must be HTML-escaped in the recent list."""
-        user = await _create_test_user(phone="5559910007", name="XssQueryUser")
+        user = await _create_test_user(name="XssQueryUser")
         async with async_session() as session:
             session.add(
                 SearchLog(

@@ -23,6 +23,21 @@ SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 # Max image size (bytes) — WhatsApp compresses images but we cap at 10MB
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+# ── Module-level httpx client singleton ─────────────────────────────────
+# A single AsyncClient reuses the underlying connection pool for all
+# WhatsApp media download calls, avoiding per-download TLS handshakes to
+# graph.facebook.com.
+# (Item 78, v0.25.0 — was creating a new client per media download.)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the module-level async httpx client, creating it lazily."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
+
 
 async def download_whatsapp_media(media_id: str) -> tuple[bytes, str] | None:
     """Download media from WhatsApp Cloud API.
@@ -40,31 +55,32 @@ async def download_whatsapp_media(media_id: str) -> tuple[bytes, str] | None:
     headers = {"Authorization": f"Bearer {WHATSAPP_API_TOKEN}"}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Step 1: Get download URL
-            meta_resp = await client.get(
-                f"{_GRAPH_BASE}/{media_id}",
-                headers=headers,
-            )
-            meta_resp.raise_for_status()
-            meta = meta_resp.json()
-            url = meta.get("url")
-            mime_type = meta.get("mime_type", "application/octet-stream")
+        client = _get_http_client()
 
-            if not url:
-                logger.error("No download URL in media metadata for %s", media_id)
-                return None
+        # Step 1: Get download URL
+        meta_resp = await client.get(
+            f"{_GRAPH_BASE}/{media_id}",
+            headers=headers,
+        )
+        meta_resp.raise_for_status()
+        meta = meta_resp.json()
+        url = meta.get("url")
+        mime_type = meta.get("mime_type", "application/octet-stream")
 
-            # Step 2: Download the file
-            file_resp = await client.get(url, headers=headers)
-            file_resp.raise_for_status()
-            data = file_resp.content
+        if not url:
+            logger.error("No download URL in media metadata for %s", media_id)
+            return None
 
-            logger.info(
-                "Downloaded media %s: %s, %d bytes",
-                media_id, mime_type, len(data),
-            )
-            return data, mime_type
+        # Step 2: Download the file
+        file_resp = await client.get(url, headers=headers)
+        file_resp.raise_for_status()
+        data = file_resp.content
+
+        logger.info(
+            "Downloaded media %s: %s, %d bytes",
+            media_id, mime_type, len(data),
+        )
+        return data, mime_type
 
     except httpx.HTTPStatusError as exc:
         logger.error(

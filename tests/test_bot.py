@@ -14,7 +14,7 @@ from farmafacil.bot.formatter import (
     format_search_results,
 )
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
-from farmafacil.services.geocode import geocode_zone
+from farmafacil.services.location import geocode_zone
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "4 productos mas" in text
+        assert "4 productos más" in text
 
     def test_format_groups_same_product(self):
         """Same product from multiple pharmacies is grouped under one entry."""
@@ -473,7 +473,7 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "3 productos mas" in text
+        assert "3 productos más" in text
 
     def test_format_exactly_max_products_no_truncation(self):
         """Exactly MAX_PRODUCTS unique products — no truncation message."""
@@ -493,7 +493,7 @@ class TestFormatter:
             searched_pharmacies=["Farmatodo"],
         )
         text = format_search_results(response)
-        assert "productos mas" not in text
+        assert "productos más" not in text
 
     def test_format_interleaves_pharmacies(self):
         """Products from different pharmacy chains alternate in output order."""

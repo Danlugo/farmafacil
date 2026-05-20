@@ -29,6 +29,22 @@ _WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions"
 # Max audio file size (bytes) — Whisper API limit is 25 MB
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
+# ── Module-level httpx client singleton ─────────────────────────────────
+# A single AsyncClient reuses the underlying connection pool across all
+# Whisper API and WhatsApp Media download calls, avoiding per-call TLS
+# handshakes. 60 s timeout covers Whisper transcription latency on large
+# voice notes.
+# (Item 78, v0.25.0 — was creating a new client per call.)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the module-level async httpx client, creating it lazily."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=60.0)
+    return _http_client
+
 
 def _ensure_audio_dir(user_id: int) -> Path:
     """Create the user's audio directory if it doesn't exist.
@@ -111,32 +127,32 @@ async def transcribe_audio(
         return None, None, None
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # NOTE: open() is synchronous but acceptable here — audio files
-            # are bounded to 25 MB and httpx streams the multipart upload.
-            with open(file_path, "rb") as f:
-                response = await client.post(
-                    _WHISPER_URL,
-                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                    data={
-                        "model": "whisper-1",
-                        "language": "es",
-                        "response_format": "verbose_json",
-                    },
-                    files={"file": (file_path.name, f, "audio/ogg")},
-                )
-            response.raise_for_status()
-            result = response.json()
-
-            text = result.get("text", "").strip()
-            language = result.get("language", "es")
-            duration = result.get("duration")
-
-            logger.info(
-                "Whisper transcription: lang=%s duration=%.1fs text='%s'",
-                language, duration or 0, text[:80],
+        client = _get_http_client()
+        # NOTE: open() is synchronous but acceptable here — audio files
+        # are bounded to 25 MB and httpx streams the multipart upload.
+        with open(file_path, "rb") as f:
+            response = await client.post(
+                _WHISPER_URL,
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                data={
+                    "model": "whisper-1",
+                    "language": "es",
+                    "response_format": "verbose_json",
+                },
+                files={"file": (file_path.name, f, "audio/ogg")},
             )
-            return text if text else None, language, duration
+        response.raise_for_status()
+        result = response.json()
+
+        text = result.get("text", "").strip()
+        language = result.get("language", "es")
+        duration = result.get("duration")
+
+        logger.info(
+            "Whisper transcription: lang=%s duration=%.1fs text='%s'",
+            language, duration or 0, text[:80],
+        )
+        return text if text else None, language, duration
 
     except httpx.HTTPStatusError as exc:
         logger.error(

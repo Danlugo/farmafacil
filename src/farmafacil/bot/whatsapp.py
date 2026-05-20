@@ -12,6 +12,26 @@ logger = logging.getLogger(__name__)
 
 MEDIA_UPLOAD_URL = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/media"
 
+# ── Module-level httpx client singleton ─────────────────────────────────
+# A single AsyncClient reuses the underlying connection pool (TCP keepalive,
+# TLS session resumption) across all WhatsApp API calls, avoiding per-call
+# TLS handshakes to graph.facebook.com.  The client is safe for concurrent
+# use from multiple asyncio tasks.
+# (Item 78, v0.25.0 — was creating a new client per call.)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the module-level async httpx client, creating it lazily.
+
+    Uses a 30 s default timeout — long enough for the WhatsApp Media upload
+    endpoint (large image files) while still failing fast on stalled connections.
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
+
 
 async def _send_message(to: str, payload: dict, log_text: str) -> dict | None:
     """Send a message payload via WhatsApp Business API."""
@@ -21,14 +41,14 @@ async def _send_message(to: str, payload: dict, log_text: str) -> dict | None:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            msg_id = data.get("messages", [{}])[0].get("id")
-            logger.info("WhatsApp message sent to %s: %s", to, msg_id)
-            await log_outbound(to, log_text)
-            return data
+        client = _get_http_client()
+        response = await client.post(WHATSAPP_API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        msg_id = data.get("messages", [{}])[0].get("id")
+        logger.info("WhatsApp message sent to %s: %s", to, msg_id)
+        await log_outbound(to, log_text)
+        return data
     except httpx.HTTPStatusError as exc:
         logger.error(
             "WhatsApp API error %s: %s",
@@ -66,9 +86,9 @@ async def send_read_receipt(to: str, message_id: str) -> None:
         "message_id": message_id,
     }
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
+        client = _get_http_client()
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.debug(
             "Read receipt failed for %s (non-critical): %s", to, exc,
@@ -192,18 +212,18 @@ async def _upload_media(file_path: str, mime_type: str | None = None) -> str | N
     headers = {"Authorization": f"Bearer {WHATSAPP_API_TOKEN}"}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            with open(file_path, "rb") as f:
-                response = await client.post(
-                    MEDIA_UPLOAD_URL,
-                    headers=headers,
-                    data={"messaging_product": "whatsapp", "type": mime_type},
-                    files={"file": (os.path.basename(file_path), f, mime_type)},
-                )
-                response.raise_for_status()
-                media_id = response.json().get("id")
-                logger.info("Uploaded media %s → %s", file_path, media_id)
-                return media_id
+        client = _get_http_client()
+        with open(file_path, "rb") as f:
+            response = await client.post(
+                MEDIA_UPLOAD_URL,
+                headers=headers,
+                data={"messaging_product": "whatsapp", "type": mime_type},
+                files={"file": (os.path.basename(file_path), f, mime_type)},
+            )
+        response.raise_for_status()
+        media_id = response.json().get("id")
+        logger.info("Uploaded media %s → %s", file_path, media_id)
+        return media_id
     except httpx.HTTPStatusError as exc:
         logger.error("Media upload error %s: %s", exc.response.status_code, exc.response.text)
         return None
@@ -220,27 +240,42 @@ async def send_local_image(
 ) -> dict | None:
     """Upload a local image and send it via WhatsApp.
 
+    The temporary file at ``file_path`` is deleted after the upload attempt
+    regardless of success or failure, so callers do not need to manage
+    cleanup themselves.  (Item 85, v0.25.0)
+
     Args:
         to: Recipient phone number.
-        file_path: Path to local image file.
+        file_path: Path to local image file (e.g. a tempfile produced by
+            the caller).
         caption: Optional caption.
 
     Returns:
         API response dict or None on failure.
     """
-    media_id = await _upload_media(file_path)
-    if not media_id:
-        return None
+    try:
+        media_id = await _upload_media(file_path)
+        if not media_id:
+            return None
 
-    image_payload: dict = {"id": media_id}
-    if caption:
-        image_payload["caption"] = caption
+        image_payload: dict = {"id": media_id}
+        if caption:
+            image_payload["caption"] = caption
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "image",
-        "image": image_payload,
-    }
-    log_text = f"[product-grid] {caption or 'grid image'}"
-    return await _send_message(to, payload, log_text)
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "image",
+            "image": image_payload,
+        }
+        log_text = f"[product-grid] {caption or 'grid image'}"
+        return await _send_message(to, payload, log_text)
+    finally:
+        # Always remove the temp file — it has been uploaded (or failed) and
+        # the local copy is no longer needed.  Silently ignore missing files
+        # (already cleaned up by a prior call, OS temp cleanup, etc.).
+        try:
+            os.unlink(file_path)
+            logger.debug("Cleaned up temp image file: %s", file_path)
+        except OSError:
+            pass

@@ -9,6 +9,9 @@ import re
 
 MAX_PRODUCTS = 8
 MAX_STORES_PER_PHARMACY = 3
+# WhatsApp hard limit is 4096 chars. We stop adding products at this
+# threshold to prevent silent truncation. (Item 66, v0.25.0)
+WA_MSG_CHAR_LIMIT = 3800
 # Truncate raw OSM opening_hours strings to keep WhatsApp lines short.
 # Full OSM strings can be 80+ chars (e.g., "Mo-Fr 08:00-20:00; Sa 09:00-18:00; Su 10:00-14:00").
 HOURS_DISPLAY_MAXLEN = 40
@@ -174,7 +177,7 @@ def format_search_results(response: SearchResponse) -> str:
             )
         return (
             f"No encontramos resultados para *{response.query}*.\n\n"
-            "Intenta con otro nombre o revisa la ortografia."
+            "Intenta con otro nombre o revisa la ortografía."
         )
 
     product_groups = _group_by_product(response.results)
@@ -197,6 +200,7 @@ def format_search_results(response: SearchResponse) -> str:
         )
     lines = [header]
 
+    shown = 0
     for i, (product_name, pharmacy_results) in enumerate(product_groups[:MAX_PRODUCTS], 1):
         # Check if any result in this group requires prescription
         rx_label = ""
@@ -229,20 +233,26 @@ def format_search_results(response: SearchResponse) -> str:
                         store_line += f" — Bs. {store.price_bs:,.2f}"
                     line += store_line
 
+        # WhatsApp 4096-char guard — stop adding products before truncation
+        # (Item 66, v0.25.0)
+        current_len = sum(len(l) + 1 for l in lines) + len(line)
+        if current_len > WA_MSG_CHAR_LIMIT and shown > 0:
+            break
         lines.append(line)
+        shown += 1
 
-    remaining = len(product_groups) - MAX_PRODUCTS
+    remaining = len(product_groups) - shown
     if remaining > 0:
-        lines.append(f"\n... y {remaining} productos mas.")
+        lines.append(f"\n... y {remaining} productos más.")
 
     if response.similar_count > 0:
         lines.append(
-            f"\n\U0001f50d Tambien encontramos *{response.similar_count}* productos similares."
-            "\nEnvia _ver similares_ para verlos."
+            f"\n\U0001f50d También encontramos *{response.similar_count}* productos similares."
+            "\nEnvía _ver similares_ para verlos."
         )
 
     lines.append(
-        "\nEnvia otro medicamento para buscar."
+        "\nEnvía otro medicamento para buscar."
         "\n_cambiar zona_ \u00b7 _ayuda_"
     )
     return "\n".join(lines)
@@ -263,8 +273,8 @@ def format_nearby_stores(
     """
     if not stores:
         return (
-            "\U0001f3e5 No encontramos farmacias cercanas a tu ubicacion.\n\n"
-            "Intenta _cambiar zona_ para actualizar tu ubicacion."
+            "\U0001f3e5 No encontramos farmacias cercanas a tu ubicación.\n\n"
+            "Intenta _cambiar zona_ para actualizar tu ubicación."
         )
 
     zone_label = f" cerca de *{zone_name}*" if zone_name else ""
@@ -324,10 +334,16 @@ def format_nearby_stores(
         if website:
             line += f"\n   \U0001f310 {_short_url(website)}"
 
+        # Google Maps navigation link (Item 63, v0.25.0)
+        store_lat = store.get("latitude")
+        store_lng = store.get("longitude")
+        if store_lat is not None and store_lng is not None:
+            line += f"\n   \U0001f5fa https://maps.google.com/?q={store_lat},{store_lng}"
+
         lines.append(line)
 
     lines.append(
-        "\nEnvia el nombre de un producto para buscar disponibilidad."
+        "\nEnvía el nombre de un producto para buscar disponibilidad."
         "\n_cambiar zona_ \u00b7 _ayuda_"
     )
     return "\n".join(lines)

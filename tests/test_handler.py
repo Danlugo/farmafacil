@@ -147,7 +147,7 @@ class TestOnboardingWelcome:
         mock_send.assert_awaited_once()
         sent_text = mock_send.await_args.args[1]
         assert "FarmaFacil" in sent_text
-        assert "Como te llamas" in sent_text
+        assert "Cómo te llamas" in sent_text
 
 
 # ---------------------------------------------------------------------------
@@ -294,19 +294,26 @@ class TestOnboardingAwaitingLocation:
         await _seed_user(phone, name="Maria", step="awaiting_location")
 
         intent = Intent(action="unknown", detected_location="La Boyera")
-        geocoded = {
-            "lat": 10.48,
-            "lng": -66.87,
-            "zone_name": "La Boyera",
-            "city": "CCS",
-        }
+
+        from farmafacil.services.location import LocationResult, DEFAULT_MIN_CONFIDENCE
+        resolved = LocationResult(
+            lat=10.48,
+            lng=-66.87,
+            display_name="La Boyera, Caracas, Venezuela",
+            confidence=DEFAULT_MIN_CONFIDENCE + 0.1,
+            source="forward",
+            city_code="CCS",
+            zone_name="La Boyera",
+        )
 
         with patch.object(
             handler, "classify_intent", new=AsyncMock(return_value=intent),
         ), patch.object(
             handler, "increment_token_usage", new=AsyncMock(),
-        ), patch.object(
-            handler, "geocode_zone", new=AsyncMock(return_value=geocoded),
+        ), patch(
+            "farmafacil.services.location.resolve", new=AsyncMock(return_value=resolved),
+        ), patch(
+            "farmafacil.services.location._name_matches_query", return_value=True,
         ), patch.object(
             handler, "send_text_message", new=AsyncMock(),
         ) as mock_send:

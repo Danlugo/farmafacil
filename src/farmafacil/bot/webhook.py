@@ -339,14 +339,38 @@ async def receive_webhook(request: Request) -> dict | Response:
                             )
                         )
 
-                else:
-                    logger.info("Received %s message from %s", msg_type, sender)
-
+                elif msg_type in ("reaction", "system", "ephemeral", "order"):
+                    # Silent: reactions, system messages, and ephemeral don't
+                    # need a reply — just log them.
+                    logger.info("Received %s message from %s (silent)", msg_type, sender)
                     await log_inbound(
                         phone_number=sender,
                         message_text=f"[{msg_type}]",
                         message_type=msg_type,
                         wa_message_id=wa_id,
+                    )
+
+                else:
+                    # Unsupported type (sticker, contacts, etc.) — tell the
+                    # user what we CAN handle so they don't think the bot is
+                    # broken. (Item 64, v0.25.0)
+                    logger.info("Received unsupported %s message from %s", msg_type, sender)
+                    await log_inbound(
+                        phone_number=sender,
+                        message_text=f"[{msg_type}]",
+                        message_type=msg_type,
+                        wa_message_id=wa_id,
+                    )
+                    _fire_and_forget(
+                        _safe_handle(
+                            send_text_message(
+                                sender,
+                                "No puedo procesar ese tipo de mensaje. "
+                                "Envíame texto, foto, documento, nota de voz "
+                                "o ubicación. \U0001f48a",
+                            ),
+                            sender, wa_id,
+                        )
                     )
 
     return {"status": "ok"}

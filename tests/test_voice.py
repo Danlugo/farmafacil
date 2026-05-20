@@ -133,11 +133,9 @@ class TestTranscribeAudio:
         }
 
         mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("farmafacil.services.voice.httpx.AsyncClient", return_value=mock_client):
+        with patch("farmafacil.services.voice._get_http_client", return_value=mock_client):
             text, lang, dur = await transcribe_audio(audio_file)
 
         assert text == "Hola, necesito ibuprofeno"
@@ -161,11 +159,9 @@ class TestTranscribeAudio:
         )
 
         mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("farmafacil.services.voice.httpx.AsyncClient", return_value=mock_client):
+        with patch("farmafacil.services.voice._get_http_client", return_value=mock_client):
             text, lang, dur = await transcribe_audio(audio_file)
 
         assert text is None
@@ -189,11 +185,9 @@ class TestTranscribeAudio:
         }
 
         mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("farmafacil.services.voice.httpx.AsyncClient", return_value=mock_client):
+        with patch("farmafacil.services.voice._get_http_client", return_value=mock_client):
             text, lang, dur = await transcribe_audio(audio_file)
 
         assert text is None
@@ -462,7 +456,7 @@ class TestAdminChatVoiceTools:
         mock_sess = AsyncMock()
         mock_sess.execute = AsyncMock(return_value=mock_result)
 
-        with patch("farmafacil.services.admin_chat.async_session") as mock_cls:
+        with patch("farmafacil.services.admin_chat.feedback_tools.async_session") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_sess)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await _tool_list_voice_messages({})
@@ -487,7 +481,7 @@ class TestAdminChatVoiceTools:
         mock_sess = AsyncMock()
         mock_sess.execute = AsyncMock(return_value=mock_result)
 
-        with patch("farmafacil.services.admin_chat.async_session") as mock_cls:
+        with patch("farmafacil.services.admin_chat.feedback_tools.async_session") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_sess)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await _tool_list_voice_messages({})
@@ -514,7 +508,7 @@ class TestAdminChatVoiceTools:
         mock_sess = AsyncMock()
         mock_sess.execute = AsyncMock(return_value=mock_result)
 
-        with patch("farmafacil.services.admin_chat.async_session") as mock_cls:
+        with patch("farmafacil.services.admin_chat.feedback_tools.async_session") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_sess)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await _tool_get_voice_message({"id": 999})
@@ -546,7 +540,7 @@ class TestAdminChatVoiceTools:
         mock_sess = AsyncMock()
         mock_sess.execute = AsyncMock(return_value=mock_result)
 
-        with patch("farmafacil.services.admin_chat.async_session") as mock_cls:
+        with patch("farmafacil.services.admin_chat.feedback_tools.async_session") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_sess)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await _tool_get_voice_message({"id": 1})

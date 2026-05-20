@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 
-from farmafacil.db.session import async_session
+from farmafacil.db.session import _is_sqlite, async_session
 from farmafacil.models.database import (
     Product,
     ProductKeyword,
@@ -22,6 +22,15 @@ from farmafacil.models.database import (
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.relevance import classify_pharmaceutical, is_relevant
 from farmafacil.services.settings import get_setting_float, get_setting_int
+
+# Dialect-specific INSERT ... ON CONFLICT support.  Both SQLite (≥3.24) and
+# PostgreSQL support this syntax; SQLAlchemy exposes it through per-dialect
+# ``insert()`` functions.  We select the right one at import time based on
+# the DATABASE_URL to avoid runtime overhead.
+if _is_sqlite:
+    from sqlalchemy.dialects.sqlite import insert as _dialect_insert
+else:
+    from sqlalchemy.dialects.postgresql import insert as _dialect_insert
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +181,17 @@ async def save_search_results(
     city_code: str | None,
     results: list[DrugResult],
 ) -> None:
-    """Upsert products, prices, and search query mapping.
+    """Bulk-upsert products, prices, keywords, and search query mapping.
 
-    For each DrugResult:
-    1. Find or create a Product row by external_id + pharmacy_chain.
-    2. Update all product attributes.
-    3. Find or create a ProductPrice row by product_id + city_code.
-    4. Update price, stock, discount, refreshed_at.
-    5. Upsert the SearchQuery row mapping query+city to product IDs.
+    Uses ``INSERT ... ON CONFLICT DO UPDATE`` (Item 74) to collapse what was
+    previously ~4N individual ORM round-trips (N = len(results)) into ~4
+    batch statements:
+
+    1. Bulk upsert products via ``INSERT ON CONFLICT (external_id, pharmacy_chain)``.
+    2. SELECT back the product IDs in one query.
+    3. Bulk upsert prices via ``INSERT ON CONFLICT (product_id, city_code)``.
+    4. Bulk sync keywords: one DELETE + one INSERT for all products.
+    5. Upsert the search-query → product_ids mapping (single row).
 
     Args:
         query: Drug search query (will be normalized).
@@ -191,28 +203,89 @@ async def save_search_results(
 
     normalized_query = query.lower().strip()
     now = datetime.now(tz=UTC)
-    all_product_ids: list[int] = []
-    relevant_product_ids: list[int] = []
+    now_naive = now.replace(tzinfo=None)
 
     # Read the relevance threshold from app settings
     threshold = await get_setting_float("relevance_threshold", 0.3)
 
+    # ── Step 1: Prepare product rows ────────────────────────────────────
+    # Build a list of dicts for bulk INSERT ... ON CONFLICT.
+    product_rows: list[dict] = []
+    ext_id_to_drug: dict[tuple[str, str], DrugResult] = {}
+
+    for drug in results:
+        external_id = _extract_external_id(drug)
+        keywords = _parse_keywords(drug.drug_name)
+        pharma = classify_pharmaceutical(drug.drug_class)
+        key = (external_id, drug.pharmacy_name)
+        ext_id_to_drug[key] = drug
+
+        product_rows.append({
+            "external_id": external_id,
+            "pharmacy_chain": drug.pharmacy_name,
+            "drug_name": drug.drug_name,
+            "brand": drug.brand,
+            "description": drug.description,
+            "image_url": drug.image_url,
+            "drug_class": drug.drug_class,
+            "requires_prescription": drug.requires_prescription or False,
+            "unit_count": drug.unit_count,
+            "unit_label": drug.unit_label,
+            "product_url": drug.url,
+            "keywords": keywords,
+            "is_pharmaceutical": pharma,
+        })
+
     async with async_session() as session:
-        for drug in results:
-            # Determine external_id — use product URL slug or drug_name as fallback
-            external_id = _extract_external_id(drug)
+        # ── Step 2: Bulk upsert products ────────────────────────────────
+        _PRODUCT_UPDATE_COLS = [
+            "drug_name", "brand", "description", "image_url", "drug_class",
+            "requires_prescription", "unit_count", "unit_label", "product_url",
+            "keywords", "is_pharmaceutical",
+        ]
+        stmt = _dialect_insert(Product).values(product_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["external_id", "pharmacy_chain"],
+            set_={
+                col: stmt.excluded[col] for col in _PRODUCT_UPDATE_COLS
+            } | {"updated_at": now_naive},
+        )
+        await session.execute(stmt)
 
-            # Find or create product
-            product = await _upsert_product(session, drug, external_id, now)
-            all_product_ids.append(product.id)
+        # ── Step 3: Fetch product IDs in one query ──────────────────────
+        ext_ids = [r["external_id"] for r in product_rows]
+        chains = [r["pharmacy_chain"] for r in product_rows]
+        id_result = await session.execute(
+            select(Product.id, Product.external_id, Product.pharmacy_chain).where(
+                Product.external_id.in_(ext_ids),
+                Product.pharmacy_chain.in_(set(chains)),
+            )
+        )
+        id_map: dict[tuple[str, str], int] = {
+            (row.external_id, row.pharmacy_chain): row.id
+            for row in id_result.all()
+        }
 
-            # Upsert price for this city
-            effective_city = city_code or "ALL"
-            await _upsert_price(session, product.id, effective_city, drug, now)
+        # Build ordered product_id lists + price rows
+        effective_city = city_code or "ALL"
+        all_product_ids: list[int] = []
+        relevant_product_ids: list[int] = []
+        price_rows: list[dict] = []
+        all_keywords: list[dict] = []  # (product_id, keyword) pairs
+        affected_product_ids: list[int] = []
 
-            # Score relevance — only cache relevant product IDs.
-            # `brand` is passed so the Q6 token-overlap floor (v0.20.1) can
-            # use the brand field as a fallback target.
+        for prow in product_rows:
+            key = (prow["external_id"], prow["pharmacy_chain"])
+            product_id = id_map.get(key)
+            if product_id is None:
+                logger.warning("Product ID not found after upsert: %s", key)
+                continue
+
+            drug = ext_id_to_drug[key]
+            all_product_ids.append(product_id)
+            affected_product_ids.append(product_id)
+
+            # Relevance scoring — only relevant products enter the cache
             if is_relevant(
                 query,
                 drug.drug_name,
@@ -221,8 +294,63 @@ async def save_search_results(
                 threshold,
                 brand=drug.brand,
             ):
-                relevant_product_ids.append(product.id)
+                relevant_product_ids.append(product_id)
 
+            # Price row
+            full_price = drug.full_price_bs if drug.full_price_bs else drug.price_bs
+            offer_price = drug.price_bs if drug.full_price_bs else None
+            price_rows.append({
+                "product_id": product_id,
+                "city_code": effective_city,
+                "full_price_bs": full_price,
+                "offer_price_bs": offer_price,
+                "discount_pct": drug.discount_pct,
+                "in_stock": drug.available or False,
+                "stores_in_stock_count": drug.stores_in_stock or 0,
+                "stores_with_stock_ids": drug.stores_with_stock_ids or [],
+                "refreshed_at": now_naive,
+            })
+
+            # Keyword rows
+            unique_kws = sorted({kw for kw in prow["keywords"] if kw})
+            for kw in unique_kws:
+                all_keywords.append({
+                    "product_id": product_id,
+                    "keyword": kw,
+                })
+
+        # ── Step 4: Bulk upsert prices ──────────────────────────────────
+        if price_rows:
+            price_stmt = _dialect_insert(ProductPrice).values(price_rows)
+            price_stmt = price_stmt.on_conflict_do_update(
+                index_elements=["product_id", "city_code"],
+                set_={
+                    "full_price_bs": price_stmt.excluded.full_price_bs,
+                    "offer_price_bs": price_stmt.excluded.offer_price_bs,
+                    "discount_pct": price_stmt.excluded.discount_pct,
+                    "in_stock": price_stmt.excluded.in_stock,
+                    "stores_in_stock_count": price_stmt.excluded.stores_in_stock_count,
+                    "stores_with_stock_ids": price_stmt.excluded.stores_with_stock_ids,
+                    "refreshed_at": price_stmt.excluded.refreshed_at,
+                },
+            )
+            await session.execute(price_stmt)
+
+        # ── Step 5: Bulk sync keywords ──────────────────────────────────
+        if affected_product_ids:
+            await session.execute(
+                delete(ProductKeyword).where(
+                    ProductKeyword.product_id.in_(affected_product_ids)
+                )
+            )
+        if all_keywords:
+            kw_stmt = _dialect_insert(ProductKeyword).values(all_keywords)
+            kw_stmt = kw_stmt.on_conflict_do_nothing(
+                index_elements=["product_id", "keyword"],
+            )
+            await session.execute(kw_stmt)
+
+        # ── Step 6: Upsert search query ─────────────────────────────────
         filtered_count = len(all_product_ids) - len(relevant_product_ids)
         if filtered_count > 0:
             logger.info(
@@ -230,7 +358,6 @@ async def save_search_results(
                 filtered_count, len(all_product_ids), query, threshold,
             )
 
-        # Upsert search query mapping with only relevant product IDs
         await _upsert_search_query(
             session, normalized_query, city_code, relevant_product_ids,
             len(relevant_product_ids), now,
@@ -361,150 +488,9 @@ def _extract_external_id(drug: DrugResult) -> str:
     return f"{drug.pharmacy_name}:{drug.drug_name}".lower()
 
 
-async def _upsert_product(
-    session, drug: DrugResult, external_id: str, now: datetime,
-) -> Product:
-    """Find or create a product, updating its attributes.
-
-    Args:
-        session: Active database session.
-        drug: Drug result with product data.
-        external_id: Unique external identifier.
-        now: Current timestamp.
-
-    Returns:
-        The Product ORM instance (with id set).
-    """
-    result = await session.execute(
-        select(Product).where(
-            Product.external_id == external_id,
-            Product.pharmacy_chain == drug.pharmacy_name,
-        )
-    )
-    product = result.scalar_one_or_none()
-
-    keywords = _parse_keywords(drug.drug_name)
-
-    pharma = classify_pharmaceutical(drug.drug_class)
-
-    if product is None:
-        product = Product(
-            external_id=external_id,
-            pharmacy_chain=drug.pharmacy_name,
-            drug_name=drug.drug_name,
-            brand=drug.brand,
-            description=drug.description,
-            image_url=drug.image_url,
-            drug_class=drug.drug_class,
-            requires_prescription=drug.requires_prescription,
-            unit_count=drug.unit_count,
-            unit_label=drug.unit_label,
-            product_url=drug.url,
-            keywords=keywords,
-            is_pharmaceutical=pharma,
-        )
-        session.add(product)
-        await session.flush()  # Get the id
-    else:
-        # Update existing product attributes
-        product.drug_name = drug.drug_name
-        product.brand = drug.brand
-        product.description = drug.description
-        product.image_url = drug.image_url
-        product.drug_class = drug.drug_class
-        product.requires_prescription = drug.requires_prescription
-        product.unit_count = drug.unit_count
-        product.unit_label = drug.unit_label
-        product.product_url = drug.url
-        product.keywords = keywords
-        product.is_pharmaceutical = pharma
-        product.updated_at = now.replace(tzinfo=None)
-
-    # Mirror the keyword tokens into the indexed product_keywords table so
-    # find_cross_chain_matches can do a fast lookup (Item 30, v0.12.6).
-    # Delete existing rows for this product and insert the fresh set — this
-    # is idempotent and handles token churn from drug_name edits.
-    await _sync_product_keywords(session, product.id, keywords)
-
-    return product
-
-
-async def _sync_product_keywords(
-    session, product_id: int, keywords: list[str],
-) -> None:
-    """Replace the ``product_keywords`` rows for a product.
-
-    Deletes all existing keyword rows for ``product_id`` and inserts one
-    row per unique token in ``keywords``. Called from ``_upsert_product``
-    inside the same transaction so it rolls back together on error.
-
-    Args:
-        session: Active database session.
-        product_id: Product FK.
-        keywords: Lowercase tokens from the product's drug_name.
-    """
-    await session.execute(
-        delete(ProductKeyword).where(ProductKeyword.product_id == product_id)
-    )
-    unique = sorted({kw for kw in keywords if kw})
-    for kw in unique:
-        session.add(ProductKeyword(product_id=product_id, keyword=kw))
-
-
-async def _upsert_price(
-    session,
-    product_id: int,
-    city_code: str,
-    drug: DrugResult,
-    now: datetime,
-) -> ProductPrice:
-    """Find or create a price record, updating pricing attributes.
-
-    Args:
-        session: Active database session.
-        product_id: FK to the product.
-        city_code: City code for this price.
-        drug: Drug result with pricing data.
-        now: Current timestamp.
-
-    Returns:
-        The ProductPrice ORM instance.
-    """
-    result = await session.execute(
-        select(ProductPrice).where(
-            ProductPrice.product_id == product_id,
-            ProductPrice.city_code == city_code,
-        )
-    )
-    price = result.scalar_one_or_none()
-
-    # Determine full vs offer price
-    full_price = drug.full_price_bs if drug.full_price_bs else drug.price_bs
-    offer_price = drug.price_bs if drug.full_price_bs else None
-
-    if price is None:
-        price = ProductPrice(
-            product_id=product_id,
-            city_code=city_code,
-            full_price_bs=full_price,
-            offer_price_bs=offer_price,
-            discount_pct=drug.discount_pct,
-            in_stock=drug.available,
-            stores_in_stock_count=drug.stores_in_stock,
-            stores_with_stock_ids=drug.stores_with_stock_ids or [],
-            refreshed_at=now.replace(tzinfo=None),
-        )
-        session.add(price)
-    else:
-        price.full_price_bs = full_price
-        price.offer_price_bs = offer_price
-        price.discount_pct = drug.discount_pct
-        price.in_stock = drug.available
-        price.stores_in_stock_count = drug.stores_in_stock
-        price.stores_with_stock_ids = drug.stores_with_stock_ids or []
-        price.refreshed_at = now.replace(tzinfo=None)
-
-    return price
+    # NOTE: The old row-by-row _upsert_product, _sync_product_keywords, and
+    # _upsert_price helpers were removed in v0.25.0 (Item 74) and replaced
+    # by the bulk INSERT ... ON CONFLICT logic above in save_search_results.
 
 
 async def _upsert_search_query(

@@ -8,6 +8,8 @@ Covers:
 - Webhook: location payload parsing, malformed coordinate guard.
 """
 
+import random
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,7 +20,7 @@ from farmafacil.api.app import create_app
 from farmafacil.bot.handler import handle_location_message
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
-from farmafacil.services.geocode import reverse_geocode
+from farmafacil.services.location import reverse_geocode
 from farmafacil.services.users import get_or_create_user
 from sqlalchemy import delete
 
@@ -268,8 +270,13 @@ class TestHandleLocationMessage:
         assert "Como te llamas" in sent_text
 
     @pytest.mark.asyncio
-    async def test_onboarded_user_updates_zone(self):
-        """A fully-onboarded user sharing a pin → zone updated + confirmation."""
+    async def test_onboarded_user_stashes_temp_location(self):
+        """A fully-onboarded user sharing a pin → stashed as temp, NOT saved.
+
+        Since v0.21.3, location pins from already-onboarded users are stashed
+        in-memory for the next search, not permanently saved to the user
+        profile.  The user's home zone/city remain unchanged.
+        """
         phone = "5491200000003"
         await get_or_create_user(phone)
         async with async_session() as session:
@@ -310,14 +317,15 @@ class TestHandleLocationMessage:
             )
             refreshed = result.scalar_one()
 
-        assert refreshed.zone_name == "Nueva zona"
-        assert refreshed.city_code == "CCS"
+        # Home location is UNCHANGED — pin was stashed as temp only
+        assert refreshed.zone_name == "Antigua zona"
+        assert refreshed.city_code == "MCBO"
         assert refreshed.onboarding_step is None
-        # Display preference preserved
         assert refreshed.display_preference == "image"
+        # Confirmation message mentions the temp zone and the saved home
         sent_text = mock_send.await_args.args[1]
         assert "Nueva zona" in sent_text
-        assert "actualizada" in sent_text.lower()
+        assert "Antigua zona" in sent_text
 
     @pytest.mark.asyncio
     async def test_reverse_geocode_failure_sends_error(self):
@@ -359,12 +367,34 @@ class TestHandleLocationMessage:
 
 
 class TestWebhookLocationPayload:
-    """Tests for the webhook location message parsing."""
+    """Tests for the webhook location message parsing.
+
+    Since v0.24.0 (Item 58), webhook handlers are dispatched via
+    ``_fire_and_forget`` (asyncio.create_task).  We replace it with a
+    helper that eagerly awaits the coroutine so assertions work without
+    race conditions.
+    """
+
+    @staticmethod
+    def _make_eager_fire_and_forget():
+        """Return a _fire_and_forget replacement that runs coros eagerly.
+
+        Collects the coroutines so they can be awaited after the POST
+        returns.
+        """
+        coros: list = []
+
+        def _eager(coro):
+            coros.append(coro)
+
+        return _eager, coros
 
     @pytest.mark.asyncio
     async def test_webhook_dispatches_location_to_handler(self, client):
         """POST /webhook with a location message calls handle_location_message."""
         phone = "5491200000005"
+        # Use a unique wa_message_id to avoid dedup from prior test runs
+        wa_id = f"wamid_test_loc_{random.randint(100000, 999999)}"
         payload = {
             "object": "whatsapp_business_account",
             "entry": [
@@ -378,7 +408,7 @@ class TestWebhookLocationPayload:
                                 "messages": [
                                     {
                                         "from": phone,
-                                        "id": "wamid_test_loc_001",
+                                        "id": wa_id,
                                         "type": "location",
                                         "location": {
                                             "latitude": 10.48,
@@ -394,11 +424,19 @@ class TestWebhookLocationPayload:
             ],
         }
 
+        eager_ff, coros = self._make_eager_fire_and_forget()
+
         with patch(
+            "farmafacil.bot.webhook._fire_and_forget",
+            side_effect=eager_ff,
+        ), patch(
             "farmafacil.bot.webhook.handle_location_message",
             new=AsyncMock(),
         ) as mock_handler:
             response = await client.post("/webhook", json=payload)
+            # Eagerly await all collected coroutines
+            for c in coros:
+                await c
 
         assert response.status_code == 200
         mock_handler.assert_awaited_once()
@@ -407,12 +445,13 @@ class TestWebhookLocationPayload:
         assert args[0] == phone
         assert args[1] == 10.48
         assert args[2] == -66.87
-        assert kwargs["wa_message_id"] == "wamid_test_loc_001"
+        assert kwargs["wa_message_id"] == wa_id
 
     @pytest.mark.asyncio
     async def test_webhook_malformed_location_sends_error(self, client):
         """Missing latitude/longitude fields → error sent, handler NOT called."""
         phone = "5491200000006"
+        wa_id = f"wamid_test_loc_mal_{random.randint(100000, 999999)}"
         payload = {
             "object": "whatsapp_business_account",
             "entry": [
@@ -426,7 +465,7 @@ class TestWebhookLocationPayload:
                                 "messages": [
                                     {
                                         "from": phone,
-                                        "id": "wamid_test_loc_002",
+                                        "id": wa_id,
                                         "type": "location",
                                         "location": {
                                             "latitude": None,
@@ -442,7 +481,12 @@ class TestWebhookLocationPayload:
             ],
         }
 
+        eager_ff, coros = self._make_eager_fire_and_forget()
+
         with patch(
+            "farmafacil.bot.webhook._fire_and_forget",
+            side_effect=eager_ff,
+        ), patch(
             "farmafacil.bot.webhook.handle_location_message",
             new=AsyncMock(),
         ) as mock_handler, patch(
@@ -450,6 +494,8 @@ class TestWebhookLocationPayload:
             new=AsyncMock(),
         ) as mock_send:
             response = await client.post("/webhook", json=payload)
+            for c in coros:
+                await c
 
         assert response.status_code == 200
         mock_handler.assert_not_awaited()

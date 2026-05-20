@@ -8,6 +8,14 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from farmafacil.bot.formatter import format_nearby_stores, format_search_results
 
+from farmafacil.bot.debug import _build_debug  # noqa: F401 — re-export for tests
+from farmafacil.bot.messages import *  # noqa: F401,F403 — MSG_*, CATEGORIES, etc.
+from farmafacil.bot.messages import (  # noqa: F811 — explicit import of underscore names
+    _ADMIN_OFF_PHRASES,
+    _CATEGORY_BY_ID,
+    _CLARIFY_CANCEL_WORDS,
+    _NOT_NAMES,
+)
 from farmafacil.bot.whatsapp import (
     send_image_message,
     send_interactive_list,
@@ -25,7 +33,7 @@ from farmafacil.services.ai_responder import (
 from farmafacil.services.admin_chat import build_tools_manifest
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.user_memory import auto_update_memory, get_memory
-from farmafacil.services.geocode import geocode_zone, reverse_geocode
+from farmafacil.services.location import geocode_zone, reverse_geocode
 from farmafacil.services.intent import (
     HELP_MESSAGE,
     _get_keyword_cache,
@@ -108,242 +116,12 @@ def _pop_temp_location(sender: str) -> dict | None:
     return location
 
 
-# ── Messages ────────────────────────────────────────────────────────────
-
-MSG_WELCOME = (
-    "\U0001f48a *Hola! Soy FarmaFacil*\n\n"
-    "Te ayudo a encontrar productos en farmacias de Venezuela.\n\n"
-    "*Como te llamas?*"
-)
-
-MSG_ASK_LOCATION = (
-    "Mucho gusto *{name}*! \U0001f91d\n\n"
-    "*En que zona o barrio estas?*\n"
-    "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
-)
-
-MSG_ASK_PREFERENCE = (
-    "\u2705 *{zone}* guardado!\n\n"
-    "Como prefieres ver los resultados?\n\n"
-    "*1.* \U0001f4f8 *Imagen grande* — un producto a la vez con detalles\n"
-    "*2.* \U0001f5bc *Galeria* — varios productos en una imagen\n\n"
-    "Responde *1* o *2*"
-)
-
-MSG_READY = (
-    "\u2705 Listo *{name}*! Ya estas configurado.\n\n"
-    "Enviame el nombre de un producto de farmacia.\n"
-    "Ejemplo: _losartan_, _protector solar_, _vitamina C_"
-)
-
-MSG_LOCATION_NOT_FOUND = (
-    "No logre ubicar esa zona en Venezuela.\n"
-    "Intenta con el nombre de tu barrio o urbanizacion.\n\n"
-    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
-)
-
-# Shown when a user shares a GPS location pin that cannot be reverse-geocoded
-# (unreachable Nominatim, coordinates outside Venezuela, malformed response).
-# Added in v0.13.0 (Item 24) — users can fall back to typing a city name.
-MSG_LOCATION_PIN_NOT_FOUND = (
-    "No pude ubicar las coordenadas que compartiste.\n"
-    "Por favor, envia el *nombre de tu zona o barrio* por texto.\n\n"
-    "Ejemplos: _La Boyera_, _El Cafetal_, _Chacao_, _Maracaibo_"
-)
-
-MSG_INVALID_PREFERENCE = "Responde *1* para imagen grande o *2* para galeria."
-
-MSG_RETURNING = (
-    "\U0001f48a *Hola {name}!* Buscando en *{zone}*.\n\n"
-    "Enviame el nombre de un producto de farmacia.\n\n"
-    "\U0001f527 _Comandos:_\n"
-    "\u2022 _cambiar zona_ — nueva ubicacion\n"
-    "\u2022 _cambiar nombre_ — actualizar nombre\n"
-    "\u2022 _ayuda_ — instrucciones"
-)
-
-MSG_ASK_NEW_LOCATION = "Dime tu nueva zona o barrio.\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
-MSG_ASK_NEW_PREFERENCE = (
-    "Como prefieres ver los resultados?\n\n"
-    "*1.* \U0001f4f8 *Imagen grande*\n*2.* \U0001f5bc *Galeria*\n\nResponde *1* o *2*"
-)
-MSG_ASK_NEW_NAME = "Como te llamas?"
-
-MSG_ASK_FEEDBACK = "\u00bfTe sirvi\u00f3? (s\u00ed/no)"
-MSG_FEEDBACK_THANKS = "\u00a1Gracias por tu respuesta! \U0001f44d"
-MSG_FEEDBACK_SORRY = "Lamento eso. \u00bfQu\u00e9 buscabas exactamente o qu\u00e9 estuvo mal?"
-MSG_FEEDBACK_DETAIL_THANKS = "Gracias por explicarnos. Vamos a mejorar. \U0001f4aa"
-
-# ── Post-feedback follow-up messages (v0.22.2) ────────────────────────
-MSG_POST_SUGGESTION_OFFER = (
-    "¡Gracias! 🙏 ¿Quieres dejar una sugerencia?\n\n"
-    "Escribe tu sugerencia o envía una nota de voz 🎙️\n"
-    "_Responde 'no' para continuar_"
-)
-MSG_POST_SUGGESTION_PROMPT = (
-    "Perfecto, escribe tu sugerencia o envía una nota de voz 🎙️"
-)
-MSG_POST_SUGGESTION_THANKS = (
-    "✅ ¡Gracias por tu sugerencia!\n\n"
-    "📋 *Sugerencia #{case_id}*\n\n"
-    "La revisaremos pronto."
-)
-MSG_POST_BUG_OFFER = (
-    "Lamento eso. ¿Quieres contarnos qué no funcionó?\n\n"
-    "Escribe tu mensaje o envía una nota de voz 🎙️\n"
-    "_Responde 'no' para continuar_"
-)
-MSG_POST_BUG_PROMPT = (
-    "Escribe tu mensaje o envía una nota de voz 🎙️"
-)
-MSG_POST_BUG_THANKS = (
-    "✅ ¡Gracias por contarnos!\n\n"
-    "📋 *Reporte #{case_id}*\n\n"
-    "Lo revisaremos pronto. 💪"
-)
-MSG_POST_FEEDBACK_SKIP = "No hay problema. ¡Gracias por tu respuesta! 👍"
-
-MSG_FEEDBACK_EMPTY = (
-    "Por favor incluye tu {label} despu\u00e9s del comando.\n\n"
-    "Ejemplo: _/{cmd} la b\u00fasqueda de losartan no me devolvi\u00f3 resultados_"
-)
-MSG_FEEDBACK_REGISTERED = (
-    "\u2705 \u00a1Gracias! Tu {label} ha sido registrado.\n\n"
-    "\U0001f4cb *Caso #{case_id}*\n\n"
-    "Nuestro equipo lo revisar\u00e1 pronto."
-)
-MSG_FEEDBACK_ERROR = (
-    "Lo siento, no pude registrar tu comentario en este momento. "
-    "Por favor int\u00e9ntalo de nuevo en unos minutos."
-)
-
-MSG_SUGGESTION_EMPTY = (
-    "Por favor incluye tu sugerencia despu\u00e9s del comando.\n\n"
-    "Ejemplo: _/sugerencia me gustar\u00eda poder filtrar por precio_"
-)
-MSG_SUGGESTION_REGISTERED = (
-    "\u2705 \u00a1Gracias por tu sugerencia!\n\n"
-    "\ud83d\udccb *Sugerencia #{case_id}*\n\n"
-    "La revisaremos pronto."
-)
-MSG_SUGGESTION_ERROR = (
-    "Lo siento, no pude registrar tu sugerencia en este momento. "
-    "Por favor int\u00e9ntalo de nuevo en unos minutos."
-)
-
-MSG_NEED_LOCATION = (
-    "{name}, necesito saber tu ubicacion para buscarte farmacias cercanas.\n\n"
-    "*En que zona o barrio estas?*\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
-)
-
-MSG_CLARIFY_CANCELED = (
-    "Listo, cancele la busqueda anterior. Dime que necesitas \U0001f64c"
-)
-
-# Shown instead of the ¿Te sirvió? prompt when a drug search returns zero
-# results. Asking "did it help?" when there is literally nothing to rate was
-# a UX confusion signal in the v0.12.3 prod test (Item 34).
-MSG_RETRY_DIFFERENT_NAME = (
-    "\U0001f4a1 Si no encontraste lo que buscabas, prueba con otro nombre "
-    "o el principio activo. Ejemplo: _acetaminofen_ en vez de _tachipirin_."
-)
-
-# Words that cancel a pending clarification and reset the state.
-_CLARIFY_CANCEL_WORDS = {
-    "cancelar", "cancela", "cancel", "olvidalo", "olvídalo", "nada",
-    "dejalo", "déjalo", "no", "ninguno", "ninguna",
-}
-
-# ── Category quick-reply menu (Item 29, v0.13.2) ────────────────────────
-# Shown as a WhatsApp interactive list when an onboarded user sends a bare
-# greeting. Each tuple is (reply_id, display_title). Reply IDs are stable
-# machine identifiers — the title is what the user sees in the list AND
-# what we echo back in the follow-up prompt.
-#
-# Category set chosen after Item 29 product review (2026-04-11):
-# kept Medicamentos + Cuidado Personal (core pharmacy volume), added
-# Belleza (high-margin), Alimentos (Farmatodo sells food), and
-# Artículos Hogar (pharmacy-adjacent). Dropped Higiene (overlap with
-# Cuidado Personal) and Equipos Ortopédicos (too niche). See MEMORY.md.
-CATEGORIES: list[tuple[str, str]] = [
-    ("cat_medicamentos", "Medicamentos"),
-    ("cat_cuidado_personal", "Cuidado Personal"),
-    ("cat_belleza", "Belleza"),
-    ("cat_alimentos", "Alimentos"),
-    ("cat_hogar", "Articulos Hogar"),
-]
-_CATEGORY_BY_ID: dict[str, str] = {cat_id: title for cat_id, title in CATEGORIES}
-
-MSG_CATEGORY_LIST_BODY = (
-    "\U0001f48a Hola *{name}*! \u00bfQu\u00e9 estas buscando hoy?\n\n"
-    "Elegi una categoria o escribi directamente el nombre de un producto."
-)
-MSG_CATEGORY_LIST_BUTTON = "Ver categorias"
-MSG_CATEGORY_LIST_HEADER = "FarmaFacil"
-MSG_CATEGORY_LIST_FOOTER = "Podes cancelar en cualquier momento"
-
-MSG_CATEGORY_PROMPT = (
-    "\U0001f6cd *{category}* - \u00bfQue producto buscas?\n\n"
-    "Escribi el nombre y lo busco para vos.\n"
-    "Ejemplo: _losartan_, _shampoo_, _vitamina C_"
-)
-MSG_CATEGORY_CANCELED = (
-    "Listo, cancele la busqueda por categoria. Dime que necesitas \U0001f64c"
-)
-
-# ── Admin chat messages (Item 35, v0.14.0) ─────────────────────────────
-MSG_ADMIN_DENIED = (
-    "\U0001f512 No tienes permisos de admin. "
-    "Solo usuarios con *chat_admin* activado desde el dashboard pueden "
-    "usar este modo."
-)
-
-MSG_ADMIN_WELCOME = (
-    "\U0001f6e0\ufe0f *Modo Admin ACTIVADO* — usando Claude Opus.\n\n"
-    "Puedes pedirme cosas en lenguaje natural y yo llamo las "
-    "herramientas necesarias para responderte.\n\n"
-    "*Comandos disponibles:*\n"
-    "\u2022 */admin* — activar/desactivar este modo\n"
-    "\u2022 */admin off* — salir del modo admin\n"
-    "\u2022 */models* — ver modelo default + alternativas\n"
-    "\u2022 */model haiku|sonnet|opus* — cambiar modelo default "
-    "de usuarios\n"
-    "\u2022 */stats* — estadisticas de uso + costos\n"
-    "\u2022 */bug <texto>* o */comentario <texto>* — registrar feedback\n"
-    "\u2022 */sugerencia <texto>* — enviar una sugerencia\n"
-    "\u2022 */simulate* — adjunta un archivo con preguntas + caption /simulate\n\n"
-    "*Ejemplos de lo que puedo hacer:*\n"
-    "\u2022 _Mostrame los ultimos 10 feedbacks pendientes_\n"
-    "\u2022 _Ver caso #12_ / _Marcar caso #12 revisado_\n"
-    "\u2022 _Ver el rol pharmacy_advisor con sus reglas_\n"
-    "\u2022 _Agregar una regla al rol X diciendo Y_\n"
-    "\u2022 _Ver usuarios recientes_\n"
-    "\u2022 _Ver la memoria del usuario 5491112345678_\n"
-    "\u2022 _Listar farmacias de Locatel en CCS_\n"
-    "\u2022 _Desactivar la farmacia #42_\n"
-    "\u2022 _Cuantos productos tenemos?_\n"
-    "\u2022 _Top 10 busquedas_\n"
-    "\u2022 _Leer el archivo src/farmafacil/bot/handler.py_\n"
-    "\u2022 _Cambiar el default_model a sonnet_\n"
-    "\u2022 _Registrar un bug: el scraper de Farmatodo esta lento_\n"
-    "\u2022 _Mostrame las sugerencias pendientes_"
-)
-
-MSG_ADMIN_OFF = (
-    "\u2705 *Modo Admin DESACTIVADO*.\n"
-    "Volves al flujo normal de busqueda de productos."
-)
-
-MSG_ADMIN_NOT_ACTIVE = (
-    "El modo admin no esta activo. Usa */admin* para activarlo."
-)
-
-# Natural-language phrases that also turn off admin mode (redundant UX
-# sugar in case the user forgets the slash command).
-_ADMIN_OFF_PHRASES: frozenset[str] = frozenset({
-    "/admin off", "admin off", "salir admin", "desactivar admin",
-    "turn off admin", "apagar admin", "cerrar admin",
-})
+# ── Messages & constants imported from bot/messages.py ─────────────────
+# (v0.25.0, Item 72): All MSG_* constants, CATEGORIES, _CATEGORY_BY_ID,
+# _CLARIFY_CANCEL_WORDS, _ADMIN_OFF_PHRASES, _NOT_NAMES are now defined
+# in ``farmafacil.bot.messages`` and wildcard-imported at the top of this
+# file. This keeps handler.py namespace unchanged — tests that do
+# ``from farmafacil.bot.handler import MSG_WELCOME`` still work.
 
 # ── Admin chat helpers (Item 35, v0.14.0) ─────────────────────────────
 
@@ -2330,9 +2108,10 @@ async def _handle_nearest_store(
         reply += await _build_debug(sender, user.id, ai_result)
     await send_text_message(sender, reply)
 
-    # Ask for feedback (same as drug search)
-    await set_onboarding_step(sender, "awaiting_feedback")
-    await send_text_message(sender, MSG_ASK_FEEDBACK)
+    # Ask for feedback only when results were found (Item 65, v0.25.0)
+    if stores:
+        await set_onboarding_step(sender, "awaiting_feedback")
+        await send_text_message(sender, MSG_ASK_FEEDBACK)
 
     await _update_memory_safe(
         user.id, display_name,
@@ -2368,11 +2147,7 @@ async def _try_store_lookup(text: str) -> object | None:
     return None
 
 
-_NOT_NAMES = {
-    "hi", "hello", "hey", "hola", "buenas", "buenos", "ola", "que tal",
-    "good", "ok", "si", "no", "yes", "gracias", "thanks", "bye", "chao",
-    "ayuda", "help", "losartan", "acetaminofen", "ibuprofeno", "1", "2",
-}
+# _NOT_NAMES imported from bot/messages.py via wildcard import at top
 
 
 def _is_valid_name(name: str) -> bool:
@@ -2431,50 +2206,7 @@ def _build_product_caption(result: DrugResult) -> str:
     return "\n".join(lines)
 
 
-async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
-    """Build a debug footer from AI response and user stats.
-
-    Args:
-        sender: WhatsApp phone number.
-        user_id: User database ID.
-        ai_result: AiResponse with role_used and token counts (optional).
-
-    Returns:
-        Formatted debug footer string.
-    """
-    from farmafacil.services.settings import resolve_user_model
-
-    stats = await get_user_stats(sender, user_id)
-    role = getattr(ai_result, "role_used", "keyword") if ai_result else "keyword"
-    in_tok = getattr(ai_result, "input_tokens", 0) if ai_result else 0
-    out_tok = getattr(ai_result, "output_tokens", 0) if ai_result else 0
-    # Prefer the model actually used for THIS call (set by ai_responder /
-    # intent / refine when an LLM ran). Fall back to the current default
-    # so the footer never lies — previously it always showed LLM_MODEL
-    # (haiku) regardless of what the admin had set as default.
-    # (v0.19.2, Item 49.)
-    call_model = getattr(ai_result, "model", "") if ai_result else ""
-    model_for_footer = call_model or await resolve_user_model()
-    return build_debug_footer(
-        role_used=role,
-        input_tokens=in_tok,
-        output_tokens=out_tok,
-        total_questions=stats["total_questions"],
-        total_success=stats["total_success"],
-        total_tokens_in=stats["total_tokens_in"],
-        total_tokens_out=stats["total_tokens_out"],
-        global_tokens_in=stats["global_tokens_in"],
-        global_tokens_out=stats["global_tokens_out"],
-        model_used=model_for_footer,
-        calls_haiku=stats["calls_haiku"],
-        calls_sonnet=stats["calls_sonnet"],
-        global_calls_haiku=stats["global_calls_haiku"],
-        global_calls_sonnet=stats["global_calls_sonnet"],
-        global_tokens_in_haiku=stats["global_tokens_in_haiku"],
-        global_tokens_out_haiku=stats["global_tokens_out_haiku"],
-        global_tokens_in_sonnet=stats["global_tokens_in_sonnet"],
-        global_tokens_out_sonnet=stats["global_tokens_out_sonnet"],
-    )
+# _build_debug imported from bot/debug.py at top of this file
 
 
 async def _handle_view_similar(sender: str, user) -> None:
@@ -2490,7 +2222,7 @@ async def _handle_view_similar(sender: str, user) -> None:
     if not user.last_search_query:
         await send_text_message(
             sender,
-            "No tienes una busqueda reciente. Enviame el nombre de un producto de farmacia.",
+            "No tienes una busqueda reciente. Envíame el nombre de un producto de farmacia.",
         )
         return
 

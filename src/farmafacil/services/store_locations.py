@@ -162,6 +162,8 @@ async def get_all_nearby_stores(
             "is_24h": loc.is_24h,
             "phone": loc.phone,
             "website": loc.website,
+            "latitude": loc.latitude,
+            "longitude": loc.longitude,
         }
         for loc, dist in stores_with_distance[:max_stores]
     ]

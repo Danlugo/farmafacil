@@ -315,9 +315,14 @@ async def _execute_task(task: ScheduledTask) -> str:
         db_task.status = "running"
         await session.commit()
 
+    # Maximum seconds a single task run may take before it is cancelled.
+    # Prevents a stuck task from blocking the scheduler loop indefinitely.
+    # (Item 79, v0.25.0)
+    TASK_TIMEOUT = 300  # 5 minutes
+
     start = time.monotonic()
     try:
-        result_msg = await func(task)
+        result_msg = await asyncio.wait_for(func(task), timeout=TASK_TIMEOUT)
         elapsed = time.monotonic() - start
 
         async with async_session() as session:
@@ -337,6 +342,31 @@ async def _execute_task(task: ScheduledTask) -> str:
             "Task '%s' completed in %.1fs: %s", task.name, elapsed, result_msg,
         )
         return result_msg
+
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - start
+        timeout_msg = (
+            f"Task timed out after {TASK_TIMEOUT}s "
+            f"(elapsed: {elapsed:.1f}s)"
+        )
+        async with async_session() as session:
+            result = await session.execute(
+                select(ScheduledTask).where(ScheduledTask.id == task.id)
+            )
+            db_task = result.scalar_one()
+            now = datetime.now(tz=UTC).replace(tzinfo=None)
+            db_task.status = "timeout"
+            db_task.last_result = timeout_msg
+            db_task.last_run_at = now
+            db_task.last_duration_seconds = round(elapsed, 2)
+            db_task.next_run_at = now + timedelta(minutes=db_task.interval_minutes)
+            await session.commit()
+
+        logger.error(
+            "Task '%s' timed out after %.1fs (limit=%ds)",
+            task.name, elapsed, TASK_TIMEOUT,
+        )
+        return timeout_msg
 
     except Exception as exc:
         elapsed = time.monotonic() - start

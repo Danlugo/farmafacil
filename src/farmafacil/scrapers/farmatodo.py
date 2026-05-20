@@ -14,6 +14,22 @@ logger = logging.getLogger(__name__)
 
 ALGOLIA_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/{ALGOLIA_INDEX}/query"
 
+# ── Module-level httpx client singleton ─────────────────────────────────
+# A single AsyncClient reuses the underlying connection pool across all
+# Algolia API calls, avoiding per-call TLS handshakes to the Algolia DSN.
+# Timeout is taken from SCRAPER_TIMEOUT config so it stays consistent with
+# the per-call value that was used before.
+# (Item 78, v0.25.0 — was creating a new client per call.)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Return the module-level async httpx client, creating it lazily."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=float(SCRAPER_TIMEOUT))
+    return _http_client
+
 # Farmatodo city codes for geographic filtering
 CITY_CODES = {
     "caracas": "CCS",
@@ -68,11 +84,11 @@ class FarmatodoScraper(BaseScraper):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=SCRAPER_TIMEOUT) as client:
-                response = await client.post(
-                    ALGOLIA_URL, headers=headers, json=payload
-                )
-                response.raise_for_status()
+            client = _get_http_client()
+            response = await client.post(
+                ALGOLIA_URL, headers=headers, json=payload
+            )
+            response.raise_for_status()
         except httpx.TimeoutException:
             logger.warning("Farmatodo Algolia search timed out for query: %s", query)
             return []

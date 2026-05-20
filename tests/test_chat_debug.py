@@ -271,10 +271,25 @@ class TestGetUserStats:
     @pytest.mark.asyncio
     async def test_counts_inbound_messages(self):
         """Verify total_questions counts inbound conversation_logs."""
+        import random
+
+        from sqlalchemy import delete
+
         from farmafacil.db.session import async_session
         from farmafacil.models.database import ConversationLog
 
-        phone = "5558812222"
+        # Use a unique phone to avoid DB pollution from other tests
+        phone = f"55588{random.randint(100000, 999999)}"
+
+        # Ensure clean slate for this phone
+        async with async_session() as session:
+            await session.execute(
+                delete(ConversationLog).where(
+                    ConversationLog.phone_number == phone
+                )
+            )
+            await session.commit()
+
         async with async_session() as session:
             session.add(ConversationLog(
                 phone_number=phone, direction="inbound",
@@ -296,9 +311,33 @@ class TestGetUserStats:
     @pytest.mark.asyncio
     async def test_counts_positive_feedback(self):
         """Verify total_success counts search_logs with feedback='yes'."""
+        import random
+
+        from sqlalchemy import delete
+
+        from farmafacil.db.session import async_session
+        from farmafacil.models.database import SearchLog, User
         from farmafacil.services.search_feedback import log_search, record_feedback
 
-        user_id = 888
+        # Create a dedicated user so search_logs don't collide with others
+        phone = f"55500{random.randint(100000, 999999)}"
+        async with async_session() as session:
+            await session.execute(delete(User).where(User.phone_number == phone))
+            await session.commit()
+        async with async_session() as session:
+            user = User(phone_number=phone, name="FeedbackUser")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
+        # Clean any stale search logs for this user
+        async with async_session() as session:
+            await session.execute(
+                delete(SearchLog).where(SearchLog.user_id == user_id)
+            )
+            await session.commit()
+
         s1 = await log_search(user_id, "losartan", 5)
         await record_feedback(s1, "yes")
         s2 = await log_search(user_id, "acetaminofen", 3)
@@ -306,5 +345,5 @@ class TestGetUserStats:
         s3 = await log_search(user_id, "ibuprofeno", 2)
         await record_feedback(s3, "yes")
 
-        stats = await get_user_stats("5550000000", user_id)
+        stats = await get_user_stats(phone, user_id)
         assert stats["total_success"] == 2

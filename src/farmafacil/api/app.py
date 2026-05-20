@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 
 from farmafacil import __version__
 from farmafacil.api.admin import setup_admin
+from farmafacil.api.csrf import CSRFMiddleware
 from farmafacil.api.limiter import limiter
 from farmafacil.api.routes import router
 from farmafacil.bot.webhook import webhook_router
@@ -58,6 +59,11 @@ def create_app() -> FastAPI:
     # Rate limiting (per-IP, in-memory) — see farmafacil.api.limiter
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # CSRF protection for admin dashboard — must be added before setup_admin
+    # so it intercepts POST/PUT/DELETE/PATCH requests to /admin* paths.
+    # (Item 77, v0.25.0)
+    app.add_middleware(CSRFMiddleware)
 
     app.include_router(router)
     app.include_router(webhook_router)
