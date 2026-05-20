@@ -9,6 +9,7 @@ PostgreSQL:     DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/farmafacil
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from farmafacil.config import DATABASE_URL
@@ -34,6 +35,16 @@ engine = create_async_engine(
 )
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# Enable foreign-key enforcement for SQLite connections.  Without this,
+# ON DELETE CASCADE is silently ignored and orphaned rows accumulate.
+# Postgres enforces FKs by default, so no-op there.  (Q5 fix, v0.26.0)
+if _is_sqlite:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

@@ -115,7 +115,10 @@ async def classify_intent_keywords(text: str) -> Intent | None:
     # Exact match in DB keywords
     if text_lower in cache:
         action, response = cache[text_lower]
-        return Intent(action=action, response_text=response)
+        # For drug_search keywords, set drug_query to the matched text
+        # so the handler can pass it directly to the scraper.
+        drug_query = text_lower if action == "drug_search" else None
+        return Intent(action=action, response_text=response, drug_query=drug_query)
 
     # Short message (1-4 words), no question marks — likely a drug name
     words = text_lower.split()

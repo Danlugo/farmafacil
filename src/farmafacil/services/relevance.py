@@ -180,10 +180,19 @@ def compute_relevance(
     # the drug_class is pharma — this stops Algolia/VTEX fuzzy hits
     # ("Aspirador Nasal" for "Aspirina") from squeaking through at exactly
     # the threshold via the category bonus alone.
+    #
+    # Q8 fix (v0.26.0): digit-only tokens (e.g. "500", "50") are excluded
+    # from the floor check.  Dosage numbers like "500" appear across many
+    # unrelated products ("Aspirina 500" vs "Vitamina C 500 Mg"), so they
+    # must NOT satisfy the floor on their own.  They still participate in
+    # the overlap *score* (Signal 1) once the floor is passed.
     brand_tokens = _tokenize(brand) if brand else set()
     name_overlap = query_tokens & name_tokens
     brand_overlap = query_tokens & brand_tokens
-    if not name_overlap and not brand_overlap:
+    # Strip digit-only tokens for the floor gate
+    name_overlap_meaningful = {t for t in name_overlap if not t.isdigit()}
+    brand_overlap_meaningful = {t for t in brand_overlap if not t.isdigit()}
+    if not name_overlap_meaningful and not brand_overlap_meaningful:
         return 0.0
 
     score = 0.0

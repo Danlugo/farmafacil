@@ -6,6 +6,7 @@ uses a per-key TTL of 60 seconds and is invalidated on writes
 (``set_setting``, ``set_default_model``).
 """
 
+import asyncio
 import logging
 import time
 
@@ -21,6 +22,11 @@ logger = logging.getLogger(__name__)
 # seconds are treated as stale and refreshed from the DB on next access.
 _cache: dict[str, tuple[str, float]] = {}
 _CACHE_TTL: float = 60.0  # seconds
+
+# Lock prevents thundering-herd on cache miss: when many concurrent
+# requests expire the same key simultaneously, only one hits the DB.
+# (v0.24.0 code-review fix)
+_cache_lock = asyncio.Lock()
 
 
 def clear_settings_cache() -> None:
@@ -101,7 +107,7 @@ async def get_setting(key: str) -> str:
     Returns:
         Setting value as string. Falls back to default if not in DB.
     """
-    # Check cache first
+    # Fast path: check cache without lock
     now = time.monotonic()
     cached = _cache.get(key)
     if cached is not None:
@@ -109,20 +115,29 @@ async def get_setting(key: str) -> str:
         if now < expires:
             return value
 
-    # Cache miss or expired — read from DB
-    async with async_session() as session:
-        result = await session.execute(
-            select(AppSetting).where(AppSetting.key == key)
-        )
-        setting = result.scalar_one_or_none()
-        if setting:
-            _cache[key] = (setting.value, now + _CACHE_TTL)
-            return setting.value
+    # Cache miss or expired — acquire lock so only one coroutine hits DB
+    # per key (prevents thundering-herd on concurrent requests).
+    async with _cache_lock:
+        # Double-check: another coroutine may have filled the cache
+        cached = _cache.get(key)
+        if cached is not None:
+            value, expires = cached
+            if time.monotonic() < expires:
+                return value
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(AppSetting).where(AppSetting.key == key)
+            )
+            setting = result.scalar_one_or_none()
+            if setting:
+                _cache[key] = (setting.value, time.monotonic() + _CACHE_TTL)
+                return setting.value
 
     # Fallback to defaults (also cache so repeated misses don't hit DB)
     if key in DEFAULTS:
         default_val = DEFAULTS[key][0]
-        _cache[key] = (default_val, now + _CACHE_TTL)
+        _cache[key] = (default_val, time.monotonic() + _CACHE_TTL)
         return default_val
     return ""
 

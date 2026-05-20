@@ -82,6 +82,93 @@ DEFAULT_INTENTS: dict[str, list[tuple[str, str | None]]] = {
         ("thank you", "¡De nada! Aquí estaré. \U0001f48a"),
         ("muchas gracias", "¡Con mucho gusto! Cuídate. \U0001f48a"),
     ],
+    # ── Curated drug-keyword library (Q7, v0.26.0) ──────────────────────
+    # Common drug names bypass the AI classifier entirely and go straight
+    # to drug_search.  This saves an LLM round-trip for the most frequent
+    # single-word queries.  The handler's heuristic path already handles
+    # these, but having them as keywords ensures instant cache hits.
+    "drug_search": [
+        # Pain / fever
+        ("acetaminofen", None),
+        ("acetaminofén", None),
+        ("paracetamol", None),
+        ("ibuprofeno", None),
+        ("aspirina", None),
+        ("diclofenac", None),
+        ("naproxeno", None),
+        ("ketorolaco", None),
+        ("tramadol", None),
+        ("meloxicam", None),
+        # Blood pressure / cardiovascular
+        ("losartan", None),
+        ("losartán", None),
+        ("enalapril", None),
+        ("amlodipino", None),
+        ("atenolol", None),
+        ("valsartan", None),
+        ("metoprolol", None),
+        ("nifedipino", None),
+        ("lisinopril", None),
+        ("irbesartan", None),
+        # Diabetes
+        ("metformina", None),
+        ("glibenclamida", None),
+        ("insulina", None),
+        # Cholesterol
+        ("atorvastatina", None),
+        ("rosuvastatina", None),
+        ("simvastatina", None),
+        # Antibiotics
+        ("amoxicilina", None),
+        ("azitromicina", None),
+        ("ciprofloxacina", None),
+        ("metronidazol", None),
+        ("cefalexina", None),
+        ("levofloxacina", None),
+        # Gastric / digestive
+        ("omeprazol", None),
+        ("pantoprazol", None),
+        ("ranitidina", None),
+        ("lansoprazol", None),
+        # Allergy / respiratory
+        ("loratadina", None),
+        ("cetirizina", None),
+        ("desloratadina", None),
+        ("salbutamol", None),
+        ("fluticasona", None),
+        # Anxiety / sleep / neuro
+        ("clonazepam", None),
+        ("alprazolam", None),
+        ("diazepam", None),
+        ("melatonina", None),
+        ("sertralina", None),
+        ("fluoxetina", None),
+        # Vitamins / supplements
+        ("vitamina c", None),
+        ("vitamina d", None),
+        ("vitamina e", None),
+        ("complejo b", None),
+        ("hierro", None),
+        ("calcio", None),
+        ("magnesio", None),
+        ("zinc", None),
+        ("omega 3", None),
+        # Topical / skin
+        ("betametasona", None),
+        ("clotrimazol", None),
+        ("ketoconazol", None),
+        ("hidrocortisona", None),
+        # Common OTC / brands
+        ("atamel", None),
+        ("tempra", None),
+        ("profinal", None),
+        ("motrin", None),
+        ("advil", None),
+        ("buscapina", None),
+        ("tums", None),
+        ("pepto bismol", None),
+        ("protector solar", None),
+    ],
 }
 
 

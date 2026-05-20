@@ -354,6 +354,60 @@
 
 ---
 
+---
+
+## Phase 7 — Backlog Cleanup (v0.26.0)
+
+### 86. UserMemory `__repr__` (Q4)
+- **Priority:** P3 — Cosmetic
+- **Problem:** UserMemory was the only model without a `__repr__`, making debugging opaque.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added `__repr__` with id, user_id, and 40-char text preview. File: `models/database.py`.
+
+### 87. Flaky test isolation (Q5)
+- **Priority:** P2 — Test reliability
+- **Problem:** 12 tests failed intermittently due to orphaned data in persistent SQLite DB (UserMemory, SearchLog rows from prior runs) and missing FK enforcement (ON DELETE CASCADE silently ignored).
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Enabled `PRAGMA foreign_keys=ON` via SQLAlchemy `connect` event in `db/session.py`. Added `passive_deletes=True` to ORM relationships (UserMemory, ProductPrice, AiRoleRule, AiRoleSkill) so `session.delete()` defers to DB-level CASCADE. Fixed test fixtures: added cleanup/teardown in `test_user_memory.py`, `test_admin_stats.py`, `test_clarification.py`. Cleaned 15 orphaned UserMemory + 209 orphaned SearchLog rows from dev DB.
+
+### 88. Curated drug-keyword library (Q7)
+- **Priority:** P3 — Performance
+- **Problem:** Common drug names (losartan, acetaminofen, etc.) fell through keyword cache and hit the AI classifier, wasting an LLM round-trip.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added 76 common drug names as `drug_search` keywords in `db/seed.py`. Updated `classify_intent_keywords` in `intent.py` to set `drug_query=text_lower` when a `drug_search` keyword matches, so the handler can pass it directly to the scraper.
+
+### 89. Digit-overlap residual leak (Q8)
+- **Priority:** P2 — Search quality
+- **Problem:** "Aspirina 500" matched "Vitamina C 500 Mg" (score 0.75) because the digit token "500" satisfied the Signal 0 floor check alone.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Digit-only tokens are excluded from the Signal 0 floor gate in `services/relevance.py`. They still contribute to the overlap *score* once the floor is passed by a meaningful (non-digit) token. Aspirina 500 → Vitamina C 500: 0.0. Aspirina 500 → Aspirina 500 mg Bayer: 1.0.
+
+### 90. Settings cache thundering-herd (v0.24.0 review)
+- **Priority:** P2 — Reliability
+- **Problem:** Multiple concurrent `get_setting()` calls on cache miss all hit the DB simultaneously.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added `asyncio.Lock` with double-check pattern in `services/settings.py`. Fast path (cache hit) is lock-free; only cache misses acquire the lock.
+
+### 91. AsyncAnthropic singleton doc (v0.24.0 review)
+- **Priority:** P3 — Documentation
+- **Problem:** `_get_client()` lazy init lacked thread-safety documentation.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added docstring noting asyncio single-threaded safety and threading caveat. File: `services/ai_responder.py`.
+
+### 92. Background task set backpressure warning (v0.24.0 review)
+- **Priority:** P2 — Observability
+- **Problem:** `_background_tasks` set could grow unbounded with no visibility.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added `_MAX_BACKGROUND_TASKS=100` threshold with `logger.warning` in `bot/webhook.py` `_fire_and_forget()`.
+
+### 93. Silent no-op UPDATE logging (v0.24.0 review)
+- **Priority:** P3 — Observability
+- **Problem:** `set_onboarding_step` and `update_last_search` silently succeeded even when no user matched the phone number.
+- **Status:** ✅ DONE (v0.26.0, 2026-05-20)
+- **Solution:** Added `result.rowcount == 0` warning log in `services/users.py` for both functions.
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -364,4 +418,5 @@
 | 4 — Test Hardening | 69-71 (3 items) | P1-P2 | ~5 hours | ✅ DONE (v0.25.0) |
 | 5 — Structural Refactor | 72-76 (5 items) | P1-P2 | ~17 hours | ✅ DONE (v0.25.0) |
 | 6 — Infrastructure | 77-85 (8+1 N/A items) | P2-P3 | ~10 hours | ✅ DONE (v0.25.0) |
-| **Total** | **36 items** | | **~49 hours** | |
+| 7 — Backlog Cleanup | 86-93 (8 items) | P2-P3 | ~2 hours | ✅ DONE (v0.26.0) |
+| **Total** | **44 items** | | **~51 hours** | |

@@ -204,11 +204,15 @@ async def update_last_search(
         values["last_search_log_id"] = search_log_id
 
     async with async_session() as session:
-        await session.execute(
+        result = await session.execute(
             update(User)
             .where(User.phone_number == phone_number)
             .values(**values)
         )
+        if result.rowcount == 0:
+            logger.warning(
+                "update_last_search: no user found for phone %s", phone_number
+            )
         await session.commit()
 
 
@@ -390,9 +394,13 @@ async def set_onboarding_step(phone_number: str, step: str | None) -> None:
         step: Onboarding step or None (complete).
     """
     async with async_session() as session:
-        await session.execute(
+        result = await session.execute(
             update(User)
             .where(User.phone_number == phone_number)
             .values(onboarding_step=step)
         )
+        if result.rowcount == 0:
+            logger.warning(
+                "set_onboarding_step: no user found for phone %s", phone_number
+            )
         await session.commit()

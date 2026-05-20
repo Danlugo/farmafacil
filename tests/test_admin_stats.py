@@ -65,8 +65,15 @@ async def _add_conversation_logs(phone: str, count: int = 5) -> None:
 
 
 async def _add_search_logs(user_id: int, total: int = 10, positive: int = 4) -> None:
-    """Add search log entries for a user."""
+    """Add search log entries for a user.
+
+    Clears any pre-existing search logs for this user first to ensure
+    deterministic counts in assertions.
+    """
     async with async_session() as session:
+        await session.execute(
+            delete(SearchLog).where(SearchLog.user_id == user_id)
+        )
         for i in range(total):
             session.add(SearchLog(
                 user_id=user_id,

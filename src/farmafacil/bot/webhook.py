@@ -34,8 +34,20 @@ logger = logging.getLogger(__name__)
 _background_tasks: set[asyncio.Task] = set()
 
 
+_MAX_BACKGROUND_TASKS = 100
+
+
 def _fire_and_forget(coro) -> None:
-    """Schedule a coroutine as a background task with error logging."""
+    """Schedule a coroutine as a background task with error logging.
+
+    Logs a warning if the set exceeds ``_MAX_BACKGROUND_TASKS`` — this
+    signals backpressure (messages arriving faster than they're processed).
+    """
+    if len(_background_tasks) >= _MAX_BACKGROUND_TASKS:
+        logger.warning(
+            "Background task set has %d tasks — possible backpressure",
+            len(_background_tasks),
+        )
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)

@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -342,6 +342,7 @@ class Product(Base):
 
     prices: Mapped[list["ProductPrice"]] = relationship(
         "ProductPrice", back_populates="product", lazy="selectin",
+        passive_deletes=True,
     )
 
     __table_args__ = (
@@ -491,10 +492,12 @@ class AiRole(Base):
     rules: Mapped[list["AiRoleRule"]] = relationship(
         "AiRoleRule", back_populates="role", lazy="selectin",
         order_by="AiRoleRule.sort_order",
+        passive_deletes=True,
     )
     skills: Mapped[list["AiRoleSkill"]] = relationship(
         "AiRoleSkill", back_populates="role", lazy="selectin",
         order_by="AiRoleSkill.name",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:
@@ -601,7 +604,14 @@ class UserMemory(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    user: Mapped["User"] = relationship("User", backref="memory", uselist=False)
+    user: Mapped["User"] = relationship(
+        "User",
+        backref=backref("memory", uselist=False, passive_deletes=True),
+    )
+
+    def __repr__(self) -> str:
+        preview = (self.memory_text or "")[:40]
+        return f"<UserMemory(id={self.id}, user_id={self.user_id}, text='{preview}...')>"
 
 
 class SearchLog(Base):

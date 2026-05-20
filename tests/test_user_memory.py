@@ -3,7 +3,7 @@
 import random
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import SearchLog, User, UserMemory
@@ -19,8 +19,7 @@ from farmafacil.services.user_memory import (
 async def test_user():
     """Create a test user with a unique phone number for memory tests.
 
-    Uses a wider random range to minimize phone collisions with users
-    created by other test files (e.g. test_admin_stats).
+    Cleans up the user (and cascaded memory/search rows) after the test.
     """
     phone = f"55577{random.randint(10000000, 99999999)}"
     async with async_session() as session:
@@ -36,7 +35,16 @@ async def test_user():
         session.add(user)
         await session.commit()
         await session.refresh(user)
-        return user
+        uid = user.id
+
+    yield user
+
+    # Teardown: delete user (DB-level CASCADE deletes UserMemory)
+    async with async_session() as session:
+        await session.execute(delete(UserMemory).where(UserMemory.user_id == uid))
+        await session.execute(delete(SearchLog).where(SearchLog.user_id == uid))
+        await session.execute(delete(User).where(User.id == uid))
+        await session.commit()
 
 
 class TestGetMemory:

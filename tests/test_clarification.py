@@ -275,6 +275,15 @@ class TestSetAwaitingClarification:
     async def test_set_and_clear_context(self):
         phone = "+58414cl001"
         async with async_session() as session:
+            # Clean up residue from previous test runs
+            existing = await session.execute(
+                select(User).where(User.phone_number == phone)
+            )
+            old = existing.scalar_one_or_none()
+            if old:
+                await session.delete(old)
+                await session.commit()
+
             user = User(
                 phone_number=phone,
                 name="Test Clarify",

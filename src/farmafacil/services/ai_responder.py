@@ -36,7 +36,12 @@ _async_client: anthropic.AsyncAnthropic | None = None
 
 
 def _get_client() -> anthropic.AsyncAnthropic:
-    """Return the module-level async Anthropic client, creating it lazily."""
+    """Return the module-level async Anthropic client, creating it lazily.
+
+    Thread-safety note: this lazy init is safe because all callers run on
+    the same asyncio event loop (single-threaded). If the app ever moves to
+    a multi-threaded model, guard with ``threading.Lock``.
+    """
     global _async_client
     if _async_client is None:
         _async_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
