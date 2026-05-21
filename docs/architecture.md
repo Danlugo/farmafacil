@@ -5,41 +5,43 @@
 ## Component Overview
 
 ```
-User (WhatsApp)
-      |
-      | HTTPS (Meta Webhooks)
-      v
-  [ngrok tunnel]
-      |
-      v
-+---------------------------+
-|   FastAPI Application     |
-|   (uvicorn, port 8000)    |
-|                           |
-|  +---------------------+  |
-|  |  WhatsApp Webhook   |  |
-|  |  /webhook GET/POST  |  |
-|  +---------------------+  |
-|           |                |
-|           v                |
-|  +---------------------+  |
-|  |   Bot Handler       |  |
-|  |  (handler.py)       |  |
-|  +---------------------+  |
-|     |       |      |       |
-|     v       v      v       |
-|  Intent  Search  Users    |
-|  Service Service Service  |
-|     |       |              |
-|     v       v              |
-|  [Claude  [Algolia API]  [VTEX API] |
-|   Haiku]                  |
-|     |       |              |
-|     v       v              |
-|  +---------------------+  |
-|  |   PostgreSQL / SQLite|  |
-|  +---------------------+  |
-+---------------------------+
+User (WhatsApp)        Group (WhatsApp)
+      |                      |
+      | Meta Webhooks        | Baileys (Chamo bot)
+      v                      v
+  [ngrok tunnel]      [Chamo container]
+      |                      |
+      v                      v
++-----------------------------------+
+|     FastAPI Application           |
+|     (uvicorn, port 8000)          |
+|                                   |
+|  +-----------+  +-------------+   |
+|  | /webhook  |  | /api/v1/chat|   |
+|  | GET/POST  |  | POST        |   |
+|  +-----------+  +-------------+   |
+|       |               |           |
+|       |    proxy mode: collect    |
+|       |    responses as JSON      |
+|       v               v          |
+|  +---------------------+         |
+|  |   Bot Handler       |         |
+|  |  (handler.py)       |         |
+|  +---------------------+         |
+|     |       |      |              |
+|     v       v      v              |
+|  Intent  Search  Users            |
+|  Service Service Service          |
+|     |       |                     |
+|     v       v                     |
+|  [Claude  [Algolia/VTEX API]     |
+|   Haiku]                          |
+|     |       |                     |
+|     v       v                     |
+|  +---------------------+         |
+|  |  PostgreSQL / SQLite |         |
+|  +---------------------+         |
++-----------------------------------+
       |
       v
   [Nominatim]      [WhatsApp Cloud API]
@@ -262,6 +264,23 @@ On application start (`lifespan` in `app.py`):
 - **Direct UPDATE:** `set_onboarding_step` and `update_last_search` use `update(User).where().values()` — no SELECT first.
 - **Pool pre-ping:** Postgres engine uses `pool_pre_ping=True` to detect and replace stale connections transparently.
 - **Filename sanitization:** `_sanitize_filename_part()` in routes.py strips non-alphanumeric chars from Content-Disposition filenames via allowlist regex.
+
+## Chat Relay API (v0.27.0)
+
+The `/api/v1/chat` endpoint enables external bots (e.g. Chamo) to relay WhatsApp group messages through the full FarmaFacil handler without using Meta's WhatsApp Business API test numbers.
+
+**How it works:** A `contextvars.ContextVar` in `whatsapp.py` intercepts all outbound `send_*` calls. When proxy mode is active (via `start_collecting()`), messages are appended to a list as structured dicts instead of being sent to the WhatsApp Cloud API. The `/api/v1/chat` endpoint enters proxy mode, calls `handle_incoming_message()`, then returns all collected responses as JSON.
+
+**Key files:**
+- `bot/whatsapp.py` — `_response_collector` ContextVar, `start_collecting()`, `stop_collecting()`; intercepted: `send_text_message`, `send_image_message`, `send_interactive_list`, `send_read_receipt` (no-op)
+- `api/routes.py` — `ChatRequest`, `ChatResponseItem`, `ChatResponse` models; `POST /api/v1/chat` endpoint
+- `docs/chamo-farmafacil-skill.md` — complete integration instructions for the Chamo relay bot
+
+**Design decisions:**
+- Zero changes to `handler.py` — proxy mode is transparent to all 114+ `send_*` call sites
+- `send_read_receipt` becomes a no-op in proxy mode (read receipts are meaningless for relay bots)
+- `send_local_image` (product grid) is NOT intercepted — these use `media_id` uploads which relay bots cannot use; the text summary that follows contains equivalent info
+- No auth required — matches the existing `/api/v1/search` endpoint; Chamo connects via localhost
 
 ## Supported Cities
 

@@ -1,12 +1,45 @@
-"""WhatsApp Business Cloud API client for sending messages."""
+"""WhatsApp Business Cloud API client for sending messages.
 
+Supports a **proxy mode** for the ``/api/v1/chat`` endpoint: when the
+``_response_collector`` context-variable holds a list, outbound messages
+are appended to that list as dicts instead of being sent to the WhatsApp
+API.  This lets external callers (e.g. a Chamo group-relay bot) run the
+full handler logic and receive the responses as JSON.
+"""
+
+import contextvars
 import logging
 import os
+from typing import Any
 
 import httpx
 
 from farmafacil.config import WHATSAPP_API_TOKEN, WHATSAPP_API_URL, WHATSAPP_PHONE_NUMBER_ID
 from farmafacil.services.conversation_log import log_outbound
+
+# ── Proxy-mode response collector ────────────────────────────────────────
+# When set to a list, send_* functions append structured dicts instead of
+# calling the WhatsApp Business API.  See ``collect_responses()`` below.
+_response_collector: contextvars.ContextVar[list[dict[str, Any]] | None] = (
+    contextvars.ContextVar("_response_collector", default=None)
+)
+
+
+def start_collecting() -> list[dict[str, Any]]:
+    """Enter proxy mode: outbound messages are collected, not sent.
+
+    Returns the list that will accumulate response dicts.
+    """
+    bucket: list[dict[str, Any]] = []
+    _response_collector.set(bucket)
+    return bucket
+
+
+def stop_collecting() -> list[dict[str, Any]]:
+    """Exit proxy mode and return the collected responses."""
+    bucket = _response_collector.get() or []
+    _response_collector.set(None)
+    return bucket
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +101,16 @@ async def send_read_receipt(to: str, message_id: str) -> None:
     This marks the message as read (blue check marks) and shows the
     typing indicator to the user. Non-blocking — errors are silently logged.
 
+    In proxy mode this is a no-op — read receipts are meaningless when
+    the message didn't come from WhatsApp.
+
     Args:
         to: Recipient phone number.
         message_id: The WhatsApp message ID to mark as read.
     """
     if not message_id:
+        return
+    if _response_collector.get() is not None:
         return
 
     headers = {
@@ -96,7 +134,16 @@ async def send_read_receipt(to: str, message_id: str) -> None:
 
 
 async def send_text_message(to: str, text: str) -> dict | None:
-    """Send a text message via WhatsApp Business API."""
+    """Send a text message via WhatsApp Business API.
+
+    In proxy mode (``_response_collector`` is set), appends the message to
+    the collector list instead of calling the API.
+    """
+    bucket = _response_collector.get()
+    if bucket is not None:
+        bucket.append({"type": "text", "body": text})
+        return {"messages": [{"id": "proxy"}]}
+
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -136,6 +183,22 @@ async def send_interactive_list(
     Returns:
         API response dict, or ``None`` on failure.
     """
+    # ── Proxy mode: collect as structured dict ──────────────────────
+    bucket = _response_collector.get()
+    if bucket is not None:
+        entry: dict[str, Any] = {
+            "type": "list",
+            "body": body,
+            "button": button,
+            "rows": rows,
+        }
+        if header:
+            entry["header"] = header
+        if footer:
+            entry["footer"] = footer
+        bucket.append(entry)
+        return {"messages": [{"id": "proxy"}]}
+
     interactive: dict = {
         "type": "list",
         "body": {"text": body},
@@ -169,7 +232,19 @@ async def send_interactive_list(
 async def send_image_message(
     to: str, image_url: str, caption: str | None = None
 ) -> dict | None:
-    """Send an image message via public URL."""
+    """Send an image message via public URL.
+
+    In proxy mode, appends an image entry with the public ``url`` so the
+    relay bot can forward it.
+    """
+    bucket = _response_collector.get()
+    if bucket is not None:
+        entry: dict[str, Any] = {"type": "image", "url": image_url}
+        if caption:
+            entry["caption"] = caption
+        bucket.append(entry)
+        return {"messages": [{"id": "proxy"}]}
+
     image_payload: dict = {"link": image_url}
     if caption:
         image_payload["caption"] = caption

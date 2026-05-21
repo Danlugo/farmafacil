@@ -19,6 +19,8 @@ from farmafacil.db.session import async_session
 from pydantic import BaseModel, Field
 
 from farmafacil.config import ADMIN_PASSWORD, ADMIN_USERNAME
+from farmafacil.bot.handler import handle_incoming_message
+from farmafacil.bot.whatsapp import start_collecting, stop_collecting
 from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User, VoiceMessage
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
 from farmafacil.services.search import search_drug
@@ -88,6 +90,78 @@ async def search_get(
 ) -> SearchResponse:
     """Search for a drug via GET (convenience for WhatsApp bot / browser)."""
     return await search_drug(q, city=city)
+
+
+class ChatRequest(BaseModel):
+    """Chat API request — mirrors the WhatsApp message flow for external bots."""
+
+    sender_id: str = Field(
+        ..., min_length=5, max_length=30,
+        description="Phone number identifying the user (e.g. '584127006823')",
+    )
+    sender_name: str = Field(
+        "", max_length=100,
+        description="Display name of the sender (used for onboarding new users)",
+    )
+    text: str = Field(
+        ..., min_length=1, max_length=2000,
+        description="Message text to process",
+    )
+
+
+class ChatResponseItem(BaseModel):
+    """A single response item (text, image, or interactive list)."""
+
+    type: str = Field(..., description="Response type: text, image, or list")
+    body: str | None = Field(None, description="Text body (for text and list types)")
+    url: str | None = Field(None, description="Image URL (for image type)")
+    caption: str | None = Field(None, description="Image caption (for image type)")
+    button: str | None = Field(None, description="Button label (for list type)")
+    rows: list[dict] | None = Field(None, description="List rows (for list type)")
+    header: str | None = Field(None, description="Header text (for list type)")
+    footer: str | None = Field(None, description="Footer text (for list type)")
+
+
+class ChatResponse(BaseModel):
+    """Chat API response — contains all messages the bot would have sent."""
+
+    responses: list[ChatResponseItem]
+
+
+@router.post("/api/v1/chat", response_model=ChatResponse)
+@limiter.limit("30/minute")
+async def chat(request: Request, body: ChatRequest) -> ChatResponse:
+    """Process a text message through the full FarmaFacil handler.
+
+    Runs the exact same logic as a direct WhatsApp message — intent
+    detection, drug search, onboarding, feedback, help — but returns
+    the bot's responses as JSON instead of sending them via WhatsApp.
+
+    Designed for relay bots (e.g. Chamo in a WhatsApp group) that
+    forward group messages to FarmaFacil and post the responses back.
+
+    Args:
+        body: ChatRequest with sender_id, sender_name, and text.
+
+    Returns:
+        ChatResponse with an ordered list of response items.
+    """
+    # Enter proxy mode: outbound send_* calls collect into a list
+    start_collecting()
+    try:
+        await handle_incoming_message(
+            sender=body.sender_id,
+            message_text=body.text,
+        )
+    except Exception:
+        logger.error(
+            "Chat handler failed for sender=%s text=%r",
+            body.sender_id, body.text[:100], exc_info=True,
+        )
+    finally:
+        collected = stop_collecting()
+
+    return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
 
 
 @router.get("/api/v1/conversations")

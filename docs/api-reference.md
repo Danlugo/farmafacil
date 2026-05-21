@@ -17,6 +17,7 @@ All non-webhook, non-health endpoints are rate-limited per client IP via [slowap
 
 | Endpoint | Limit |
 |----------|-------|
+| `POST /api/v1/chat` | 30 / minute |
 | `GET/POST /api/v1/search` | 30 / minute |
 | `GET /api/v1/conversations` | 60 / minute |
 | `GET /api/v1/users` | 60 / minute |
@@ -42,6 +43,9 @@ All query parameters and request bodies are validated by FastAPI/Pydantic. Viola
 | `action` (intent filter + body) | 1 | 50 |
 | `keyword` (intent body) | 1 | 100 |
 | `response` (intent body) | — | 2000 |
+| `sender_id` (chat) | 5 | 30 |
+| `sender_name` (chat) | — | 100 |
+| `text` (chat) | 1 | 2000 |
 
 ## Error Codes
 
@@ -139,6 +143,73 @@ Same as GET but accepts a JSON body.
   "city": "caracas"
 }
 ```
+
+---
+
+## Chat (Relay Bot API)
+
+### POST /api/v1/chat
+
+Process a text message through the **full FarmaFacil handler** — intent
+detection, drug search, onboarding, feedback, help — and return the bot's
+responses as JSON instead of sending them via WhatsApp.
+
+Designed for relay bots (e.g. Chamo in a WhatsApp group) that forward group
+messages to FarmaFacil and post the responses back.
+
+**Authentication:** None (public endpoint, same as `/api/v1/search`).
+
+**Rate limit:** 30 / minute per client IP.
+
+**Request body:**
+```json
+{
+  "sender_id": "584127006823",
+  "sender_name": "Jose Miguel",
+  "text": "losartan"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| sender_id | string | Yes | Phone number identifying the user (5–30 chars) |
+| sender_name | string | No | Display name of the sender (for future onboarding use) |
+| text | string | Yes | Message text to process (1–2000 chars) |
+
+**Response 200:**
+```json
+{
+  "responses": [
+    {
+      "type": "text",
+      "body": "Buscando losartan... 💊"
+    },
+    {
+      "type": "image",
+      "url": "https://farmatodo.com/images/product.jpg",
+      "caption": "🟢 *20% DCTO*\nLosartan 50mg MK..."
+    },
+    {
+      "type": "text",
+      "body": "*Losartan* — 3 producto(s)..."
+    }
+  ]
+}
+```
+
+**Response types:**
+
+| type | Fields | Description |
+|------|--------|-------------|
+| `text` | `body` | Plain text message |
+| `image` | `url`, `caption` | Image with public URL and optional caption |
+| `list` | `body`, `button`, `rows`, `header?`, `footer?` | Interactive list (relay bots should send just `body` as text) |
+
+**Notes:**
+- Each `sender_id` maps to an independent user profile in FarmaFacil — separate search history, preferences, and onboarding state.
+- New users go through the standard onboarding flow (name → location).
+- If the handler crashes mid-response, already-collected messages are still returned.
+- Responses are ordered — relay bots should post them sequentially.
 
 ---
 
