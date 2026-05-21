@@ -408,6 +408,18 @@
 
 ---
 
+## Phase 8 — Group Relay Integration (v0.27.0)
+
+### Item 94: Chat Relay API endpoint for Chamo group bot
+- **Priority:** P1 — Feature
+- **Problem:** WhatsApp Business API limits test phone numbers to 5. Need a way for more users to interact with FarmaFacil via a WhatsApp group, relayed by the Chamo bot (Baileys-based, no Meta API limits).
+- **Status:** ✅ DONE (v0.27.0, 2026-05-21)
+- **Solution:** Added `POST /api/v1/chat` endpoint with contextvars-based proxy mode in `whatsapp.py`. When proxy mode is active (`start_collecting()`), all `send_text_message`, `send_image_message`, `send_interactive_list` calls append to a list instead of calling WhatsApp API; `send_read_receipt` becomes a no-op. Zero changes to `handler.py` — all 114+ send_* call sites work transparently. Pydantic models: `ChatRequest` (sender_id, sender_name, text), `ChatResponseItem`, `ChatResponse`. Rate limit 30/min, no auth (matches `/api/v1/search`).
+- **Files:** `src/farmafacil/bot/whatsapp.py`, `src/farmafacil/api/routes.py`, `tests/test_chat_endpoint.py` (26 tests), `docs/chamo-farmafacil-skill.md` (integration guide), `docs/api-reference.md`, `docs/architecture.md`
+- **Tests:** 26 new tests covering proxy mode unit, endpoint integration, validation, error resilience
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -419,4 +431,5 @@
 | 5 — Structural Refactor | 72-76 (5 items) | P1-P2 | ~17 hours | ✅ DONE (v0.25.0) |
 | 6 — Infrastructure | 77-85 (8+1 N/A items) | P2-P3 | ~10 hours | ✅ DONE (v0.25.0) |
 | 7 — Backlog Cleanup | 86-93 (8 items) | P2-P3 | ~2 hours | ✅ DONE (v0.26.0) |
-| **Total** | **44 items** | | **~51 hours** | |
+| 8 — Group Relay | 94 (1 item) | P1 | ~3 hours | ✅ DONE (v0.27.0) |
+| **Total** | **45 items** | | **~54 hours** | |
