@@ -319,6 +319,12 @@ async def send_local_image(
     regardless of success or failure, so callers do not need to manage
     cleanup themselves.  (Item 85, v0.25.0)
 
+    **Not intercepted in proxy mode** — this function uploads via the
+    WhatsApp Media API (producing a ``media_id``), which relay bots
+    cannot use.  The chat relay API callers receive the text summary
+    that follows the grid image instead.  Use ``send_image_message``
+    with a public URL for relay-compatible image flows.
+
     Args:
         to: Recipient phone number.
         file_path: Path to local image file (e.g. a tempfile produced by

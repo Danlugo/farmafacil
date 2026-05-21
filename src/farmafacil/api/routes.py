@@ -16,6 +16,8 @@ from sqlalchemy import func, select, text
 from farmafacil import __version__
 from farmafacil.api.limiter import limiter
 from farmafacil.db.session import async_session
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from farmafacil.config import ADMIN_PASSWORD, ADMIN_USERNAME
@@ -101,7 +103,7 @@ class ChatRequest(BaseModel):
     )
     sender_name: str = Field(
         "", max_length=100,
-        description="Display name of the sender (used for onboarding new users)",
+        description="Display name of the sender (reserved for future onboarding pre-fill; currently logged but not used by the handler)",
     )
     text: str = Field(
         ..., min_length=1, max_length=2000,
@@ -112,7 +114,9 @@ class ChatRequest(BaseModel):
 class ChatResponseItem(BaseModel):
     """A single response item (text, image, or interactive list)."""
 
-    type: str = Field(..., description="Response type: text, image, or list")
+    type: Literal["text", "image", "list"] = Field(
+        ..., description="Response type: text, image, or list",
+    )
     body: str | None = Field(None, description="Text body (for text and list types)")
     url: str | None = Field(None, description="Image URL (for image type)")
     caption: str | None = Field(None, description="Image caption (for image type)")
@@ -129,7 +133,7 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/api/v1/chat", response_model=ChatResponse)
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     """Process a text message through the full FarmaFacil handler.
 
@@ -140,6 +144,10 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     Designed for relay bots (e.g. Chamo in a WhatsApp group) that
     forward group messages to FarmaFacil and post the responses back.
 
+    Intentionally unauthenticated — callers are rate-limited and the
+    endpoint runs the same handler as the webhook, which has its own
+    input validation.  Chamo connects via localhost on the same server.
+
     Args:
         body: ChatRequest with sender_id, sender_name, and text.
 
@@ -147,8 +155,8 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         ChatResponse with an ordered list of response items.
     """
     # Enter proxy mode: outbound send_* calls collect into a list
-    start_collecting()
     try:
+        start_collecting()
         await handle_incoming_message(
             sender=body.sender_id,
             message_text=body.text,

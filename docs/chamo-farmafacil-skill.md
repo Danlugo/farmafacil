@@ -116,7 +116,7 @@ The API returns a JSON object with an array of messages to post back to the grou
 
 7. **Error handling** — if the API is unreachable, times out (allow 30s), or returns non-200, post to the group: `⚠️ FarmaFacil no está disponible en este momento. Intenta de nuevo en unos minutos.`
 
-8. **Rate limit** — the API allows 30 requests/minute. Under normal group chat volume this is plenty.
+8. **Rate limit** — the API allows 120 requests/minute per caller IP. Under normal group chat volume this is plenty.
 
 ## Example Flow
 

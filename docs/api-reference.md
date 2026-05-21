@@ -17,7 +17,7 @@ All non-webhook, non-health endpoints are rate-limited per client IP via [slowap
 
 | Endpoint | Limit |
 |----------|-------|
-| `POST /api/v1/chat` | 30 / minute |
+| `POST /api/v1/chat` | 120 / minute |
 | `GET/POST /api/v1/search` | 30 / minute |
 | `GET /api/v1/conversations` | 60 / minute |
 | `GET /api/v1/users` | 60 / minute |
