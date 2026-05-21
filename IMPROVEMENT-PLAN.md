@@ -420,6 +420,32 @@
 
 ---
 
+## Phase 9 — Relay Bug Fixes (v0.27.1)
+
+### Item 95: Fix multiline AI response parser truncation
+- **Priority:** P0 — Bug
+- **Problem:** `_parse_structured_response()` in `ai_responder.py` only captured the first line of each field value. When the AI returned multiline RESPONSE content (bullet lists, disclaimers for vague symptom queries like "necesito medicinas para refriado"), everything after the first line was silently dropped. Users saw "las opciones más comunes son:" with an empty list.
+- **Status:** ✅ DONE (v0.27.1, 2026-05-21)
+- **Solution:** Rewrote `_parse_structured_response()` to use a multiline accumulation pattern (matching `_parse_admin_action()`). Lines are buffered under the current key until the next recognised key or end-of-string. KNOWN_KEYS frozenset for O(1) lookup.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `tests/test_multiline_response_parser.py` (11 new tests)
+- **Tests:** 11 new tests covering bullet lists, numbered lists, emoji bullets, disclaimers, colons in values, multiline followed by another key, single-line regression, empty RESPONSE, structure preservation
+
+### Item 96: Fix product upsert duplicate crash
+- **Priority:** P1 — Bug
+- **Problem:** Farmatodo + Locatel returning overlapping product IDs in the same search batch caused PostgreSQL `ON CONFLICT DO UPDATE command cannot affect row a second time` crash during bulk INSERT.
+- **Status:** ✅ DONE (v0.27.1, 2026-05-21)
+- **Solution:** Deduplicate `product_rows` by `(external_id, pharmacy_chain)` and `price_rows` by `(product_id, city_code)` before INSERT, keeping the last occurrence (freshest scraper result).
+- **Files:** `src/farmafacil/services/product_cache.py`, `tests/test_location_confirm_and_dedup.py` (6 dedup tests)
+
+### Item 97: Add location confirmation step for low-confidence geocode
+- **Priority:** P2 — UX
+- **Problem:** During onboarding, low-confidence geocode results were auto-accepted, confusing users who saw "couldn't recognise your location" immediately followed by "you're all set!".
+- **Status:** ✅ DONE (v0.27.1, 2026-05-21)
+- **Solution:** New `awaiting_location_confirm` onboarding step. Low-confidence results are stashed in `_pending_location_confirm` dict, user is prompted "📍 Encontré *{location}* — ¿es correcto?". Responds "sí" (save + continue), "no" (discard + re-ask), or anything else (treated as new location attempt).
+- **Files:** `src/farmafacil/bot/handler.py`, `tests/test_location_confirm_and_dedup.py` (15 location confirm tests)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -432,4 +458,5 @@
 | 6 — Infrastructure | 77-85 (8+1 N/A items) | P2-P3 | ~10 hours | ✅ DONE (v0.25.0) |
 | 7 — Backlog Cleanup | 86-93 (8 items) | P2-P3 | ~2 hours | ✅ DONE (v0.26.0) |
 | 8 — Group Relay | 94 (1 item) | P1 | ~3 hours | ✅ DONE (v0.27.0) |
-| **Total** | **45 items** | | **~54 hours** | |
+| 9 — Relay Bug Fixes | 95-97 (3 items) | P0-P2 | ~2 hours | ✅ DONE (v0.27.1) |
+| **Total** | **48 items** | | **~56 hours** | |

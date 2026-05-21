@@ -879,32 +879,58 @@ async def run_admin_turn(
 def _parse_structured_response(reply: str) -> AiResponse:
     """Parse the structured LLM response into an AiResponse.
 
+    The classifier LLM emits key: value pairs. Multi-line values (especially
+    RESPONSE, which can contain bullet lists, disclaimers, etc.) are consumed
+    until the next recognised key or end-of-string — matching the accumulation
+    pattern used by ``_parse_admin_action()``.
+
     Args:
         reply: Raw LLM response with ACTION/DRUG/NAME/LOCATION/RESPONSE lines.
 
     Returns:
         Parsed AiResponse.
     """
+    KNOWN_KEYS = frozenset({
+        "ACTION",
+        "DRUG",
+        "MODIFIER",
+        "NAME",
+        "LOCATION",
+        "RESPONSE",
+        "CLARIFY_QUESTION",
+        "CLARIFY_CONTEXT",
+    })
+
     fields: dict[str, str] = {}
-    for line in reply.strip().split("\n"):
-        line = line.strip()
-        if ":" in line:
-            # partition splits on FIRST colon only — values containing
-            # colons (e.g. "Te busco envases: recolectores") are preserved.
-            key, _, value = line.partition(":")
-            key = key.strip().upper()
-            value = value.strip()
-            if key in (
-                "ACTION",
-                "DRUG",
-                "MODIFIER",
-                "NAME",
-                "LOCATION",
-                "RESPONSE",
-                "CLARIFY_QUESTION",
-                "CLARIFY_CONTEXT",
-            ):
-                fields[key] = value
+    current_key: str | None = None
+    buffer: list[str] = []
+
+    for line in reply.strip().splitlines():
+        stripped = line.strip()
+        # Check if this line starts a new known key
+        matched_key: str | None = None
+        if ":" in stripped:
+            candidate, _, _ = stripped.partition(":")
+            candidate = candidate.strip().upper()
+            if candidate in KNOWN_KEYS:
+                matched_key = candidate
+
+        if matched_key:
+            # Flush previous key
+            if current_key is not None:
+                fields[current_key] = "\n".join(buffer).strip()
+            current_key = matched_key
+            # Capture everything after "KEY:" on this line
+            _, _, value_part = stripped.partition(":")
+            buffer = [value_part.strip()]
+        else:
+            # Continuation line — append to current key's buffer
+            if current_key is not None:
+                buffer.append(line)
+
+    # Flush the last key
+    if current_key is not None:
+        fields[current_key] = "\n".join(buffer).strip()
 
     action = fields.get("ACTION", "unknown").lower()
     valid_actions = (
