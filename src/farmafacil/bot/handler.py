@@ -98,6 +98,21 @@ logger = logging.getLogger(__name__)
 _pending_temp_location: dict[str, tuple[dict, float]] = {}
 _PENDING_LOC_TTL_SECONDS = 600  # 10 minutes
 
+# ── Pending location confirmation (onboarding low-confidence geocode) ──
+# When onboarding geocode is low-confidence, we stash the candidate here
+# and set step to "awaiting_location_confirm".  User responds sí/no.
+_pending_location_confirm: dict[str, dict] = {}
+
+
+def _stash_location_confirm(sender: str, result: dict) -> None:
+    """Stash a geocode result pending user confirmation during onboarding."""
+    _pending_location_confirm[sender] = result
+
+
+def _pop_location_confirm(sender: str) -> dict | None:
+    """Pop and return the pending location confirmation, or None."""
+    return _pending_location_confirm.pop(sender, None)
+
 
 def _stash_temp_location(sender: str, location: dict) -> None:
     """Stash a temporary location for the sender's next search."""
@@ -1349,26 +1364,102 @@ async def handle_incoming_message(
                 "Onboarding geocode low-confidence: query=%r → display=%r confidence=%.2f",
                 location_text, result.display_name, result.confidence,
             )
+            # Stash the candidate and ask for confirmation instead of
+            # auto-accepting.  User responds sí/no on the next message.
+            _stash_location_confirm(sender, {
+                "lat": result.lat, "lng": result.lng,
+                "zone_name": result.zone_name, "city_code": result.city_code,
+            })
+            await set_onboarding_step(sender, "awaiting_location_confirm")
             await send_text_message(
                 sender,
-                f"⚠️ No estoy 100% seguro de tu ubicación. "
-                f"Encontré *{result.display_name}* — ¿es correcto?\n\n"
-                f"Si NO, compárteme tu ubicación por WhatsApp "
-                f"(toca el clíp \U0001f4ce → Ubicación) o escribe la zona "
-                f"con más detalle (ej: \"La Boyera, Caracas\").",
-            )
-            # Still persist the best guess so the user has SOME location
-            # rather than being stuck — the warning above tells them how
-            # to fix if it's wrong.
-            user = await update_user_location(
-                sender, result.lat, result.lng,
-                result.zone_name, result.city_code,
-            )
-            await send_text_message(
-                sender, MSG_READY.format(name=user.name or "amigo")
+                f"📍 Encontré *{result.display_name}* — ¿es correcto?\n\n"
+                f"Responde *sí* o *no*.",
             )
             return
 
+        user = await update_user_location(
+            sender, result.lat, result.lng,
+            result.zone_name, result.city_code,
+        )
+        await send_text_message(
+            sender, MSG_READY.format(name=user.name or "amigo")
+        )
+        return
+
+    if step == "awaiting_location_confirm":
+        answer = text.strip().lower().rstrip(".!¡?¿")
+        confirmed = answer in ("sí", "si", "yes", "s", "ok", "correcto", "correcta", "eso", "1")
+        denied = answer in ("no", "n", "nop", "nope", "nel", "0")
+
+        if confirmed:
+            loc = _pop_location_confirm(sender)
+            if loc:
+                user = await update_user_location(
+                    sender, loc["lat"], loc["lng"],
+                    loc["zone_name"], loc["city_code"],
+                )
+                await send_text_message(
+                    sender, MSG_READY.format(name=user.name or "amigo")
+                )
+            else:
+                # Stash expired — ask for location again
+                await set_onboarding_step(sender, "awaiting_location")
+                await send_text_message(
+                    sender,
+                    "⏳ Se venció la confirmación. "
+                    "Escribe tu zona de nuevo (ej: *La Boyera, Caracas*).",
+                )
+            return
+
+        if denied:
+            _pop_location_confirm(sender)  # discard candidate
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender,
+                "🔄 Sin problema. Escribe tu zona con más detalle "
+                "(ej: *La Boyera, Caracas*) o compárteme tu ubicación "
+                "por WhatsApp (toca el clíp 📎 → Ubicación).",
+            )
+            return
+
+        # Unrecognized response — treat as a new location attempt
+        _pop_location_confirm(sender)
+        await set_onboarding_step(sender, "awaiting_location")
+        # Fall through to awaiting_location will NOT happen because we
+        # already consumed this step.  Re-enter by recursing the location
+        # handler logic. Simplest: just set step and let the next message
+        # handle it.  But the user might have typed a better location —
+        # re-process it now.
+        logger.info(
+            "Location confirm: unrecognized %r — treating as new location input",
+            text,
+        )
+        # Redirect to awaiting_location by updating step and re-handling
+        # the same text. Use a minimal inline geocode attempt.
+        from farmafacil.services.location import (
+            DEFAULT_MIN_CONFIDENCE,
+            resolve as _resolve_location,
+            _name_matches_query,
+        )
+        result = await _resolve_location(text)
+        if result is None:
+            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
+            return
+        name_ok = _name_matches_query(text, result.display_name)
+        confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
+        if not (name_ok and confidence_ok):
+            _stash_location_confirm(sender, {
+                "lat": result.lat, "lng": result.lng,
+                "zone_name": result.zone_name, "city_code": result.city_code,
+            })
+            await set_onboarding_step(sender, "awaiting_location_confirm")
+            await send_text_message(
+                sender,
+                f"📍 Encontré *{result.display_name}* — ¿es correcto?\n\n"
+                f"Responde *sí* o *no*.",
+            )
+            return
         user = await update_user_location(
             sender, result.lat, result.lng,
             result.zone_name, result.city_code,

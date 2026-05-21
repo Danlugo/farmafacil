@@ -236,6 +236,19 @@ async def save_search_results(
             "is_pharmaceutical": pharma,
         })
 
+    # Deduplicate: PostgreSQL rejects INSERT ON CONFLICT when the same
+    # conflict key appears twice in the VALUES clause.  Keep last occurrence
+    # (the freshest scraper result) for each (external_id, pharmacy_chain).
+    seen: dict[tuple[str, str], int] = {}
+    for idx, row in enumerate(product_rows):
+        seen[(row["external_id"], row["pharmacy_chain"])] = idx
+    if len(seen) < len(product_rows):
+        logger.info(
+            "Deduped product batch: %d → %d rows",
+            len(product_rows), len(seen),
+        )
+        product_rows = [product_rows[i] for i in sorted(seen.values())]
+
     async with async_session() as session:
         # ── Step 2: Bulk upsert products ────────────────────────────────
         _PRODUCT_UPDATE_COLS = [
@@ -320,7 +333,13 @@ async def save_search_results(
                 })
 
         # ── Step 4: Bulk upsert prices ──────────────────────────────────
+        # Deduplicate by (product_id, city_code) — same PostgreSQL constraint.
         if price_rows:
+            price_seen: dict[tuple[int, str], int] = {}
+            for pidx, pr in enumerate(price_rows):
+                price_seen[(pr["product_id"], pr["city_code"])] = pidx
+            if len(price_seen) < len(price_rows):
+                price_rows = [price_rows[i] for i in sorted(price_seen.values())]
             price_stmt = _dialect_insert(ProductPrice).values(price_rows)
             price_stmt = price_stmt.on_conflict_do_update(
                 index_elements=["product_id", "city_code"],
