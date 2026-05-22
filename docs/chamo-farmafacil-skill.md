@@ -42,11 +42,13 @@ curl -s http://localhost:8100/health
 
 ## Trigger
 
-Every **text message** in the FarmaFacilTest group. No prefix, no trigger word. The FarmaFacil bot handles intent detection internally (greetings, drug searches, help commands, feedback — everything).
+Every **text message or voice note** in the FarmaFacilTest group. No prefix, no trigger word. The FarmaFacil bot handles intent detection internally (greetings, drug searches, help commands, feedback — everything).
 
 **Critical: ignore messages sent by Chamo itself to prevent infinite loops.**
 
-## API Call
+## API Calls
+
+### Text messages
 
 For every group text message, make this HTTP POST:
 
@@ -61,11 +63,26 @@ Content-Type: application/json
 }
 ```
 
-### Fields
+#### Fields
 
 - `sender_id` — the phone number of whoever sent the message in the group (e.g. `"584127006823"`). This identifies the user in FarmaFacil's database. Each person gets their own profile, search history, and preferences even though they're all in the same group.
 - `sender_name` — the WhatsApp display name / pushname of the sender. Used for onboarding if it's a new user.
 - `text` — the raw message text, exactly as sent.
+
+### Voice messages (audio notes)
+
+For every group voice note, download the audio via Baileys and POST it as `multipart/form-data`:
+
+```
+POST http://localhost:8100/api/v1/chat/voice
+Content-Type: multipart/form-data
+
+sender_id={sender_phone_number}
+sender_name={sender_pushname_or_display_name}
+audio={ogg_audio_bytes; filename=voice.ogg; content-type=audio/ogg}
+```
+
+FarmaFacil transcribes the audio with Whisper and processes the resulting text through the same handler as a text message. The response format is identical. Allow **60 seconds** timeout for voice (transcription takes longer than text). Rate limit: 30 requests/minute.
 
 ## Response Format
 
@@ -112,11 +129,11 @@ The API returns a JSON object with an array of messages to post back to the grou
 
 5. **Flatten interactive lists** — if a response has `type: "list"`, post just the `body` field as a plain text message.
 
-6. **Only forward text messages** — ignore location shares, images, voice notes, stickers, and other non-text messages from the group. Only forward messages that have text content.
+6. **Forward text and voice messages** — forward text messages to `/api/v1/chat` and voice notes to `/api/v1/chat/voice`. Ignore location shares, images (without text caption), stickers, and other non-text/non-audio messages.
 
-7. **Error handling** — if the API is unreachable, times out (allow 30s), or returns non-200, post to the group: `⚠️ FarmaFacil no está disponible en este momento. Intenta de nuevo en unos minutos.`
+7. **Error handling** — if the API is unreachable, times out, or returns non-200, post to the group: `⚠️ FarmaFacil no está disponible en este momento. Intenta de nuevo en unos minutos.` Text timeout: 30s. Voice timeout: 60s (transcription).
 
-8. **Rate limit** — the API allows 120 requests/minute per caller IP. Under normal group chat volume this is plenty.
+8. **Rate limits** — text endpoint: 120 requests/minute. Voice endpoint: 30 requests/minute (Whisper API cost).
 
 ## Example Flow
 

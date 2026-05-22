@@ -446,6 +446,18 @@
 
 ---
 
+## Phase 10 — Voice Relay Support (v0.28.0)
+
+### Item 98: Voice message relay endpoint
+- **Priority:** P1 — Feature
+- **Problem:** Chamo group relay only supported text messages. When users sent voice notes in the WhatsApp group, they were silently ignored. FarmaFacil already has full Whisper transcription support for direct messages, but no endpoint for external relay bots to forward raw audio.
+- **Status:** ✅ DONE (v0.28.0, 2026-05-21)
+- **Solution:** New `POST /api/v1/chat/voice` endpoint accepting multipart/form-data (sender_id, sender_name, audio file). Pipeline: size check → user lookup → save audio to disk → Whisper transcription → VoiceMessage DB record → proxy-mode handler (same as text chat endpoint). Rate limited to 30/min (Whisper is expensive). On Chamo side: `chamo-bot.ts` detects `audioMessage` in group messages, `group-relay-service.ts` downloads via Baileys `downloadMediaMessage`, POSTs FormData to `{apiUrl}/voice` with doubled timeout.
+- **Files:** `src/farmafacil/api/routes.py` (new endpoint), `tests/test_chat_voice_endpoint.py` (6 new tests), `docs/chamo-farmafacil-skill.md` (updated), Chamo: `src/chamo-bot.ts`, `src/services/group-relay-service.ts`
+- **Tests:** 6 new tests (happy path, transcription failure, missing audio 422, missing sender 422, short sender 422, oversized audio 413)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -459,4 +471,5 @@
 | 7 — Backlog Cleanup | 86-93 (8 items) | P2-P3 | ~2 hours | ✅ DONE (v0.26.0) |
 | 8 — Group Relay | 94 (1 item) | P1 | ~3 hours | ✅ DONE (v0.27.0) |
 | 9 — Relay Bug Fixes | 95-97 (3 items) | P0-P2 | ~2 hours | ✅ DONE (v0.27.1) |
-| **Total** | **48 items** | | **~56 hours** | |
+| 10 — Voice Relay | 98 (1 item) | P1 | ~2 hours | ✅ DONE (v0.28.0) |
+| **Total** | **49 items** | | **~58 hours** | |

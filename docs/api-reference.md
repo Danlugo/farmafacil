@@ -18,6 +18,7 @@ All non-webhook, non-health endpoints are rate-limited per client IP via [slowap
 | Endpoint | Limit |
 |----------|-------|
 | `POST /api/v1/chat` | 120 / minute |
+| `POST /api/v1/chat/voice` | 30 / minute |
 | `GET/POST /api/v1/search` | 30 / minute |
 | `GET /api/v1/conversations` | 60 / minute |
 | `GET /api/v1/users` | 60 / minute |
@@ -210,6 +211,41 @@ messages to FarmaFacil and post the responses back.
 - New users go through the standard onboarding flow (name → location).
 - If the handler crashes mid-response, already-collected messages are still returned.
 - Responses are ordered — relay bots should post them sequentially.
+
+---
+
+### POST /api/v1/chat/voice
+
+Process a **voice message** through the full FarmaFacil handler — Whisper
+transcription, then the same intent/search/onboarding pipeline as the text
+chat endpoint.
+
+Designed for relay bots forwarding voice notes from WhatsApp groups.
+
+**Authentication:** None (public endpoint).
+
+**Rate limit:** 30 / minute per client IP (Whisper API is expensive).
+
+**Content-Type:** `multipart/form-data`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| sender_id | string (form) | Yes | Phone number (5–30 chars) |
+| sender_name | string (form) | No | Display name (max 100 chars) |
+| audio | file | Yes | Audio file (OGG, MP3, M4A, etc. — max 25 MB) |
+
+**Response 200:** Same `ChatResponse` format as `/api/v1/chat`. First
+response item is always the transcription acknowledgment
+(`🎙️ Te escuché: _transcription_`), followed by handler responses.
+
+**Response 413:** Audio file exceeds the 25 MB Whisper limit.
+
+**Notes:**
+- Audio is saved to disk and a `VoiceMessage` DB record is created.
+- If transcription fails (empty audio, unrecognisable speech), returns a
+  single `text` response: `🎙️ No pude entender el audio.`
+- The `voice_message_id` is threaded through to search_logs and feedback
+  records, same as direct WhatsApp voice messages.
 
 ---
 

@@ -5,10 +5,11 @@ import io
 import logging
 import re
 from html import escape
+from uuid import uuid4
 
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select, text
@@ -165,6 +166,157 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         logger.error(
             "Chat handler failed for sender=%s text=%r",
             body.sender_id, body.text[:100], exc_info=True,
+        )
+    finally:
+        collected = stop_collecting()
+
+    return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
+
+
+@router.post("/api/v1/chat/voice", response_model=ChatResponse)
+@limiter.limit("30/minute")
+async def chat_voice(
+    request: Request,
+    sender_id: str = Form(..., min_length=5, max_length=30),
+    sender_name: str = Form("", max_length=100),
+    audio: UploadFile = File(...),
+) -> ChatResponse:
+    """Process a voice message through the full FarmaFacil handler.
+
+    Accepts a raw audio file upload from relay bots (e.g. Chamo) that can
+    download group voice notes but cannot supply a WhatsApp Media API
+    ``media_id``.  The audio is saved to disk, transcribed via Whisper,
+    and fed into ``handle_incoming_message`` exactly as a native WhatsApp
+    voice note would be — including a ``VoiceMessage`` DB record and the
+    ``voice_message_id`` linkage through to any resulting search or
+    feedback log.
+
+    The endpoint runs in proxy mode: all outbound ``send_*`` calls are
+    intercepted and returned as a ``ChatResponse`` instead of being sent
+    via WhatsApp.
+
+    Intentionally unauthenticated — callers are rate-limited (30/min,
+    lower than the text endpoint due to Whisper API cost) and Chamo
+    connects via localhost on the same server.  In production, Docker
+    Compose binds the app port to ``127.0.0.1`` only (docker-compose.yml),
+    so only same-host processes can reach this endpoint.
+
+    Args:
+        sender_id: Phone number identifying the user (e.g. ``'584127006823'``).
+        sender_name: Display name of the sender (reserved for future use).
+        audio: The audio file bytes (OGG, MP3, M4A, etc.).
+
+    Returns:
+        ChatResponse with an ordered list of response items.
+
+    Raises:
+        HTTPException 413: Audio exceeds the 25 MB Whisper limit.
+    """
+    from farmafacil.services.voice import (
+        MAX_AUDIO_BYTES,
+        get_audio_absolute_path,
+        save_audio_file,
+        transcribe_audio,
+    )
+    from farmafacil.services.users import get_or_create_user, validate_user_profile
+
+    # --- 1. Read and size-check the upload --------------------------------
+    # NOTE: The entire file is buffered before the size check.  With the
+    # 30/min rate limit and max concurrency of ~1–2 requests, peak memory
+    # for this path is ~50 MB which is acceptable.  If traffic grows,
+    # switch to chunked reading with an early abort.
+    audio_data = await audio.read()
+    if len(audio_data) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file exceeds the {MAX_AUDIO_BYTES // (1024 * 1024)} MB limit.",
+        )
+
+    # --- 2. Get or create the user ----------------------------------------
+    try:
+        user = await get_or_create_user(sender_id)
+        user = await validate_user_profile(user)
+    except Exception:
+        logger.error(
+            "chat_voice: user lookup failed for sender=%s", sender_id, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Error al procesar el usuario.")
+
+    # --- 3. Save audio to disk --------------------------------------------
+    relay_id = f"relay_{uuid4().hex[:12]}"
+    audio_relative_path = save_audio_file(audio_data, user.id, relay_id)
+    audio_absolute_path = get_audio_absolute_path(audio_relative_path)
+
+    # --- 4. Transcribe via Whisper ----------------------------------------
+    transcription, detected_lang, duration = await transcribe_audio(audio_absolute_path)
+
+    # --- 5. Persist VoiceMessage record -----------------------------------
+    voice_msg_id: int | None = None
+    try:
+        async with async_session() as session:
+            voice_msg = VoiceMessage(
+                user_id=user.id,
+                phone_number=sender_id,
+                audio_path=audio_relative_path,
+                duration_seconds=duration,
+                original_language=detected_lang,
+                transcription=transcription,
+                wa_message_id=relay_id,
+                conversation_log_id=None,
+                transcription_model="whisper-1" if transcription else None,
+            )
+            session.add(voice_msg)
+            await session.commit()
+            await session.refresh(voice_msg)
+            voice_msg_id = voice_msg.id
+            logger.info(
+                "chat_voice: VoiceMessage saved id=%d user=%d duration=%.1fs transcription='%s'",
+                voice_msg_id, user.id, duration or 0, (transcription or "")[:60],
+            )
+    except Exception:
+        logger.error(
+            "chat_voice: failed to save VoiceMessage for sender=%s relay_id=%s",
+            sender_id, relay_id, exc_info=True,
+        )
+        # Orphan audio cleanup — best effort
+        try:
+            audio_absolute_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("chat_voice: could not remove orphan audio: %s", audio_absolute_path)
+        raise HTTPException(status_code=500, detail="Error al guardar el mensaje de voz.")
+
+    # --- 6. Transcription failed — return failure response ----------------
+    if not transcription:
+        logger.info(
+            "chat_voice: transcription empty for sender=%s relay_id=%s", sender_id, relay_id,
+        )
+        # Clean up the audio file — the VoiceMessage record stays for audit
+        # but there is no value keeping the raw bytes if Whisper couldn't decode.
+        try:
+            audio_absolute_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("chat_voice: could not remove audio for empty transcription: %s", audio_absolute_path)
+        return ChatResponse(
+            responses=[ChatResponseItem(type="text", body="🎙️ No pude entender el audio.")]
+        )
+
+    # --- 7. Run handler in proxy mode -------------------------------------
+    collected: list[dict] = []
+    try:
+        start_collecting()
+        # Acknowledgment mirrors handle_voice_message in handler.py
+        from farmafacil.bot.whatsapp import send_text_message
+        display_text = transcription[:100] + ("..." if len(transcription) > 100 else "")
+        await send_text_message(sender_id, f"🎙️ Te escuché: _{display_text}_")
+        await handle_incoming_message(
+            sender=sender_id,
+            message_text=transcription,
+            voice_message_id=voice_msg_id,
+        )
+    except Exception:
+        logger.error(
+            "chat_voice: handler failed for sender=%s transcription=%r",
+            sender_id, transcription[:100], exc_info=True,
         )
     finally:
         collected = stop_collecting()
