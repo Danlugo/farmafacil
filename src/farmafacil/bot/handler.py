@@ -2281,10 +2281,18 @@ def _build_product_caption(result: DrugResult) -> str:
         lines.append(f"_{result.brand}_")
     lines.append(f"*{result.drug_name}*")
     if result.price_bs is not None:
-        price_line = f"*Bs. {result.price_bs:,.2f}*"
-        if result.full_price_bs and result.full_price_bs != result.price_bs:
-            price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
-        lines.append(price_line)
+        if result.price_bs == 0:
+            # Bs. 0.00 = missing/bad price data from the API.
+            # Two-line format (vs inline in formatter._format_price) is
+            # intentional — image captions use multi-line card layout.
+            lines.append("_Precio no disponible_")
+            if result.url:
+                lines.append(f"Ver en: {result.url}")
+        else:
+            price_line = f"*Bs. {result.price_bs:,.2f}*"
+            if result.full_price_bs and result.full_price_bs != result.price_bs:
+                price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
+            lines.append(price_line)
     if result.unit_label:
         lines.append(result.unit_label)
     if result.requires_prescription:

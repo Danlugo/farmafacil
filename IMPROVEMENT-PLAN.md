@@ -478,6 +478,14 @@
 - **Files:** `src/farmafacil/services/relevance.py`, `tests/test_relevance.py` (26 new tests)
 - **Tests:** 26 new tests — 13 for form-word floor exclusion (exact production bug products, legitimate matches unbroken, edge cases), 13 for new non-pharma categories (all new categories + regression guard for legitimate pharma)
 
+### Item 101: Zero-price display — show "Precio no disponible" for Bs. 0.00
+- **Priority:** P2 — UX Fix
+- **Problem:** Products with Bs. 0.00 (bad/missing price data from the pharmacy API) displayed "Bs. 0.00" to users, which is misleading — it implies the product is free when in reality the API returned no price. The queloides cream (PR88 CREM FORM QS QUELOIDES 60G from Farmacia SAAS) had Bs. 0.00 for Caracas.
+- **Status:** ✅ DONE (v0.29.1, 2026-05-22)
+- **Solution:** Three-surface fix: (1) `formatter._format_price()` — returns "Precio no disponible — ver en <url>" (or plain "Precio no disponible" without URL) when `price_bs == 0`. (2) `formatter.format_search_results()` — store-level price guard changed from `store.price_bs` (truthy) to `store.price_bs != 0` (explicit). (3) `handler._build_product_caption()` — image caption shows `_Precio no disponible_` with URL on a separate line. Code review: changed `not result.price_bs` to explicit `result.price_bs == 0` for Decimal clarity; added negative-price edge case test; moved handler import to module level.
+- **Files:** `src/farmafacil/bot/formatter.py`, `src/farmafacil/bot/handler.py`, `tests/test_zero_price_display.py` (new, 18 tests)
+- **Tests:** 18 new tests — 8 for _format_price (zero/None/normal/discount/negative), 4 for format_search_results store-level, 6 for _build_product_caption image captions
+
 ---
 
 ## Summary
@@ -496,4 +504,5 @@
 | 10 — Voice Relay | 98 (1 item) | P1 | ~2 hours | ✅ DONE (v0.28.0) |
 | 11 — Relay Context Fix | 99 (1 item) | P1 | ~1 hour | ✅ DONE (v0.28.1) |
 | 12 — Search Relevance Fix | 100 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.0) |
-| **Total** | **51 items** | | **~60 hours** | |
+| 13 — Zero-Price Display | 101 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.1) |
+| **Total** | **52 items** | | **~61 hours** | |

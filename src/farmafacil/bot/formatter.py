@@ -118,9 +118,19 @@ def _group_by_product(results: list[DrugResult]) -> list[tuple[str, list[DrugRes
 
 
 def _format_price(result: DrugResult) -> str:
-    """Format price with discount info for a result."""
+    """Format price with discount info for a result.
+
+    When ``price_bs`` is zero (bad data from the pharmacy API), returns
+    a "price not available" message with a link to the product page so
+    the user can check the price themselves.
+    """
     if result.price_bs is None:
         return ""
+    if result.price_bs == 0:
+        # Bs. 0.00 = missing/bad price data from the API
+        if result.url:
+            return f"Precio no disponible — ver en {result.url}"
+        return "Precio no disponible"
     price_str = f"Bs. {result.price_bs:,.2f}"
     if result.full_price_bs and result.full_price_bs != result.price_bs:
         price_str += f" ~Bs. {result.full_price_bs:,.2f}~"
@@ -229,7 +239,7 @@ def format_search_results(response: SearchResponse) -> str:
                         f"\n      \U0001f4cd {store.store_name}"
                         f" — {store.distance_km:.1f} km"
                     )
-                    if store.price_bs is not None:
+                    if store.price_bs is not None and store.price_bs != 0:
                         store_line += f" — Bs. {store.price_bs:,.2f}"
                     line += store_line
 
