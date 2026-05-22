@@ -31,6 +31,9 @@ NON_PHARMA_CATEGORIES: set[str] = {
     "te/ infusion/jugos diet",
     "untables",
     "alimentos",
+    "pescados",
+    "quesillos",
+    "en frio",
     # Household & cleaning
     "limpiadores/desinfect",
     "papel higienico",
@@ -41,16 +44,31 @@ NON_PHARMA_CATEGORIES: set[str] = {
     "banos de crema",
     "portacosmeticos",
     "acces rostro/cuerpo",
+    "cuidado personal",
+    "cuidado especial",
+    "jabones barra",
     # Baby products (non-medical)
     "panales",
+    "cambio panal",
+    "accesorios bebe",
     # Cosmetics / beauty
     "mascaras",
     "facial especializada",
     "nutritivas",
+    # Deodorants / oral care — not pharmaceutical
+    # NOTE: "cd adulto" is Farmatodo's internal code for adult
+    # toothpaste/oral care — not pharmaceutical.
+    "cd adulto",
+    "desodorantes barra",
+    "desodorantes locion/crema",
     # NOTE: "roblox" is Farmatodo's internal code for throat lozenges
     # (Bencidamina, Bucoxol), NOT the game — kept as pharma.
     # NOTE: "prot corporal" / "proteccion facial" are sunscreen —
     # legitimate pharmacy products users search for, kept as pharma.
+    # NOTE: "jabones intimos" kept as pharma — intimate hygiene products
+    # have medical claims and are commonly searched at pharmacies.
+    # NOTE: "compresas" kept as pharma — medical compresses are
+    # legitimate pharmacy items.
 }
 
 # ---------------------------------------------------------------------------
@@ -186,13 +204,31 @@ def compute_relevance(
     # unrelated products ("Aspirina 500" vs "Vitamina C 500 Mg"), so they
     # must NOT satisfy the floor on their own.  They still participate in
     # the overlap *score* (Signal 1) once the floor is passed.
+    #
+    # Q9 fix (v0.29.0): FORM_WORDS (e.g. "crema", "gel", "jarabe") are
+    # also excluded from the floor check.  These dosage-form descriptors
+    # appear in thousands of unrelated products (toothpaste, deodorant,
+    # wet wipes all contain "crema").  Searching "crema queloides" must
+    # NOT let "Crema Dental Colgate" pass the floor just because "crema"
+    # overlaps.  Form words still contribute to the overlap *score*
+    # (Signal 1) once the floor is passed by a meaningful token.
     brand_tokens = _tokenize(brand) if brand else set()
     name_overlap = query_tokens & name_tokens
     brand_overlap = query_tokens & brand_tokens
-    # Strip digit-only tokens for the floor gate
-    name_overlap_meaningful = {t for t in name_overlap if not t.isdigit()}
-    brand_overlap_meaningful = {t for t in brand_overlap if not t.isdigit()}
+    # Strip digit-only tokens and form words for the floor gate.
+    # _NOISE_TOKENS are already removed by _tokenize() so they cannot
+    # appear in overlap sets — only digits and FORM_WORDS need filtering.
+    name_overlap_meaningful = {
+        t for t in name_overlap if not t.isdigit() and t not in FORM_WORDS
+    }
+    brand_overlap_meaningful = {
+        t for t in brand_overlap if not t.isdigit() and t not in FORM_WORDS
+    }
     if not name_overlap_meaningful and not brand_overlap_meaningful:
+        # A query consisting entirely of form words and/or digits (e.g.
+        # "crema", "gel 500") intentionally returns 0.0.  Form words alone
+        # do not identify a specific product — the AI classifier should
+        # always pair them with an ingredient or condition name.
         return 0.0
 
     score = 0.0

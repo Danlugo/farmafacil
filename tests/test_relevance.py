@@ -20,6 +20,7 @@ from farmafacil.db.session import async_session
 from farmafacil.models.database import Product, ProductKeyword, ProductPrice, SearchQuery
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.relevance import (
+    FORM_WORDS,
     NON_PHARMA_CATEGORIES,
     classify_pharmaceutical,
     compute_relevance,
@@ -369,6 +370,189 @@ class TestQ6IsRelevantBrandPlumbing:
             "Aspirador Nasal Infantil Kerful",
             drug_class="APARATO P/SALUD",
         )
+
+
+# ── Unit Tests: Q9 form-word floor exclusion (v0.29.0) ─────────────────
+
+
+class TestQ9FormWordFloorExclusion:
+    """Q9 fix (v0.29.0): FORM_WORDS must not satisfy the Signal 0 floor.
+
+    Repro: query "crema queloides" returned wet wipes ("Toallas Humedas
+    Mimlot Crema 25 Und"), toothpaste ("Crema Dental Colgate"), and
+    deodorants because "crema" is a form word that appears in thousands
+    of unrelated products. The floor gate should ignore form words just
+    like it ignores digit-only tokens (Q8).
+    """
+
+    def test_crema_queloides_rejects_wet_wipes(self):
+        """The exact production bug: 'crema queloides' must not match wet wipes."""
+        score = compute_relevance(
+            "crema queloides",
+            "Toallas Humedas Mimlot Crema 25 Und",
+            drug_class="CAMBIO PANAL",
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
+
+    def test_crema_queloides_rejects_toothpaste(self):
+        """'crema queloides' must not match toothpaste."""
+        score = compute_relevance(
+            "crema queloides",
+            "Crema Dental Colgate Triple Accion 75Ml",
+            drug_class="CD ADULTO",
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
+
+    def test_crema_queloides_rejects_deodorant(self):
+        """'crema queloides' must not match deodorant cream."""
+        score = compute_relevance(
+            "crema queloides",
+            "Desodorante Farmatodo Crema Soft Neutro Sentation 75Gr",
+            drug_class="DESODORANTES LOCION/CREMA",
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
+
+    def test_crema_queloides_rejects_eye_cream(self):
+        """'crema queloides' must not match cosmetic eye cream."""
+        score = compute_relevance(
+            "crema queloides",
+            "MEIKAN CREMA CONTORNO DE OJOS 30GR",
+            drug_class="Cuidado Personal",
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
+
+    def test_crema_queloides_accepts_real_keloid_cream(self):
+        """The legitimate product must still pass."""
+        score = compute_relevance(
+            "crema queloides",
+            "PR88 CREM FORM QS QUELOIDES 60G",
+            drug_class="Medicamentos",
+            brand="Comialca",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (real match), got {score}"
+
+    def test_gel_diclofenac_accepts_real_product(self):
+        """Form word + real drug: 'gel diclofenac' should match Diclofenac Gel."""
+        score = compute_relevance(
+            "gel diclofenac",
+            "Diclofenac Gel 1% 60G",
+            drug_class="OTC ANALGESICOS ANTIINFLAMAT TOPICO",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (drug token passes floor), got {score}"
+
+    def test_jarabe_bromhexina_accepts_cough_syrup(self):
+        """Form word + drug: 'jarabe bromhexina' — drug token passes floor, jarabe doesn't block."""
+        score = compute_relevance(
+            "jarabe bromhexina",
+            "Bromhexina Jarabe 120Ml",
+            drug_class="TTO TOS RX",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (drug token passes floor), got {score}"
+
+    def test_form_word_alone_rejects_everything(self):
+        """Searching just a form word like 'crema' should not match unrelated products."""
+        score = compute_relevance(
+            "crema",
+            "Crema Dental Colgate 100Ml",
+            drug_class="CD ADULTO",
+        )
+        assert score == 0.0, f"Expected 0.0 (only form-word token), got {score}"
+
+    def test_pastillas_alone_rejects_cleaning(self):
+        """Searching just 'pastillas' should not match cleaning tablets."""
+        score = compute_relevance(
+            "pastillas",
+            "PASTILLAS LIMP/BAN 4 PACK",
+            drug_class="LIMPIADORES/DESINFECT",
+        )
+        assert score == 0.0, f"Expected 0.0 (only form-word token), got {score}"
+
+    def test_crema_hidrocortisona_still_works(self):
+        """'crema hidrocortisona' must still match Hidrocortisona Crema."""
+        score = compute_relevance(
+            "crema hidrocortisona",
+            "Hidrocortisona Crema 1% 15G",
+            drug_class="CORTICOIDE TOPICOS",
+        )
+        assert score >= 0.5, f"Expected >= 0.5, got {score}"
+
+    def test_form_word_plus_digit_rejects(self):
+        """'crema 500' — both tokens excluded from floor (form word + digit)."""
+        score = compute_relevance(
+            "crema 500",
+            "Crema Corporal 500Ml",
+            drug_class=None,
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word + digit only), got {score}"
+
+    def test_pomada_cicatrizante_rejects_unrelated(self):
+        """'pomada cicatrizante' must not match products only sharing 'pomada'.
+
+        Uses drug_class=None to isolate the floor check — the rejection
+        should come from the form-word floor, not the category blocklist.
+        """
+        score = compute_relevance(
+            "pomada cicatrizante",
+            "Pomada De Bebe Desitin 57G",
+            drug_class=None,
+        )
+        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
+
+
+class TestQ9NewNonPharmaCategories:
+    """New non-pharma categories added in v0.29.0 to catch false positives."""
+
+    def test_cambio_panal_is_non_pharma(self):
+        assert classify_pharmaceutical("CAMBIO PANAL") is False
+
+    def test_cd_adulto_is_non_pharma(self):
+        assert classify_pharmaceutical("CD ADULTO") is False
+
+    def test_desodorantes_barra_is_non_pharma(self):
+        assert classify_pharmaceutical("DESODORANTES BARRA") is False
+
+    def test_desodorantes_locion_crema_is_non_pharma(self):
+        assert classify_pharmaceutical("DESODORANTES LOCION/CREMA") is False
+
+    def test_cuidado_personal_is_non_pharma(self):
+        assert classify_pharmaceutical("Cuidado Personal") is False
+
+    def test_pescados_is_non_pharma(self):
+        assert classify_pharmaceutical("PESCADOS") is False
+
+    def test_quesillos_is_non_pharma(self):
+        assert classify_pharmaceutical("QUESILLOS") is False
+
+    def test_accesorios_bebe_is_non_pharma(self):
+        assert classify_pharmaceutical("ACCESORIOS BEBE") is False
+
+    def test_jabones_barra_is_non_pharma(self):
+        assert classify_pharmaceutical("JABONES BARRA") is False
+
+    def test_en_frio_is_non_pharma(self):
+        assert classify_pharmaceutical("EN FRIO") is False
+
+    def test_cuidado_especial_is_non_pharma(self):
+        assert classify_pharmaceutical("CUIDADO ESPECIAL") is False
+
+    def test_pharma_categories_still_pass(self):
+        """Ensure legitimate pharma categories are not accidentally blocked."""
+        pharma_cats = [
+            "ANALGESICOS/ANTIPIRETICOS OTC",
+            "ANTIHIPERTENSIVOS",
+            "ANTIBIOTICOS SISTEM",
+            "Medicamentos",
+            "ROBLOX",
+            "PROT CORPORAL",
+            "PROTECCION FACIAL",
+            "JABONES INTIMOS",
+            "COMPRESAS",
+            "SOPORTE TERAPEUTICO",
+            "MATERIAL QUIRURGICO/HOSP",
+            "PRESERVATIVOS",
+        ]
+        for cat in pharma_cats:
+            assert classify_pharmaceutical(cat) is True, f"{cat} should still be pharma"
 
 
 # ── Unit Tests: is_relevant ─────────────────────────────────────────────

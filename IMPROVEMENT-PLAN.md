@@ -468,6 +468,18 @@
 
 ---
 
+## Phase 12 — Search Relevance Fix (v0.29.0)
+
+### Item 100: Form-word floor exclusion + non-pharma category audit (Q9)
+- **Priority:** P1 — Bug Fix
+- **Problem:** Searching "crema queloides" (keloid scar cream) returned wet wipes ("Toallas Humedas Mimlot Crema"), toothpaste ("Crema Dental Colgate"), deodorants, and eye cream — 9 of 10 results were irrelevant. Root cause: "crema" is a FORM_WORD (dosage form descriptor) but it still satisfied the Signal 0 token-overlap floor gate. Any product with "crema" in its name passed the floor, and missing non-pharma categories ("CAMBIO PANAL", "CD ADULTO", etc.) gave these products a +0.3 pharma bonus, pushing scores to 0.55 — well above the 0.3 threshold. Only the legitimate product "PR88 CREM FORM QS QUELOIDES 60G" should have passed.
+- **Status:** ✅ DONE (v0.29.0, 2026-05-22)
+- **Solution:** Two-part fix: (1) Exclude FORM_WORDS from Signal 0 floor check — same pattern as Q8 digit-only exclusion. Form words like "crema", "gel", "jarabe" appear in thousands of unrelated products and carry no ingredient signal. (2) Added 11 missing non-pharma categories to NON_PHARMA_CATEGORIES: "cambio panal", "cd adulto", "desodorantes barra", "desodorantes locion/crema", "cuidado personal", "cuidado especial", "jabones barra", "accesorios bebe", "pescados", "quesillos", "en frio". Code review: fixed dead-code union with _NOISE_TOKENS in floor gate, improved test isolation for jarabe and pomada tests, added form-word+digit edge case test.
+- **Files:** `src/farmafacil/services/relevance.py`, `tests/test_relevance.py` (26 new tests)
+- **Tests:** 26 new tests — 13 for form-word floor exclusion (exact production bug products, legitimate matches unbroken, edge cases), 13 for new non-pharma categories (all new categories + regression guard for legitimate pharma)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -483,4 +495,5 @@
 | 9 — Relay Bug Fixes | 95-97 (3 items) | P0-P2 | ~2 hours | ✅ DONE (v0.27.1) |
 | 10 — Voice Relay | 98 (1 item) | P1 | ~2 hours | ✅ DONE (v0.28.0) |
 | 11 — Relay Context Fix | 99 (1 item) | P1 | ~1 hour | ✅ DONE (v0.28.1) |
-| **Total** | **50 items** | | **~59 hours** | |
+| 12 — Search Relevance Fix | 100 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.0) |
+| **Total** | **51 items** | | **~60 hours** | |
