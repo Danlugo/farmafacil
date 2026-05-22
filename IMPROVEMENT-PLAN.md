@@ -456,6 +456,16 @@
 - **Files:** `src/farmafacil/api/routes.py` (new endpoint), `tests/test_chat_voice_endpoint.py` (6 new tests), `docs/chamo-farmafacil-skill.md` (updated), Chamo: `src/chamo-bot.ts`, `src/services/group-relay-service.ts`
 - **Tests:** 6 new tests (happy path, transcription failure, missing audio 422, missing sender 422, short sender 422, oversized audio 413)
 
+## Phase 11 — Relay Context Fix
+
+### Item 99: Add conversation logging to relay endpoints
+- **Priority:** P1 — Bug Fix
+- **Problem:** After searching via the relay (e.g. "omeprazol"), follow-up questions like "cual es la mas barata" failed because the AI classifier had no conversation history. Relay endpoints bypassed `webhook.py` (where `log_inbound` lives) and proxy mode skipped `_send_message` (where `log_outbound` lives), so `get_recent_history()` returned empty for relay users.
+- **Status:** ✅ DONE (v0.28.1, 2026-05-21)
+- **Solution:** Added `log_inbound` call before handler and `_log_relay_responses` helper after handler in both `/api/v1/chat` and `/api/v1/chat/voice`. Inbound logged before handler (matching webhook pattern) so `get_recent_history()` inside `classify_with_ai()` sees prior messages. Voice-ack messages ("🎙️ Te escuché") are skipped to avoid noise in AI context window. Best-effort logging — failures never break the HTTP response.
+- **Files:** `src/farmafacil/api/routes.py`, `tests/test_chat_endpoint.py` (7 new tests), `tests/test_chat_voice_endpoint.py` (3 new tests)
+- **Tests:** 10 new tests (inbound/outbound logging, image caption logging, empty-item skip, voice ack skip, log failure resilience, integration test with get_recent_history, no inbound on empty transcription)
+
 ---
 
 ## Summary
@@ -472,4 +482,5 @@
 | 8 — Group Relay | 94 (1 item) | P1 | ~3 hours | ✅ DONE (v0.27.0) |
 | 9 — Relay Bug Fixes | 95-97 (3 items) | P0-P2 | ~2 hours | ✅ DONE (v0.27.1) |
 | 10 — Voice Relay | 98 (1 item) | P1 | ~2 hours | ✅ DONE (v0.28.0) |
-| **Total** | **49 items** | | **~58 hours** | |
+| 11 — Relay Context Fix | 99 (1 item) | P1 | ~1 hour | ✅ DONE (v0.28.1) |
+| **Total** | **50 items** | | **~59 hours** | |

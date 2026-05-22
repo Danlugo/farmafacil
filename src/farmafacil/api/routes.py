@@ -25,6 +25,7 @@ from farmafacil.config import ADMIN_PASSWORD, ADMIN_USERNAME
 from farmafacil.bot.handler import handle_incoming_message
 from farmafacil.bot.whatsapp import start_collecting, stop_collecting
 from farmafacil.models.database import ConversationLog, IntentKeyword, SearchLog, User, VoiceMessage
+from farmafacil.services.conversation_log import log_inbound, log_outbound
 from farmafacil.models.schemas import HealthResponse, SearchRequest, SearchResponse
 from farmafacil.services.search import search_drug
 
@@ -133,6 +134,37 @@ class ChatResponse(BaseModel):
     responses: list[ChatResponseItem]
 
 
+async def _log_relay_responses(phone: str, collected: list[dict]) -> None:
+    """Log outbound relay responses for conversation context.
+
+    Best-effort: failures are logged but never propagated to the caller.
+    Each collected item's ``body`` or ``caption`` is stored as an outbound
+    ``text`` entry in ``conversation_log`` so that ``get_recent_history()``
+    can provide AI context for follow-up questions from relay users.
+
+    Voice-ack messages (``🎙️ Te escuché: …``) are skipped because they
+    just echo the transcription that is already logged as inbound — keeping
+    them would add noise to the AI classifier's context window.
+
+    .. note:: Each outbound item is a separate ``INSERT + COMMIT``.  At
+       current traffic this is fine; if response counts grow significantly,
+       consider a bulk-insert helper in ``conversation_log``.
+    """
+    for item in collected:
+        text = item.get("body") or item.get("caption") or ""
+        if not text.strip():
+            continue
+        # Skip voice-ack echo — already captured as inbound transcription
+        if text.startswith("🎙️ Te escuché"):
+            continue
+        try:
+            await log_outbound(phone, text)
+        except Exception:
+            logger.warning(
+                "relay: failed to log outbound for %s", phone, exc_info=True,
+            )
+
+
 @router.post("/api/v1/chat", response_model=ChatResponse)
 @limiter.limit("120/minute")
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
@@ -155,6 +187,17 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     Returns:
         ChatResponse with an ordered list of response items.
     """
+    # Log inbound for conversation context — the AI classifier in
+    # handle_incoming_message calls get_recent_history() which needs
+    # prior messages to understand follow-up questions like "which is
+    # the cheapest?" after a drug search.
+    try:
+        await log_inbound(body.sender_id, body.text)
+    except Exception:
+        logger.warning(
+            "chat: failed to log inbound for %s", body.sender_id, exc_info=True,
+        )
+
     # Enter proxy mode: outbound send_* calls collect into a list
     try:
         start_collecting()
@@ -169,6 +212,9 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         )
     finally:
         collected = stop_collecting()
+
+    # Log outbound for conversation context (best-effort)
+    await _log_relay_responses(body.sender_id, collected)
 
     return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
 
@@ -300,7 +346,15 @@ async def chat_voice(
             responses=[ChatResponseItem(type="text", body="🎙️ No pude entender el audio.")]
         )
 
-    # --- 7. Run handler in proxy mode -------------------------------------
+    # --- 7. Log inbound transcription for conversation context ------------
+    try:
+        await log_inbound(sender_id, transcription)
+    except Exception:
+        logger.warning(
+            "chat_voice: failed to log inbound for %s", sender_id, exc_info=True,
+        )
+
+    # --- 8. Run handler in proxy mode -------------------------------------
     collected: list[dict] = []
     try:
         start_collecting()
@@ -320,6 +374,9 @@ async def chat_voice(
         )
     finally:
         collected = stop_collecting()
+
+    # --- 9. Log outbound for conversation context (best-effort) -----------
+    await _log_relay_responses(sender_id, collected)
 
     return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
 

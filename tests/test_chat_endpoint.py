@@ -9,6 +9,8 @@ Covers:
   are still returned.
 - Rate limiting (30/minute).
 - Proxy-mode cleanup on exception (``finally`` block).
+- Conversation logging: inbound + outbound messages are logged so that
+  ``get_recent_history()`` provides AI context for follow-up questions.
 """
 
 import random
@@ -16,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from farmafacil.api.app import create_app
 from farmafacil.bot.whatsapp import (
@@ -25,7 +27,7 @@ from farmafacil.bot.whatsapp import (
     stop_collecting,
 )
 from farmafacil.db.session import async_session
-from farmafacil.models.database import User
+from farmafacil.models.database import ConversationLog, User
 
 
 def _unique_phone() -> str:
@@ -47,11 +49,16 @@ async def client(app):
 
 @pytest.fixture(autouse=True)
 async def _cleanup_test_users():
-    """Remove test users created during the test."""
+    """Remove test users and conversation logs created during the test."""
     phones: list[str] = []
     yield phones
     if phones:
         async with async_session() as session:
+            await session.execute(
+                delete(ConversationLog).where(
+                    ConversationLog.phone_number.in_(phones)
+                )
+            )
             await session.execute(
                 delete(User).where(User.phone_number.in_(phones))
             )
@@ -531,3 +538,287 @@ class TestProxyModeIntercept:
         assert collected[1]["type"] == "image"
         assert collected[2]["type"] == "text"
         assert collected[2]["body"] == "Third"
+
+
+# ── Conversation logging for relay context ─────────────────────────────
+
+
+class TestChatConversationLogging:
+    """Verify that relay endpoints log messages to conversation_log.
+
+    Without these logs, ``get_recent_history()`` returns empty for relay
+    users and the AI classifier cannot understand follow-up questions
+    like "which is the cheapest?" after a drug search.
+    """
+
+    @pytest.mark.asyncio
+    async def test_text_chat_logs_inbound(self, client, _cleanup_test_users):
+        """POST /api/v1/chat should log the user's text as inbound."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with patch(
+            "farmafacil.api.routes.handle_incoming_message",
+            new_callable=AsyncMock,
+        ):
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "omeprazol"},
+            )
+
+        assert resp.status_code == 200
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(ConversationLog)
+                .where(
+                    ConversationLog.phone_number == phone,
+                    ConversationLog.direction == "inbound",
+                )
+            )
+            logs = result.scalars().all()
+
+        assert len(logs) == 1
+        assert logs[0].message_text == "omeprazol"
+        assert logs[0].message_type == "text"
+
+    @pytest.mark.asyncio
+    async def test_text_chat_logs_outbound(self, client, _cleanup_test_users):
+        """POST /api/v1/chat should log bot text responses as outbound."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with patch(
+            "farmafacil.api.routes.handle_incoming_message",
+            new_callable=AsyncMock,
+        ) as mock_handler:
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({"type": "text", "body": "Buscando omeprazol..."})
+                    bucket.append({"type": "text", "body": "3 resultados encontrados"})
+
+            mock_handler.side_effect = fake_handler
+
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "omeprazol"},
+            )
+
+        assert resp.status_code == 200
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(ConversationLog)
+                .where(
+                    ConversationLog.phone_number == phone,
+                    ConversationLog.direction == "outbound",
+                )
+                .order_by(ConversationLog.id.asc())
+            )
+            logs = result.scalars().all()
+
+        assert len(logs) == 2
+        assert logs[0].message_text == "Buscando omeprazol..."
+        assert logs[1].message_text == "3 resultados encontrados"
+
+    @pytest.mark.asyncio
+    async def test_text_chat_logs_image_caption_as_outbound(
+        self, client, _cleanup_test_users,
+    ):
+        """Image responses with captions are logged for AI context."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with patch(
+            "farmafacil.api.routes.handle_incoming_message",
+            new_callable=AsyncMock,
+        ) as mock_handler:
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({
+                        "type": "image",
+                        "url": "https://example.com/img.jpg",
+                        "caption": "Omeprazol 20mg - Bs. 15.50",
+                    })
+
+            mock_handler.side_effect = fake_handler
+
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "omeprazol"},
+            )
+
+        assert resp.status_code == 200
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(ConversationLog)
+                .where(
+                    ConversationLog.phone_number == phone,
+                    ConversationLog.direction == "outbound",
+                )
+            )
+            logs = result.scalars().all()
+
+        # Image caption should be logged as outbound text
+        assert len(logs) == 1
+        assert "Omeprazol 20mg" in logs[0].message_text
+
+    @pytest.mark.asyncio
+    async def test_text_chat_skips_empty_outbound(
+        self, client, _cleanup_test_users,
+    ):
+        """Image responses without text or caption are NOT logged."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with patch(
+            "farmafacil.api.routes.handle_incoming_message",
+            new_callable=AsyncMock,
+        ) as mock_handler:
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({
+                        "type": "image",
+                        "url": "https://example.com/img.jpg",
+                    })
+
+            mock_handler.side_effect = fake_handler
+
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "test"},
+            )
+
+        assert resp.status_code == 200
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(ConversationLog)
+                .where(
+                    ConversationLog.phone_number == phone,
+                    ConversationLog.direction == "outbound",
+                )
+            )
+            logs = result.scalars().all()
+
+        assert len(logs) == 0
+
+    @pytest.mark.asyncio
+    async def test_inbound_log_failure_does_not_break_response(
+        self, client, _cleanup_test_users,
+    ):
+        """If log_inbound raises, the chat endpoint still returns 200."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with (
+            patch(
+                "farmafacil.api.routes.handle_incoming_message",
+                new_callable=AsyncMock,
+            ) as mock_handler,
+            patch(
+                "farmafacil.api.routes.log_inbound",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("DB down"),
+            ),
+        ):
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({"type": "text", "body": "Works fine"})
+
+            mock_handler.side_effect = fake_handler
+
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "test"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["responses"][0]["body"] == "Works fine"
+
+    @pytest.mark.asyncio
+    async def test_outbound_log_failure_does_not_break_response(
+        self, client, _cleanup_test_users,
+    ):
+        """If log_outbound raises, the chat endpoint still returns 200."""
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with (
+            patch(
+                "farmafacil.api.routes.handle_incoming_message",
+                new_callable=AsyncMock,
+            ) as mock_handler,
+            patch(
+                "farmafacil.api.routes.log_outbound",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("DB down"),
+            ),
+        ):
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({"type": "text", "body": "Still works"})
+
+            mock_handler.side_effect = fake_handler
+
+            resp = await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "test"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["responses"][0]["body"] == "Still works"
+
+    @pytest.mark.asyncio
+    async def test_get_recent_history_returns_relay_messages(
+        self, client, _cleanup_test_users,
+    ):
+        """After a relay chat, get_recent_history returns the conversation."""
+        from farmafacil.services.conversation_log import get_recent_history
+
+        phone = _unique_phone()
+        _cleanup_test_users.append(phone)
+
+        with patch(
+            "farmafacil.api.routes.handle_incoming_message",
+            new_callable=AsyncMock,
+        ) as mock_handler:
+
+            async def fake_handler(sender, message_text, **kwargs):
+                bucket = _response_collector.get()
+                if bucket is not None:
+                    bucket.append({"type": "text", "body": "Hola! Soy FarmaFacil"})
+
+            mock_handler.side_effect = fake_handler
+
+            await client.post(
+                "/api/v1/chat",
+                json={"sender_id": phone, "text": "hola"},
+            )
+
+        # Now get_recent_history should return exactly the inbound + outbound
+        history = await get_recent_history(phone)
+        assert len(history) == 2
+
+        roles = [m["role"] for m in history]
+        assert "user" in roles
+        assert "assistant" in roles
+
+        # Inbound message should be present
+        user_msgs = [m for m in history if m["role"] == "user"]
+        assert any("hola" in m["content"] for m in user_msgs)
+
+        # Outbound response should be present
+        bot_msgs = [m for m in history if m["role"] == "assistant"]
+        assert any("FarmaFacil" in m["content"] for m in bot_msgs)
