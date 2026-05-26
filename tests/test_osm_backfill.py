@@ -86,39 +86,38 @@ class TestParseOsmElement:
         assert row["external_id"] == "osm-relation-7"
         assert row["pharmacy_chain"] == "Farmacias SAAS"
 
-    def test_contact_namespace_phone_falls_back(self):
-        element = {
-            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
-            "tags": {"name": "X", "contact:phone": "+58-212-111-2222"},
-        }
+    @pytest.mark.parametrize(
+        "tags,expected_phone,max_len",
+        [
+            # contact:phone namespace is accepted when canonical phone is absent
+            (
+                {"name": "X", "contact:phone": "+58-212-111-2222"},
+                "+58-212-111-2222",
+                30,
+            ),
+            # OSM phone tags often pack multiple numbers — phone column is
+            # VARCHAR(30), so keep the first only. Regression for the v0.18.0
+            # production crash on 2026-04-28.
+            (
+                {"name": "X", "phone": "+58 212-8724131; +58 414-1234567; +58 416-9876543"},
+                "+58 212-8724131",
+                30,
+            ),
+            # A single number that exceeds 30 chars must be truncated
+            (
+                {"name": "X", "phone": "+58 212-555-6789-extension-12345-too-long"},
+                None,  # exact value not asserted — only length
+                30,
+            ),
+        ],
+    )
+    def test_phone_field_normalization(self, tags, expected_phone, max_len):
+        element = {"type": "node", "id": 1, "lat": 10.5, "lon": -66.9, "tags": tags}
         row = parse_osm_element(element)
         assert row is not None
-        assert row["phone"] == "+58-212-111-2222"
-
-    def test_multi_number_phone_keeps_first_only(self):
-        # OSM phone tags often pack multiple numbers — pharmacy_locations
-        # phone column is VARCHAR(30), so keep the first only. Regression
-        # for the v0.18.0 production crash on 2026-04-28.
-        element = {
-            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
-            "tags": {
-                "name": "X",
-                "phone": "+58 212-8724131; +58 414-1234567; +58 416-9876543",
-            },
-        }
-        row = parse_osm_element(element)
-        assert row is not None
-        assert row["phone"] == "+58 212-8724131"
-        assert len(row["phone"]) <= 30
-
-    def test_phone_truncated_to_30_chars(self):
-        element = {
-            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
-            "tags": {"name": "X", "phone": "+58 212-555-6789-extension-12345-too-long"},
-        }
-        row = parse_osm_element(element)
-        assert row is not None
-        assert len(row["phone"]) <= 30
+        assert len(row["phone"]) <= max_len
+        if expected_phone is not None:
+            assert row["phone"] == expected_phone
 
     def test_long_name_truncated_to_100_chars(self):
         element = {
@@ -154,27 +153,28 @@ class TestParseOsmElement:
         assert row is not None
         assert row["phone"] == "+58-212-CANONICAL"
 
-    def test_rejects_missing_name(self):
-        element = {
-            "type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
-            "tags": {"amenity": "pharmacy"},
-        }
-        assert parse_osm_element(element) is None
-
-    def test_rejects_missing_coordinates(self):
-        element = {
-            "type": "node", "id": 1,
-            "tags": {"name": "Farmacia X"},
-        }
-        assert parse_osm_element(element) is None
-
-    def test_rejects_outside_venezuela_bbox(self):
-        # Bogotá, Colombia — should not be ingested as a Venezuelan pharmacy
-        element = {
-            "type": "node", "id": 1, "lat": 4.65, "lon": -74.05,
-            "tags": {"name": "Drogueria Cafam"},
-        }
-        assert parse_osm_element(element) is None
+    @pytest.mark.parametrize(
+        "element,description",
+        [
+            (
+                {"type": "node", "id": 1, "lat": 10.5, "lon": -66.9,
+                 "tags": {"amenity": "pharmacy"}},
+                "missing name",
+            ),
+            (
+                {"type": "node", "id": 1, "tags": {"name": "Farmacia X"}},
+                "missing coordinates",
+            ),
+            (
+                # Bogotá, Colombia — should not be ingested as a Venezuelan pharmacy
+                {"type": "node", "id": 1, "lat": 4.65, "lon": -74.05,
+                 "tags": {"name": "Drogueria Cafam"}},
+                "outside Venezuela bbox",
+            ),
+        ],
+    )
+    def test_rejects_invalid_element(self, element, description):
+        assert parse_osm_element(element) is None, f"Expected None for: {description}"
 
 
 # ── detect_chain ──────────────────────────────────────────────────────
@@ -230,13 +230,17 @@ class TestDetectChainWordBoundary:
        substrings inside longer words are rejected.
     """
 
-    def test_name_substring_inside_word_is_independiente(self):
-        # "Farmatodita" embeds "farmatodo" but is not the chain.
-        assert detect_chain("Farmacia La Farmatodita") == INDEPENDIENTE_CHAIN
-
-    def test_locatel_substring_inside_word_is_independiente(self):
-        # "Locatelyx" embeds "locatel" but is not the chain.
-        assert detect_chain("Farmacia Locatelyx") == INDEPENDIENTE_CHAIN
+    @pytest.mark.parametrize(
+        "name,description",
+        [
+            # "Farmatodita" embeds "farmatodo" but is not the chain
+            ("Farmacia La Farmatodita", "farmatodo substring inside longer word"),
+            # "Locatelyx" embeds "locatel" but is not the chain
+            ("Farmacia Locatelyx", "locatel substring inside longer word"),
+        ],
+    )
+    def test_name_substring_inside_word_is_independiente(self, name, description):
+        assert detect_chain(name) == INDEPENDIENTE_CHAIN, f"Expected independiente for: {description}"
 
     def test_brand_wins_over_generic_name(self):
         # Brand is intentional — even a generic name should classify.
@@ -427,18 +431,20 @@ class TestFetchOsmPharmacies:
 class TestSanitizeOsmText:
     """Strip control chars from OSM-sourced strings before WhatsApp display."""
 
-    def test_strips_zero_width_space(self):
+    @pytest.mark.parametrize(
+        "input_text,expected",
+        [
+            # U+200B ZERO WIDTH SPACE
+            ("Farmacia​X", "FarmaciaX"),
+            # U+202E RIGHT-TO-LEFT OVERRIDE — known display-spoofing char
+            ("safe‮malicious", "safemalicious"),
+            # ASCII control characters
+            ("hello\x00world\x1f", "helloworld"),
+        ],
+    )
+    def test_strips_unwanted_chars(self, input_text, expected):
         from farmafacil.bot.formatter import _sanitize_osm_text
-        assert _sanitize_osm_text("Farmacia​X") == "FarmaciaX"
-
-    def test_strips_rtl_override(self):
-        from farmafacil.bot.formatter import _sanitize_osm_text
-        # U+202E (RIGHT-TO-LEFT OVERRIDE) is a known display-spoofing char
-        assert _sanitize_osm_text("safe‮malicious") == "safemalicious"
-
-    def test_strips_control_chars(self):
-        from farmafacil.bot.formatter import _sanitize_osm_text
-        assert _sanitize_osm_text("hello\x00world\x1f") == "helloworld"
+        assert _sanitize_osm_text(input_text) == expected
 
     def test_passes_legitimate_unicode(self):
         from farmafacil.bot.formatter import _sanitize_osm_text

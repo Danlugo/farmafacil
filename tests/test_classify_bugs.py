@@ -36,17 +36,16 @@ from farmafacil.services.ai_responder import (
 class TestBug18ProductBrandCombination:
     """Verify CLASSIFY_INSTRUCTIONS and parser handle product + brand queries."""
 
-    def test_instructions_contain_brand_lab_rule(self):
-        """CLASSIFY_INSTRUCTIONS includes the product + brand/lab rule."""
-        assert "PRODUCTO + MARCA/LABORATORIO" in CLASSIFY_INSTRUCTIONS
-
-    def test_instructions_contain_melatonina_example(self):
-        """The melatonina arco iris example from the actual bug is present."""
-        assert "melatonina arco iris" in CLASSIFY_INSTRUCTIONS.lower()
-
-    def test_instructions_warn_never_brand_alone(self):
-        """Rule explicitly warns not to put only the brand in DRUG."""
-        assert "NUNCA pongas solo la marca" in CLASSIFY_INSTRUCTIONS
+    @pytest.mark.parametrize("keyword,case_sensitive", [
+        ("PRODUCTO + MARCA/LABORATORIO", True),
+        ("NUNCA pongas solo la marca", True),
+        ("melatonina arco iris", False),
+    ])
+    def test_instructions_contain_brand_rule_keywords(self, keyword, case_sensitive):
+        """CLASSIFY_INSTRUCTIONS contains the product + brand/lab rule keywords."""
+        haystack = CLASSIFY_INSTRUCTIONS if case_sensitive else CLASSIFY_INSTRUCTIONS.lower()
+        needle = keyword if case_sensitive else keyword.lower()
+        assert needle in haystack
 
     def test_parse_combined_product_brand(self):
         """Parser correctly extracts combined product + brand DRUG field."""
@@ -99,25 +98,16 @@ class TestBug17MedicalExamSupplies:
         """CLASSIFY_INSTRUCTIONS includes the medical exam supply rule."""
         assert "EXÁMENES MÉDICOS Y SUMINISTROS" in CLASSIFY_INSTRUCTIONS
 
-    def test_instructions_contain_heces_mapping(self):
-        """The heces → recolector mapping from the actual bug is present."""
-        assert "recolector de heces" in CLASSIFY_INSTRUCTIONS.lower()
-
-    def test_instructions_contain_orina_mapping(self):
-        """Orina exam maps to recolector de orina."""
-        assert "recolector de orina" in CLASSIFY_INSTRUCTIONS.lower()
-
-    def test_instructions_contain_embarazo_mapping(self):
-        """Pregnancy test maps to prueba de embarazo."""
-        assert "prueba de embarazo" in CLASSIFY_INSTRUCTIONS.lower()
-
-    def test_instructions_contain_glucosa_mapping(self):
-        """Blood sugar test maps to glucometro."""
-        assert "glucometro" in CLASSIFY_INSTRUCTIONS.lower()
-
-    def test_instructions_contain_presion_mapping(self):
-        """Blood pressure test maps to tensiometro."""
-        assert "tensiometro" in CLASSIFY_INSTRUCTIONS.lower()
+    @pytest.mark.parametrize("mapping_keyword", [
+        "recolector de heces",    # heces → recolector (the original bug)
+        "recolector de orina",    # orina exam → recolector
+        "prueba de embarazo",     # pregnancy test → prueba de embarazo
+        "glucometro",             # blood sugar test → glucometro
+        "tensiometro",            # blood pressure test → tensiometro
+    ])
+    def test_instructions_contain_exam_supply_mappings(self, mapping_keyword):
+        """CLASSIFY_INSTRUCTIONS contains each medical-exam-to-supply mapping."""
+        assert mapping_keyword in CLASSIFY_INSTRUCTIONS.lower()
 
     def test_parse_exam_heces_response(self):
         """Parser correctly handles the exam-de-heces AI response."""
@@ -214,15 +204,15 @@ class TestVagueSymptomClarification:
         """CLASSIFY_INSTRUCTIONS includes the vague symptom clarification rule."""
         assert "SÍNTOMAS VAGOS SIN ESPECIFICAR TIPO" in CLASSIFY_INSTRUCTIONS
 
-    def test_instructions_contain_dolor_example(self):
-        """The dolor/dolores → clarify example is present."""
-        lower = CLASSIFY_INSTRUCTIONS.lower()
-        assert "¿qué tipo de dolor?" in lower
-
-    def test_instructions_contain_malestar_example(self):
-        """The malestar → clarify example is present."""
-        lower = CLASSIFY_INSTRUCTIONS.lower()
-        assert "¿qué síntomas tienes?" in lower
+    @pytest.mark.parametrize("clarify_phrase", [
+        "¿qué tipo de dolor?",        # dolor/dolores → clarify
+        "¿qué síntomas tienes?",      # malestar → clarify
+        "¿qué tipo de alergia?",      # alergia → clarify
+        "¿dónde tienes la inflamación?",  # inflamación → clarify
+    ])
+    def test_instructions_contain_vague_symptom_clarify_examples(self, clarify_phrase):
+        """CLASSIFY_INSTRUCTIONS contains each vague-symptom clarification example."""
+        assert clarify_phrase in CLASSIFY_INSTRUCTIONS.lower()
 
     def test_instructions_fiebre_is_specific_not_vague(self):
         """Fiebre is specific enough for direct OTC listing, not clarify."""
@@ -233,16 +223,6 @@ class TestVagueSymptomClarification:
             CLASSIFY_INSTRUCTIONS.index("SÍNTOMAS VAGOS")
         ]
         assert "fiebre" in specific_section.lower()
-
-    def test_instructions_contain_alergia_example(self):
-        """The alergia → clarify example is present."""
-        lower = CLASSIFY_INSTRUCTIONS.lower()
-        assert "¿qué tipo de alergia?" in lower
-
-    def test_instructions_contain_inflamacion_example(self):
-        """The inflamación → clarify example is present."""
-        lower = CLASSIFY_INSTRUCTIONS.lower()
-        assert "¿dónde tienes la inflamación?" in lower
 
     def test_instructions_warn_specific_symptoms_no_clarify(self):
         """Rule explicitly says NOT to clarify specific symptoms."""
@@ -427,26 +407,14 @@ class TestVagueSymptomVsSpecificRegression:
 class TestClassifyInstructionsRegression:
     """Ensure existing rules weren't broken by the new additions."""
 
-    def test_symptom_rule_still_present(self):
-        """Symptom-only → question rule is intact."""
-        assert "SÍNTOMAS ESPECÍFICOS sin producto" in CLASSIFY_INSTRUCTIONS
-
-    def test_clarify_vague_categories_still_present(self):
-        """Vague category → clarify_needed rule is intact."""
-        assert "CATEGORÍAS VAGAS" in CLASSIFY_INSTRUCTIONS
-
-    def test_emergency_rule_still_present(self):
-        """Emergency rule is intact."""
-        assert "EMERGENCIA" in CLASSIFY_INSTRUCTIONS
-
-    def test_security_exception_still_present(self):
-        """Drug interaction warning rule is intact."""
-        assert "EXCEPCIÓN DE SEGURIDAD" in CLASSIFY_INSTRUCTIONS
-
-    def test_nearest_store_rule_still_present(self):
-        """Nearest store rule is intact."""
-        assert "nearest_store" in CLASSIFY_INSTRUCTIONS
-
-    def test_view_similar_rule_still_present(self):
-        """View similar rule is intact."""
-        assert "view_similar" in CLASSIFY_INSTRUCTIONS
+    @pytest.mark.parametrize("keyword", [
+        "SÍNTOMAS ESPECÍFICOS sin producto",  # symptom-only → question rule
+        "CATEGORÍAS VAGAS",                   # vague category → clarify_needed rule
+        "EMERGENCIA",                         # emergency rule
+        "EXCEPCIÓN DE SEGURIDAD",             # drug interaction warning rule
+        "nearest_store",                      # nearest store rule
+        "view_similar",                       # view similar rule
+    ])
+    def test_existing_rule_still_present(self, keyword):
+        """Pre-existing CLASSIFY_INSTRUCTIONS rules are intact after new additions."""
+        assert keyword in CLASSIFY_INSTRUCTIONS

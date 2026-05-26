@@ -60,26 +60,30 @@ def _make_drug_result(**overrides) -> DrugResult:
 
 
 class TestNormalize:
-    def test_lowercase(self):
-        assert normalize("ACETAMINOFEN") == "acetaminofen"
-
-    def test_strip_accents(self):
-        assert normalize("Acetaminofén") == "acetaminofen"
-
-    def test_strip_punctuation(self):
-        assert normalize("PASTILLAS LIMP/BAÑ 4 PACK") == "pastillas limp ban 4 pack"
-
-    def test_preserve_plus(self):
-        assert normalize("NAD+VID") == "nad+vid"
-
-    def test_collapse_whitespace(self):
-        assert normalize("  lots   of   spaces  ") == "lots of spaces"
-
-    def test_empty(self):
-        assert normalize("") == ""
-
-    def test_mixed_accents_and_punctuation(self):
-        assert normalize("Ibuprofeno — 400mg/cáps") == "ibuprofeno 400mg caps"
+    @pytest.mark.parametrize(
+        "input_text, expected",
+        [
+            pytest.param("ACETAMINOFEN", "acetaminofen", id="lowercase"),
+            pytest.param("Acetaminofén", "acetaminofen", id="strip_accents"),
+            pytest.param(
+                "PASTILLAS LIMP/BAÑ 4 PACK",
+                "pastillas limp ban 4 pack",
+                id="strip_punctuation",
+            ),
+            pytest.param("NAD+VID", "nad+vid", id="preserve_plus"),
+            pytest.param(
+                "  lots   of   spaces  ", "lots of spaces", id="collapse_whitespace"
+            ),
+            pytest.param("", "", id="empty"),
+            pytest.param(
+                "Ibuprofeno — 400mg/cáps",
+                "ibuprofeno 400mg caps",
+                id="mixed_accents_and_punctuation",
+            ),
+        ],
+    )
+    def test_normalize(self, input_text: str, expected: str):
+        assert normalize(input_text) == expected
 
 
 # ── Unit Tests: classify_pharmaceutical ─────────────────────────────────
@@ -385,40 +389,35 @@ class TestQ9FormWordFloorExclusion:
     like it ignores digit-only tokens (Q8).
     """
 
-    def test_crema_queloides_rejects_wet_wipes(self):
-        """The exact production bug: 'crema queloides' must not match wet wipes."""
-        score = compute_relevance(
-            "crema queloides",
-            "Toallas Humedas Mimlot Crema 25 Und",
-            drug_class="CAMBIO PANAL",
-        )
-        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
-
-    def test_crema_queloides_rejects_toothpaste(self):
-        """'crema queloides' must not match toothpaste."""
-        score = compute_relevance(
-            "crema queloides",
-            "Crema Dental Colgate Triple Accion 75Ml",
-            drug_class="CD ADULTO",
-        )
-        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
-
-    def test_crema_queloides_rejects_deodorant(self):
-        """'crema queloides' must not match deodorant cream."""
-        score = compute_relevance(
-            "crema queloides",
-            "Desodorante Farmatodo Crema Soft Neutro Sentation 75Gr",
-            drug_class="DESODORANTES LOCION/CREMA",
-        )
-        assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
-
-    def test_crema_queloides_rejects_eye_cream(self):
-        """'crema queloides' must not match cosmetic eye cream."""
-        score = compute_relevance(
-            "crema queloides",
-            "MEIKAN CREMA CONTORNO DE OJOS 30GR",
-            drug_class="Cuidado Personal",
-        )
+    @pytest.mark.parametrize(
+        "product_name, drug_class",
+        [
+            pytest.param(
+                "Toallas Humedas Mimlot Crema 25 Und",
+                "CAMBIO PANAL",
+                id="rejects_wet_wipes",
+            ),
+            pytest.param(
+                "Crema Dental Colgate Triple Accion 75Ml",
+                "CD ADULTO",
+                id="rejects_toothpaste",
+            ),
+            pytest.param(
+                "Desodorante Farmatodo Crema Soft Neutro Sentation 75Gr",
+                "DESODORANTES LOCION/CREMA",
+                id="rejects_deodorant",
+            ),
+            pytest.param(
+                "MEIKAN CREMA CONTORNO DE OJOS 30GR",
+                "Cuidado Personal",
+                id="rejects_eye_cream",
+            ),
+        ],
+    )
+    def test_crema_queloides_rejects_non_pharma(self, product_name: str, drug_class: str):
+        """The exact production bug: 'crema queloides' must not match non-pharma products
+        that only share the form word 'crema'."""
+        score = compute_relevance("crema queloides", product_name, drug_class=drug_class)
         assert score == 0.0, f"Expected 0.0 (form-word floor), got {score}"
 
     def test_crema_queloides_accepts_real_keloid_cream(self):
@@ -502,38 +501,24 @@ class TestQ9FormWordFloorExclusion:
 class TestQ9NewNonPharmaCategories:
     """New non-pharma categories added in v0.29.0 to catch false positives."""
 
-    def test_cambio_panal_is_non_pharma(self):
-        assert classify_pharmaceutical("CAMBIO PANAL") is False
-
-    def test_cd_adulto_is_non_pharma(self):
-        assert classify_pharmaceutical("CD ADULTO") is False
-
-    def test_desodorantes_barra_is_non_pharma(self):
-        assert classify_pharmaceutical("DESODORANTES BARRA") is False
-
-    def test_desodorantes_locion_crema_is_non_pharma(self):
-        assert classify_pharmaceutical("DESODORANTES LOCION/CREMA") is False
-
-    def test_cuidado_personal_is_non_pharma(self):
-        assert classify_pharmaceutical("Cuidado Personal") is False
-
-    def test_pescados_is_non_pharma(self):
-        assert classify_pharmaceutical("PESCADOS") is False
-
-    def test_quesillos_is_non_pharma(self):
-        assert classify_pharmaceutical("QUESILLOS") is False
-
-    def test_accesorios_bebe_is_non_pharma(self):
-        assert classify_pharmaceutical("ACCESORIOS BEBE") is False
-
-    def test_jabones_barra_is_non_pharma(self):
-        assert classify_pharmaceutical("JABONES BARRA") is False
-
-    def test_en_frio_is_non_pharma(self):
-        assert classify_pharmaceutical("EN FRIO") is False
-
-    def test_cuidado_especial_is_non_pharma(self):
-        assert classify_pharmaceutical("CUIDADO ESPECIAL") is False
+    @pytest.mark.parametrize(
+        "category",
+        [
+            pytest.param("CAMBIO PANAL", id="cambio_panal"),
+            pytest.param("CD ADULTO", id="cd_adulto"),
+            pytest.param("DESODORANTES BARRA", id="desodorantes_barra"),
+            pytest.param("DESODORANTES LOCION/CREMA", id="desodorantes_locion_crema"),
+            pytest.param("Cuidado Personal", id="cuidado_personal"),
+            pytest.param("PESCADOS", id="pescados"),
+            pytest.param("QUESILLOS", id="quesillos"),
+            pytest.param("ACCESORIOS BEBE", id="accesorios_bebe"),
+            pytest.param("JABONES BARRA", id="jabones_barra"),
+            pytest.param("EN FRIO", id="en_frio"),
+            pytest.param("CUIDADO ESPECIAL", id="cuidado_especial"),
+        ],
+    )
+    def test_new_category_is_non_pharma(self, category: str):
+        assert classify_pharmaceutical(category) is False
 
     def test_pharma_categories_still_pass(self):
         """Ensure legitimate pharma categories are not accidentally blocked."""

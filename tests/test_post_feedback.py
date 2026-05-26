@@ -830,21 +830,19 @@ class TestAdminDropdownStates:
 class TestSettingsDefaults:
     """Verify post-feedback settings exist in DEFAULTS with proper values."""
 
-    def test_suggestion_setting_in_defaults(self):
+    @pytest.mark.parametrize("key,keyword", [
+        ("post_feedback_suggestion", "suggestion"),
+        ("post_feedback_bug_report", "bug"),
+    ])
+    def test_setting_in_defaults(self, key, keyword):
         from farmafacil.services.settings import DEFAULTS
 
-        assert "post_feedback_suggestion" in DEFAULTS
-        value, desc = DEFAULTS["post_feedback_suggestion"]
+        assert key in DEFAULTS
+        value, desc = DEFAULTS[key]
         assert value == "false"  # v0.22.5: default OFF, per-user override available
-        assert "suggestion" in desc.lower() or "sugerencia" in desc.lower()
-
-    def test_bug_report_setting_in_defaults(self):
-        from farmafacil.services.settings import DEFAULTS
-
-        assert "post_feedback_bug_report" in DEFAULTS
-        value, desc = DEFAULTS["post_feedback_bug_report"]
-        assert value == "false"  # v0.22.5: default OFF, per-user override available
-        assert "bug" in desc.lower() or "report" in desc.lower()
+        assert keyword in desc.lower() or (
+            "sugerencia" in desc.lower() if keyword == "suggestion" else "report" in desc.lower()
+        )
 
     def test_settings_are_independent(self):
         """The two settings are distinct keys, not a shared toggle."""
@@ -860,51 +858,22 @@ class TestSettingsDefaults:
 class TestResolvePostFeedback:
     """Unit tests for resolve_post_feedback in settings.py."""
 
-    def test_user_true_overrides_global_false(self):
+    @pytest.mark.parametrize("user_val,global_val,expected", [
+        ("true", "false", True),           # user true overrides global false
+        ("false", "true", False),          # user false overrides global true
+        (None, "true", True),              # user none falls through to global true
+        (None, "false", False),            # user none falls through to global false
+        ("", "true", True),               # empty string treated as none
+        ("   ", "false", False),           # whitespace treated as none
+        (None, "garbage", False),          # invalid global defaults to false
+        ("TRUE", "false", True),           # case insensitive user (upper)
+        ("True", "false", True),           # case insensitive user (title)
+        (None, "TRUE", True),              # case insensitive global
+    ])
+    def test_resolve_post_feedback(self, user_val, global_val, expected):
         from farmafacil.services.settings import resolve_post_feedback
 
-        assert resolve_post_feedback("true", "false") is True
-
-    def test_user_false_overrides_global_true(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback("false", "true") is False
-
-    def test_user_none_falls_through_to_global_true(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback(None, "true") is True
-
-    def test_user_none_falls_through_to_global_false(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback(None, "false") is False
-
-    def test_empty_string_treated_as_none(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback("", "true") is True
-
-    def test_whitespace_treated_as_none(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback("   ", "false") is False
-
-    def test_invalid_global_defaults_to_false(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback(None, "garbage") is False
-
-    def test_case_insensitive_user(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback("TRUE", "false") is True
-        assert resolve_post_feedback("True", "false") is True
-
-    def test_case_insensitive_global(self):
-        from farmafacil.services.settings import resolve_post_feedback
-
-        assert resolve_post_feedback(None, "TRUE") is True
+        assert resolve_post_feedback(user_val, global_val) is expected
 
 
 class TestPerUserSuggestionOverride:
@@ -1048,13 +1017,13 @@ class TestPerUserBugReportOverride:
 class TestAdminPostFeedbackDropdowns:
     """Admin form includes per-user post-feedback dropdowns."""
 
-    def test_post_feedback_suggestion_in_form_overrides(self):
+    @pytest.mark.parametrize("field", [
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+    ])
+    def test_field_in_form_overrides(self, field):
         from farmafacil.api.admin import UserAdmin
-        assert UserAdmin.form_overrides["post_feedback_suggestion"] is SelectField
-
-    def test_post_feedback_bug_report_in_form_overrides(self):
-        from farmafacil.api.admin import UserAdmin
-        assert UserAdmin.form_overrides["post_feedback_bug_report"] is SelectField
+        assert UserAdmin.form_overrides[field] is SelectField
 
     def test_post_feedback_suggestion_choices(self):
         from farmafacil.api.admin import USER_POST_FEEDBACK_CHOICES
@@ -1079,25 +1048,34 @@ class TestAdminPostFeedbackDropdowns:
             assert coerce("true") == "true"
             assert coerce("false") == "false"
 
-    def test_post_feedback_in_column_list(self):
+    @pytest.mark.parametrize("field", [
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+    ])
+    def test_field_in_column_list(self, field):
         from farmafacil.api.admin import UserAdmin
         col_names = {
             (col.key if hasattr(col, "key") else str(col))
             for col in UserAdmin.column_list
         }
-        assert "post_feedback_suggestion" in col_names
-        assert "post_feedback_bug_report" in col_names
+        assert field in col_names
 
-    def test_post_feedback_in_form_columns(self):
+    @pytest.mark.parametrize("field", [
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+    ])
+    def test_field_in_form_columns(self, field):
         from farmafacil.api.admin import UserAdmin
         col_names = {
             (col.key if hasattr(col, "key") else str(col))
             for col in UserAdmin.form_columns
         }
-        assert "post_feedback_suggestion" in col_names
-        assert "post_feedback_bug_report" in col_names
+        assert field in col_names
 
-    def test_post_feedback_in_column_labels(self):
+    @pytest.mark.parametrize("field", [
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+    ])
+    def test_field_in_column_labels(self, field):
         from farmafacil.api.admin import UserAdmin
-        assert "post_feedback_suggestion" in UserAdmin.column_labels
-        assert "post_feedback_bug_report" in UserAdmin.column_labels
+        assert field in UserAdmin.column_labels

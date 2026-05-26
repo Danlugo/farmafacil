@@ -105,6 +105,18 @@ Auto-update client memory (non-blocking)
 All roles, rules, skills, and user memories are editable via `/admin`.
 ```
 
+### Admin UI Convention (v0.34.0)
+
+**Rule: Every field with a known set of valid values MUST use a SelectField dropdown — never a free-text input.**
+
+Pattern for ModelView classes in `api/admin.py`:
+1. Define choices as `list[tuple[str, str]]` constant (e.g., `PHARMACY_CHAIN_CHOICES`)
+2. Add `form_overrides = {"field": SelectField}` on the ModelView
+3. Add `form_args = {"field": {"choices": CHOICES, "coerce": str}}` (use `_coerce_optional_str` for nullable fields)
+4. For key-value tables (like `AppSetting`) where valid values depend on the row, use `on_model_change` server-side validation with a `SETTING_VALUE_CHOICES` dict
+
+Current dropdown fields: `IntentKeyword.action`, `PharmacyLocation.pharmacy_chain`, `PharmacyLocation.city_code`, `Product.pharmacy_chain`, `ScheduledTask.task_key`, `User.city_code`, `User.display_preference`, `User.response_mode`, `User.chat_debug`, `User.onboarding_step`, `User.post_feedback_*`.
+
 ## External Services
 
 | Service | Purpose | Auth |

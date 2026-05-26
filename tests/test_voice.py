@@ -202,15 +202,13 @@ class TestTranslateText:
     """Tests for the translation stub."""
 
     @pytest.mark.asyncio
-    async def test_stub_returns_none(self):
-        """translate_text is a shell — always returns None."""
-        result = await translate_text("Hola", "es", "en")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_stub_accepts_any_language_pair(self):
-        """Stub handles any language combination gracefully."""
-        result = await translate_text("Hello", "en", "pt")
+    @pytest.mark.parametrize("text,src,dst", [
+        ("Hola", "es", "en"),   # stub always returns None
+        ("Hello", "en", "pt"),  # any language pair returns None
+    ])
+    async def test_stub_returns_none(self, text, src, dst):
+        """translate_text is a shell — always returns None regardless of language pair."""
+        result = await translate_text(text, src, dst)
         assert result is None
 
 
@@ -220,19 +218,12 @@ class TestTranslateText:
 class TestWebhookAudioDispatch:
     """Tests for webhook.py audio message type handling."""
 
-    def test_webhook_imports_handle_voice_message(self):
-        """webhook.py imports handle_voice_message from handler."""
-        from farmafacil.bot.webhook import webhook_router
+    def test_webhook_audio_handling(self):
+        """webhook.py imports handle_voice_message and has the audio dispatch branch."""
         import importlib
         mod = importlib.import_module("farmafacil.bot.webhook")
         source = Path(mod.__file__).read_text()
         assert "handle_voice_message" in source
-
-    def test_webhook_has_audio_branch(self):
-        """webhook.py has elif msg_type == 'audio' dispatch."""
-        import importlib
-        mod = importlib.import_module("farmafacil.bot.webhook")
-        source = Path(mod.__file__).read_text()
         assert 'msg_type == "audio"' in source
 
 
@@ -409,17 +400,15 @@ class TestVoiceMessageModel:
             col = VoiceMessage.__table__.columns[col_name]
             assert col.nullable is True, f"{col_name} should be nullable"
 
-    def test_conversation_log_fk(self):
-        """conversation_log_id has a foreign key to conversation_logs."""
-        col = VoiceMessage.__table__.columns["conversation_log_id"]
+    @pytest.mark.parametrize("col_name,expected_target", [
+        ("conversation_log_id", "conversation_logs.id"),
+        ("user_id", "users.id"),
+    ])
+    def test_foreign_keys(self, col_name, expected_target):
+        """FK columns point to the correct parent tables."""
+        col = VoiceMessage.__table__.columns[col_name]
         fk_targets = [fk.target_fullname for fk in col.foreign_keys]
-        assert "conversation_logs.id" in fk_targets
-
-    def test_user_fk(self):
-        """user_id has a foreign key to users."""
-        col = VoiceMessage.__table__.columns["user_id"]
-        fk_targets = [fk.target_fullname for fk in col.foreign_keys]
-        assert "users.id" in fk_targets
+        assert expected_target in fk_targets
 
 
 # ── Admin chat tools ─────────────────────────────────────────────────
@@ -428,23 +417,15 @@ class TestVoiceMessageModel:
 class TestAdminChatVoiceTools:
     """Tests for admin_chat.py voice message tools."""
 
-    def test_tools_registered(self):
-        """list_voice_messages and get_voice_message are in TOOLS dict."""
+    def test_tools_registered_and_described(self):
+        """list_voice_messages and get_voice_message are registered with valid descriptions."""
         from farmafacil.services.admin_chat import TOOLS
         assert "list_voice_messages" in TOOLS
         assert "get_voice_message" in TOOLS
-
-    def test_list_tool_description(self):
-        """list_voice_messages has a Spanish description."""
-        from farmafacil.services.admin_chat import TOOLS
-        desc, _ = TOOLS["list_voice_messages"]
-        assert "voz" in desc.lower() or "voice" in desc.lower()
-
-    def test_get_tool_description(self):
-        """get_voice_message has a description mentioning id."""
-        from farmafacil.services.admin_chat import TOOLS
-        desc, _ = TOOLS["get_voice_message"]
-        assert "id" in desc.lower()
+        list_desc, _ = TOOLS["list_voice_messages"]
+        assert "voz" in list_desc.lower() or "voice" in list_desc.lower()
+        get_desc, _ = TOOLS["get_voice_message"]
+        assert "id" in get_desc.lower()
 
     @pytest.mark.asyncio
     async def test_list_empty_returns_sin_mensajes(self):
@@ -579,11 +560,13 @@ class TestAudioPlaybackEndpoint:
 class TestVoiceMessageAdmin:
     """Tests for SQLAdmin VoiceMessage view."""
 
-    def test_admin_view_exists(self):
-        """VoiceMessageAdmin is in the ADMIN_VIEWS list."""
+    def test_admin_registration_and_attributes(self):
+        """VoiceMessageAdmin is registered and has correct model, icon, and read-only flags."""
         from farmafacil.api.admin import ADMIN_VIEWS, VoiceMessageAdmin
         admin_classes = [v.__name__ if isinstance(v, type) else type(v).__name__ for v in ADMIN_VIEWS]
         assert "VoiceMessageAdmin" in admin_classes
+        assert VoiceMessageAdmin.model is VoiceMessage
+        assert "microphone" in VoiceMessageAdmin.icon
 
     def test_admin_is_read_only(self):
         """VoiceMessageAdmin cannot create, edit, or delete."""
@@ -591,16 +574,6 @@ class TestVoiceMessageAdmin:
         assert VoiceMessageAdmin.can_create is False
         assert VoiceMessageAdmin.can_delete is False
         assert VoiceMessageAdmin.can_edit is False
-
-    def test_admin_model_is_voice_message(self):
-        """VoiceMessageAdmin targets the VoiceMessage model."""
-        from farmafacil.api.admin import VoiceMessageAdmin
-        assert VoiceMessageAdmin.model is VoiceMessage
-
-    def test_admin_icon_is_microphone(self):
-        """VoiceMessageAdmin uses microphone icon."""
-        from farmafacil.api.admin import VoiceMessageAdmin
-        assert "microphone" in VoiceMessageAdmin.icon
 
     def test_admin_audio_path_formatter_escapes_html(self):
         """audio_path formatter uses markupsafe.escape to prevent XSS."""
@@ -620,15 +593,9 @@ class TestVoiceMessageAdmin:
 class TestVoiceConstants:
     """Tests for voice module constants."""
 
-    def test_max_audio_bytes_matches_whisper_limit(self):
-        """MAX_AUDIO_BYTES is 25 MB (Whisper API limit)."""
-        assert MAX_AUDIO_BYTES == 25 * 1024 * 1024
-
-    def test_openai_api_key_in_config(self):
-        """OPENAI_API_KEY is defined in config module."""
+    def test_constants(self):
+        """Voice module constants have correct values and types."""
         from farmafacil.config import OPENAI_API_KEY
-        assert isinstance(OPENAI_API_KEY, str)
-
-    def test_audio_base_dir_is_path(self):
-        """AUDIO_BASE_DIR is a Path object."""
-        assert isinstance(AUDIO_BASE_DIR, Path)
+        assert MAX_AUDIO_BYTES == 25 * 1024 * 1024, "MAX_AUDIO_BYTES must be 25 MB (Whisper API limit)"
+        assert isinstance(OPENAI_API_KEY, str), "OPENAI_API_KEY must be a str"
+        assert isinstance(AUDIO_BASE_DIR, Path), "AUDIO_BASE_DIR must be a Path"

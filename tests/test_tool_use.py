@@ -94,11 +94,11 @@ def _make_text_response(text: str):
 class TestToolDefinitions:
     """Verify TOOL_DEFINITIONS are valid Anthropic tool schemas."""
 
-    def test_tool_definitions_is_list(self):
+    def test_tool_definitions_structure(self):
+        """All tools are a list of dicts with required Anthropic fields."""
         assert isinstance(TOOL_DEFINITIONS, list)
-        assert len(TOOL_DEFINITIONS) == 11  # 8 original + change_name + lookup_store + get_cheapest
-
-    def test_each_tool_has_required_fields(self):
+        assert len(TOOL_DEFINITIONS) == 11
+        names = []
         for tool in TOOL_DEFINITIONS:
             assert "name" in tool, f"Tool missing 'name': {tool}"
             assert "description" in tool, f"Tool {tool.get('name')} missing 'description'"
@@ -110,9 +110,7 @@ class TestToolDefinitions:
             assert "properties" in schema, (
                 f"Tool {tool['name']} input_schema missing 'properties'"
             )
-
-    def test_tool_names_are_unique(self):
-        names = [t["name"] for t in TOOL_DEFINITIONS]
+            names.append(tool["name"])
         assert len(names) == len(set(names)), f"Duplicate tool names: {names}"
 
     def test_expected_tool_names(self):
@@ -125,16 +123,26 @@ class TestToolDefinitions:
         }
         assert names == expected
 
-    def test_search_drug_has_query_required(self):
-        search = next(t for t in TOOL_DEFINITIONS if t["name"] == "search_drug")
-        assert "query" in search["input_schema"]["properties"]
-        assert "query" in search["input_schema"].get("required", [])
-
-    def test_ask_clarification_has_required_fields(self):
-        clarify = next(t for t in TOOL_DEFINITIONS if t["name"] == "ask_clarification")
-        required = clarify["input_schema"].get("required", [])
-        assert "question" in required
-        assert "context" in required
+    @pytest.mark.parametrize("tool_name,prop,required", [
+        ("search_drug", "query", True),
+        ("ask_clarification", "question", True),
+        ("ask_clarification", "context", True),
+        ("change_name", "name", False),
+        ("lookup_store", "store_name", True),
+        ("lookup_store", "chain", False),
+        ("find_nearest_stores", "limit", False),
+        ("get_cheapest", None, False),  # no required params
+    ])
+    def test_tool_has_property(self, tool_name, prop, required):
+        """Spot-check that key tool properties and required fields exist."""
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == tool_name)
+        if prop is None:
+            # get_cheapest: verify empty required
+            assert tool["input_schema"]["required"] == []
+            return
+        assert prop in tool["input_schema"]["properties"]
+        if required:
+            assert prop in tool["input_schema"].get("required", [])
 
     def test_tool_use_instructions_is_nonempty(self):
         assert isinstance(TOOL_USE_INSTRUCTIONS, str)
@@ -779,28 +787,15 @@ class TestHandlerToolUseIntegration:
 
 
 class TestNewToolDefinitions:
-    """Test that change_name and lookup_store tools have valid schemas."""
+    """Test that change_name and lookup_store tools have valid schemas.
 
-    def test_change_name_tool_exists(self):
-        names = {t["name"] for t in TOOL_DEFINITIONS}
-        assert "change_name" in names
+    Note: tool existence and property checks are now consolidated in
+    TestToolDefinitions.test_tool_has_property (parametrized).  This
+    class is kept as a namespace marker but its individual tests were
+    merged into the parametrized test above.
+    """
 
-    def test_change_name_has_name_property(self):
-        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "change_name")
-        assert "name" in tool["input_schema"]["properties"]
-
-    def test_lookup_store_tool_exists(self):
-        names = {t["name"] for t in TOOL_DEFINITIONS}
-        assert "lookup_store" in names
-
-    def test_lookup_store_has_store_name_required(self):
-        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "lookup_store")
-        assert "store_name" in tool["input_schema"]["properties"]
-        assert "store_name" in tool["input_schema"].get("required", [])
-
-    def test_lookup_store_has_chain_property(self):
-        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "lookup_store")
-        assert "chain" in tool["input_schema"]["properties"]
+    pass  # All checks moved to TestToolDefinitions.test_tool_has_property
 
 
 # ===========================================================================
@@ -1209,17 +1204,10 @@ class TestValidateSearchResults:
 # ---------------------------------------------------------------------------
 
 class TestGetCheapestTool:
-    """Tests for get_cheapest tool definition and dispatch."""
+    """Tests for get_cheapest tool dispatch.
 
-    def test_get_cheapest_tool_exists(self):
-        """get_cheapest tool is defined in TOOL_DEFINITIONS."""
-        names = {t["name"] for t in TOOL_DEFINITIONS}
-        assert "get_cheapest" in names
-
-    def test_get_cheapest_has_empty_required(self):
-        """get_cheapest takes no required parameters."""
-        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "get_cheapest")
-        assert tool["input_schema"]["required"] == []
+    Tool existence and schema checks are in TestToolDefinitions.test_tool_has_property.
+    """
 
     @pytest.mark.asyncio
     async def test_dispatch_get_cheapest_with_last_search(self):
@@ -1294,12 +1282,10 @@ class TestGetCheapestTool:
 # ---------------------------------------------------------------------------
 
 class TestFindNearestStoresLimit:
-    """Tests for find_nearest_stores limit parameter."""
+    """Tests for find_nearest_stores limit parameter dispatch.
 
-    def test_find_nearest_has_limit_property(self):
-        """find_nearest_stores tool has a limit property."""
-        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "find_nearest_stores")
-        assert "limit" in tool["input_schema"]["properties"]
+    Schema check (limit property exists) is in TestToolDefinitions.test_tool_has_property.
+    """
 
     @pytest.mark.asyncio
     async def test_dispatch_nearest_stores_with_limit_1(self):

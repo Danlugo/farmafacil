@@ -141,26 +141,17 @@ class TestOnboardingStepChoices:
 class TestFormOverrides:
     """Every dropdown field must be overridden to a SelectField."""
 
-    def test_city_code_is_select(self):
-        assert UserAdmin.form_overrides["city_code"] is SelectField
-
-    def test_display_preference_is_select(self):
-        assert UserAdmin.form_overrides["display_preference"] is SelectField
-
-    def test_response_mode_is_select(self):
-        assert UserAdmin.form_overrides["response_mode"] is SelectField
-
-    def test_chat_debug_is_select(self):
-        assert UserAdmin.form_overrides["chat_debug"] is SelectField
-
-    def test_post_feedback_suggestion_is_select(self):
-        assert UserAdmin.form_overrides["post_feedback_suggestion"] is SelectField
-
-    def test_post_feedback_bug_report_is_select(self):
-        assert UserAdmin.form_overrides["post_feedback_bug_report"] is SelectField
-
-    def test_onboarding_step_is_select(self):
-        assert UserAdmin.form_overrides["onboarding_step"] is SelectField
+    @pytest.mark.parametrize("field", [
+        "city_code",
+        "display_preference",
+        "response_mode",
+        "chat_debug",
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+        "onboarding_step",
+    ])
+    def test_field_is_select(self, field):
+        assert UserAdmin.form_overrides[field] is SelectField
 
 
 # --- form_args wires choices + nullable coerce on each select ------------
@@ -188,32 +179,19 @@ class TestFormArgs:
         coerce = UserAdmin.form_args["display_preference"]["coerce"]
         assert coerce is str
 
-    def test_response_mode_coerce_is_nullable(self):
-        coerce = UserAdmin.form_args["response_mode"]["coerce"]
+    @pytest.mark.parametrize("field,sample_value", [
+        ("response_mode", "hybrid"),
+        ("chat_debug", "enabled"),
+        ("post_feedback_suggestion", "true"),
+        ("post_feedback_bug_report", "false"),
+        ("onboarding_step", "awaiting_name"),
+    ])
+    def test_nullable_coerce(self, field, sample_value):
+        # All these fields are nullable — empty string must round-trip to None,
+        # and a real value must pass through unchanged.
+        coerce = UserAdmin.form_args[field]["coerce"]
         assert coerce("") is None
-        assert coerce("hybrid") == "hybrid"
-
-    def test_chat_debug_coerce_is_nullable(self):
-        coerce = UserAdmin.form_args["chat_debug"]["coerce"]
-        assert coerce("") is None
-        assert coerce("enabled") == "enabled"
-
-    def test_post_feedback_suggestion_coerce_is_nullable(self):
-        coerce = UserAdmin.form_args["post_feedback_suggestion"]["coerce"]
-        assert coerce("") is None
-        assert coerce("true") == "true"
-        assert coerce("false") == "false"
-
-    def test_post_feedback_bug_report_coerce_is_nullable(self):
-        coerce = UserAdmin.form_args["post_feedback_bug_report"]["coerce"]
-        assert coerce("") is None
-        assert coerce("true") == "true"
-        assert coerce("false") == "false"
-
-    def test_onboarding_step_coerce_is_nullable(self):
-        coerce = UserAdmin.form_args["onboarding_step"]["coerce"]
-        assert coerce("") is None
-        assert coerce("awaiting_name") == "awaiting_name"
+        assert coerce(sample_value) == sample_value
 
 
 class TestCoerceHelper:
@@ -384,19 +362,13 @@ class TestFormColumns:
         )
         assert first_name == "phone_number"
 
-    def test_chat_admin_present(self):
+    @pytest.mark.parametrize("field", ["chat_admin", "admin_mode_active"])
+    def test_security_field_present(self, field):
         names = {
             (col.key if hasattr(col, "key") else str(col))
             for col in UserAdmin.form_columns
         }
-        assert "chat_admin" in names
-
-    def test_admin_mode_active_present(self):
-        names = {
-            (col.key if hasattr(col, "key") else str(col))
-            for col in UserAdmin.form_columns
-        }
-        assert "admin_mode_active" in names
+        assert field in names
 
     def test_all_constrained_fields_present(self):
         names = {
@@ -426,12 +398,28 @@ class TestFormColumns:
 # dropdowns, and that the choice sets match their canonical sources.
 
 
-class TestIntentKeywordDropdown:
-    """IntentKeywordAdmin.action should be a SelectField."""
+class TestSelectFieldOverrides:
+    """Admin classes with constrained values must use SelectField overrides.
 
-    def test_action_is_select_field(self):
-        from farmafacil.api.admin import IntentKeywordAdmin
-        assert IntentKeywordAdmin.form_overrides.get("action") is SelectField
+    Covers IntentKeywordAdmin, PharmacyLocationAdmin, ProductAdmin, and
+    ScheduledTaskAdmin — all follow the identical assertion pattern.
+    """
+
+    @pytest.mark.parametrize("admin_cls_name,field", [
+        ("IntentKeywordAdmin", "action"),
+        ("PharmacyLocationAdmin", "pharmacy_chain"),
+        ("PharmacyLocationAdmin", "city_code"),
+        ("ProductAdmin", "pharmacy_chain"),
+        ("ScheduledTaskAdmin", "task_key"),
+    ])
+    def test_field_is_select(self, admin_cls_name, field):
+        import farmafacil.api.admin as admin_module
+        admin_cls = getattr(admin_module, admin_cls_name)
+        assert admin_cls.form_overrides.get(field) is SelectField
+
+
+class TestIntentKeywordDropdown:
+    """IntentKeywordAdmin action choices cover all known intent types."""
 
     def test_action_choices_include_drug_search(self):
         from farmafacil.api.admin import INTENT_ACTION_CHOICES
@@ -443,15 +431,7 @@ class TestIntentKeywordDropdown:
 
 
 class TestPharmacyLocationDropdowns:
-    """PharmacyLocationAdmin should have chain and city_code dropdowns."""
-
-    def test_pharmacy_chain_is_select_field(self):
-        from farmafacil.api.admin import PharmacyLocationAdmin
-        assert PharmacyLocationAdmin.form_overrides.get("pharmacy_chain") is SelectField
-
-    def test_city_code_is_select_field(self):
-        from farmafacil.api.admin import PharmacyLocationAdmin
-        assert PharmacyLocationAdmin.form_overrides.get("city_code") is SelectField
+    """PharmacyLocationAdmin chain choices cover known pharmacy chains."""
 
     def test_chain_choices_include_known_chains(self):
         from farmafacil.api.admin import PHARMACY_CHAIN_CHOICES
@@ -461,20 +441,8 @@ class TestPharmacyLocationDropdowns:
         assert "Locatel" in values
 
 
-class TestProductAdminDropdown:
-    """ProductAdmin.pharmacy_chain should be a SelectField."""
-
-    def test_pharmacy_chain_is_select_field(self):
-        from farmafacil.api.admin import ProductAdmin
-        assert ProductAdmin.form_overrides.get("pharmacy_chain") is SelectField
-
-
 class TestScheduledTaskDropdown:
-    """ScheduledTaskAdmin.task_key should be a SelectField."""
-
-    def test_task_key_is_select_field(self):
-        from farmafacil.api.admin import ScheduledTaskAdmin
-        assert ScheduledTaskAdmin.form_overrides.get("task_key") is SelectField
+    """ScheduledTaskAdmin task_key choices match the live TASK_REGISTRY."""
 
     def test_task_key_choices_match_registry(self):
         from farmafacil.api.admin import TASK_KEY_CHOICES

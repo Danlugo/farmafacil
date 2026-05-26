@@ -36,14 +36,13 @@ from farmafacil.services.location import (
 
 
 class TestNormalize:
-    def test_lowercases(self):
-        assert _normalize("La Boyera") == "la boyera"
-
-    def test_strips_accents(self):
-        assert _normalize("Mérida") == "merida"
-
-    def test_collapses_whitespace(self):
-        assert _normalize("  La   Boyera  ") == "la boyera"
+    @pytest.mark.parametrize("text,expected", [
+        ("La Boyera", "la boyera"),          # lowercases
+        ("Mérida", "merida"),                # strips accents
+        ("  La   Boyera  ", "la boyera"),    # collapses whitespace
+    ])
+    def test_normalize(self, text, expected):
+        assert _normalize(text) == expected
 
 
 class TestForwardKey:
@@ -458,23 +457,15 @@ class TestSetPharmacyLocationBounds:
     """v0.19.0 review finding #4 — reject out-of-Venezuela coordinates."""
 
     @pytest.mark.asyncio
-    async def test_null_island_rejected(self):
-        out = await set_pharmacy_location(1, lat=0.0, lng=0.0)
-        assert out["ok"] is False
-        assert out["reason"] == "coords_out_of_bounds"
-
-    @pytest.mark.asyncio
-    async def test_bogota_coords_rejected(self):
-        # Bogotá, Colombia — outside VE bbox
-        out = await set_pharmacy_location(1, lat=4.65, lng=-74.05)
-        assert out["ok"] is False
-        assert out["reason"] == "coords_out_of_bounds"
-
-    @pytest.mark.asyncio
-    async def test_madrid_rejected(self):
-        out = await set_pharmacy_location(1, lat=40.41, lng=-3.70)
-        assert out["ok"] is False
-        assert out["reason"] == "coords_out_of_bounds"
+    @pytest.mark.parametrize("lat,lng,description", [
+        (0.0, 0.0, "null island"),
+        (4.65, -74.05, "Bogotá, Colombia — outside VE bbox"),
+        (40.41, -3.70, "Madrid, Spain"),
+    ])
+    async def test_out_of_bounds_coords_rejected(self, lat, lng, description):
+        out = await set_pharmacy_location(1, lat=lat, lng=lng)
+        assert out["ok"] is False, f"Expected rejection for {description}"
+        assert out["reason"] == "coords_out_of_bounds", f"Wrong reason for {description}"
 
 
 class TestCachePutRace:
@@ -578,46 +569,29 @@ class TestCleanupExpiredCache:
 class TestStripLocationPrefix:
     """Strip conversational Spanish prefixes from location queries."""
 
-    def test_en_la_lagunita(self):
-        """'En la Lagunita' → 'la Lagunita' — the production bug."""
-        assert _strip_location_prefix("En la Lagunita") == "la Lagunita"
-
-    def test_en_el_hatillo(self):
-        assert _strip_location_prefix("en el hatillo") == "el hatillo"
-
-    def test_en_chacao(self):
-        assert _strip_location_prefix("en Chacao") == "Chacao"
-
-    def test_por_la_boyera(self):
-        assert _strip_location_prefix("por La Boyera") == "La Boyera"
-
-    def test_cerca_de_plaza_venezuela(self):
-        assert _strip_location_prefix("cerca de Plaza Venezuela") == "Plaza Venezuela"
-
-    def test_vivo_en_altamira(self):
-        assert _strip_location_prefix("vivo en Altamira") == "Altamira"
-
-    def test_soy_de_maracaibo(self):
-        assert _strip_location_prefix("soy de Maracaibo") == "Maracaibo"
-
-    def test_estoy_en_la_boyera(self):
-        assert _strip_location_prefix("estoy en La Boyera") == "La Boyera"
-
-    def test_estoy_por_el_cafetal(self):
-        assert _strip_location_prefix("estoy por El Cafetal") == "El Cafetal"
-
-    def test_plain_name_unchanged(self):
-        """A plain place name without prefix is returned as-is."""
-        assert _strip_location_prefix("La Boyera") == "La Boyera"
+    @pytest.mark.parametrize("text,expected", [
+        # The production bug case — 'En la Lagunita' → 'la Lagunita'
+        ("En la Lagunita", "la Lagunita"),
+        ("en el hatillo", "el hatillo"),
+        ("en Chacao", "Chacao"),
+        ("por La Boyera", "La Boyera"),
+        ("cerca de Plaza Venezuela", "Plaza Venezuela"),
+        ("vivo en Altamira", "Altamira"),
+        ("soy de Maracaibo", "Maracaibo"),
+        ("estoy en La Boyera", "La Boyera"),
+        ("estoy por El Cafetal", "El Cafetal"),
+        # Edge: plain name without prefix is returned as-is
+        ("La Boyera", "La Boyera"),
+        # Edge: case insensitive prefix matching
+        ("EN LA LAGUNITA", "LA LAGUNITA"),
+        ("VIVO EN El Hatillo", "El Hatillo"),
+    ])
+    def test_strip_location_prefix(self, text, expected):
+        assert _strip_location_prefix(text) == expected
 
     def test_empty_after_strip_returns_original(self):
-        """If stripping leaves nothing, return original."""
-        # "en" alone — the regex matches but remainder is empty
+        """If stripping leaves nothing, return original — 'en' alone."""
         assert _strip_location_prefix("en") == "en"
-
-    def test_case_insensitive(self):
-        assert _strip_location_prefix("EN LA LAGUNITA") == "LA LAGUNITA"
-        assert _strip_location_prefix("VIVO EN El Hatillo") == "El Hatillo"
 
 
 class TestResolveWithPrefix:

@@ -14,67 +14,37 @@ from farmafacil.services.settings import resolve_chat_debug
 class TestResolveChatDebug:
     """Test chat debug resolution logic."""
 
-    def test_user_enabled_overrides_global_disabled(self):
-        assert resolve_chat_debug("enabled", "disabled") is True
-
-    def test_user_disabled_overrides_global_enabled(self):
-        assert resolve_chat_debug("disabled", "enabled") is False
-
-    def test_user_none_uses_global_enabled(self):
-        assert resolve_chat_debug(None, "enabled") is True
-
-    def test_user_none_uses_global_disabled(self):
-        assert resolve_chat_debug(None, "disabled") is False
-
-    def test_user_enabled_overrides_global_enabled(self):
-        assert resolve_chat_debug("enabled", "enabled") is True
-
-    def test_user_disabled_overrides_global_disabled(self):
-        assert resolve_chat_debug("disabled", "disabled") is False
-
-    def test_invalid_user_falls_to_global(self):
-        assert resolve_chat_debug("bogus", "enabled") is True
-
-    def test_invalid_global_defaults_false(self):
-        assert resolve_chat_debug(None, "bogus") is False
-
-    def test_both_invalid_defaults_false(self):
-        assert resolve_chat_debug("bogus", "bogus") is False
-
-    def test_empty_string_user_falls_to_global(self):
-        assert resolve_chat_debug("", "enabled") is True
+    @pytest.mark.parametrize("user_val,global_val,expected", [
+        ("enabled", "disabled", True),
+        ("disabled", "enabled", False),
+        (None, "enabled", True),
+        (None, "disabled", False),
+        ("enabled", "enabled", True),
+        ("disabled", "disabled", False),
+        ("bogus", "enabled", True),
+        (None, "bogus", False),
+        ("bogus", "bogus", False),
+        ("", "enabled", True),
+    ])
+    def test_resolve_chat_debug(self, user_val, global_val, expected):
+        assert resolve_chat_debug(user_val, global_val) is expected
 
 
 class TestBuildDebugFooter:
     """Test debug footer string building."""
 
-    def test_footer_contains_model(self):
-        footer = build_debug_footer("pharmacy_advisor", 100, 50, 10, 3)
+    def test_footer_contains_role_model_tokens_and_counts(self):
+        footer = build_debug_footer("pharmacy_advisor", 142, 87, 23, 8)
         assert "claude-haiku" in footer
-
-    def test_footer_contains_role(self):
-        footer = build_debug_footer("pharmacy_advisor", 100, 50, 10, 3)
         assert "pharmacy_advisor" in footer
-
-    def test_footer_contains_tokens(self):
-        footer = build_debug_footer("pharmacy_advisor", 142, 87, 10, 3)
         assert "142 in" in footer
         assert "87 out" in footer
-
-    def test_footer_contains_questions(self):
-        footer = build_debug_footer("pharmacy_advisor", 100, 50, 23, 3)
         assert "23" in footer
-
-    def test_footer_contains_success(self):
-        footer = build_debug_footer("pharmacy_advisor", 100, 50, 10, 8)
         assert "8" in footer
 
-    def test_footer_starts_with_separator(self):
+    def test_footer_starts_with_separator_and_contains_debug_header(self):
         footer = build_debug_footer("test_role", 0, 0, 0, 0)
         assert footer.startswith("\n\n---\n")
-
-    def test_footer_contains_debug_header(self):
-        footer = build_debug_footer("test_role", 0, 0, 0, 0)
         assert "DEBUG" in footer
 
     def test_zero_tokens(self):
@@ -128,44 +98,19 @@ class TestBuildDebugFooter:
 class TestEstimateCost:
     """Test token cost estimation."""
 
-    def test_zero_tokens_zero_cost(self):
-        assert estimate_cost(0, 0) == 0.0
-
-    def test_one_million_input_tokens_haiku(self):
-        # Haiku: $1.00 per MTok input
-        cost = estimate_cost(1_000_000, 0, "haiku")
-        assert abs(cost - 1.00) < 0.001
-
-    def test_one_million_output_tokens_haiku(self):
-        # Haiku: $5.00 per MTok output
-        cost = estimate_cost(0, 1_000_000, "haiku")
-        assert abs(cost - 5.00) < 0.001
-
-    def test_mixed_tokens(self):
-        # 500 in ($0.0005) + 100 out ($0.0005) = $0.001 at haiku rates
-        cost = estimate_cost(500, 100)
-        assert abs(cost - 0.001) < 0.0001
-
-    def test_typical_haiku_call(self):
-        # ~500 input + ~200 output is a typical call
-        # 500/1M * $1 + 200/1M * $5 = $0.0005 + $0.001 = $0.0015
-        cost = estimate_cost(500, 200)
-        assert abs(cost - 0.0015) < 0.0001
-
-    def test_sonnet_input_pricing(self):
-        # Sonnet: $3.00 per MTok input
-        cost = estimate_cost(1_000_000, 0, "sonnet")
-        assert abs(cost - 3.00) < 0.001
-
-    def test_sonnet_output_pricing(self):
-        # Sonnet: $15.00 per MTok output
-        cost = estimate_cost(0, 1_000_000, "sonnet")
-        assert abs(cost - 15.00) < 0.001
-
-    def test_opus_pricing(self):
-        # Opus: $15.00 in + $75.00 out per MTok
-        cost = estimate_cost(1_000_000, 1_000_000, "opus")
-        assert abs(cost - 90.00) < 0.001
+    @pytest.mark.parametrize("tokens_in,tokens_out,model,expected", [
+        (0, 0, "haiku", 0.0),
+        (1_000_000, 0, "haiku", 1.00),
+        (0, 1_000_000, "haiku", 5.00),
+        (500, 100, "haiku", 0.001),
+        (500, 200, "haiku", 0.0015),
+        (1_000_000, 0, "sonnet", 3.00),
+        (0, 1_000_000, "sonnet", 15.00),
+        (1_000_000, 1_000_000, "opus", 90.00),
+    ])
+    def test_pricing(self, tokens_in, tokens_out, model, expected):
+        cost = estimate_cost(tokens_in, tokens_out, model)
+        assert abs(cost - expected) < 0.001
 
     def test_full_model_name_resolves_to_family(self):
         # Full model name should resolve to correct pricing
@@ -212,54 +157,29 @@ class TestEstimateCostBreakdown:
 class TestClassifyModel:
     """Test model family classification."""
 
-    def test_haiku_full_name(self):
+    @pytest.mark.parametrize("model_str,expected", [
+        ("claude-haiku-4-5-20251001", "haiku"),
+        ("claude-sonnet-4-20250514", "sonnet"),
+        ("gpt-4o", "unknown"),
+        ("Claude-HAIKU-4", "haiku"),
+        ("CLAUDE-SONNET-4", "sonnet"),
+        ("", "unknown"),
+    ])
+    def test_classify_model(self, model_str, expected):
         from farmafacil.services.users import _classify_model
-        assert _classify_model("claude-haiku-4-5-20251001") == "haiku"
-
-    def test_sonnet_full_name(self):
-        from farmafacil.services.users import _classify_model
-        assert _classify_model("claude-sonnet-4-20250514") == "sonnet"
-
-    def test_unknown_model(self):
-        from farmafacil.services.users import _classify_model
-        assert _classify_model("gpt-4o") == "unknown"
-
-    def test_case_insensitive(self):
-        from farmafacil.services.users import _classify_model
-        assert _classify_model("Claude-HAIKU-4") == "haiku"
-        assert _classify_model("CLAUDE-SONNET-4") == "sonnet"
-
-    def test_empty_string(self):
-        from farmafacil.services.users import _classify_model
-        assert _classify_model("") == "unknown"
+        assert _classify_model(model_str) == expected
 
 
 class TestGetUserStats:
     """Test user stats queries."""
 
     @pytest.mark.asyncio
-    async def test_returns_dict_with_keys(self):
-        stats = await get_user_stats("5550000000", 999)
-        assert "total_questions" in stats
-        assert "total_success" in stats
-
-    @pytest.mark.asyncio
-    async def test_new_user_has_zero_stats(self):
-        stats = await get_user_stats("5559999999", 999)
-        assert stats["total_questions"] == 0
-        assert stats["total_success"] == 0
-
-    @pytest.mark.asyncio
-    async def test_returns_global_token_keys(self):
-        stats = await get_user_stats("5550000000", 999)
-        assert "global_tokens_in" in stats
-        assert "global_tokens_out" in stats
-
-    @pytest.mark.asyncio
-    async def test_returns_per_model_keys(self):
-        """Stats include per-model token and call count keys."""
+    async def test_returns_expected_keys(self):
+        """Stats dict contains all required top-level and per-model keys."""
         stats = await get_user_stats("5550000000", 999)
         for key in [
+            "total_questions", "total_success",
+            "global_tokens_in", "global_tokens_out",
             "tokens_in_haiku", "tokens_out_haiku", "calls_haiku",
             "tokens_in_sonnet", "tokens_out_sonnet", "calls_sonnet",
             "global_tokens_in_haiku", "global_tokens_out_haiku",
@@ -267,6 +187,12 @@ class TestGetUserStats:
             "global_tokens_out_sonnet", "global_calls_sonnet",
         ]:
             assert key in stats, f"Missing key: {key}"
+
+    @pytest.mark.asyncio
+    async def test_new_user_has_zero_stats(self):
+        stats = await get_user_stats("5559999999", 999)
+        assert stats["total_questions"] == 0
+        assert stats["total_success"] == 0
 
     @pytest.mark.asyncio
     async def test_counts_inbound_messages(self):

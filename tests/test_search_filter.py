@@ -19,115 +19,76 @@ from farmafacil.bot.formatter import format_search_results
 class TestIsSpecificQuery:
     """Test detection of specific product queries (with dosage, form, count)."""
 
-    def test_generic_query_not_specific(self):
-        """A simple drug name without dosage is not specific."""
-        assert is_specific_query("losartan") is False
+    @pytest.mark.parametrize("query", [
+        "Losartan 50mg",
+        "Losartan 50 mg",
+        "Jarabe 100ml",
+        "RESVERATROL NAD+VID CAP 125MG X60 HERB",
+        "Omeprazol cap 20mg",
+        "Metformina tab 850mg",
+        "Losartan Potasico 50mg Biumak Caja x 30",
+        "Ibuprofeno frasco 120ml",
+        "Sal de Andrews sobre",
+        "LOSARTAN 50MG",
+        "losartan 50mg",
+        "Crema 30g",
+    ])
+    def test_specific_queries(self, query):
+        """Queries with dosage, form, or count indicators are specific."""
+        assert is_specific_query(query) is True
 
-    def test_generic_two_words_not_specific(self):
-        """Two-word generic query is not specific."""
-        assert is_specific_query("acetaminofen tabletas") is False
-
-    def test_dosage_mg_is_specific(self):
-        """Query with milligram dosage is specific."""
-        assert is_specific_query("Losartan 50mg") is True
-
-    def test_dosage_mg_with_space_is_specific(self):
-        """Query with spaced milligram dosage is specific."""
-        assert is_specific_query("Losartan 50 mg") is True
-
-    def test_dosage_ml_is_specific(self):
-        """Query with milliliter dosage is specific."""
-        assert is_specific_query("Jarabe 100ml") is True
-
-    def test_unit_count_x60_is_specific(self):
-        """Query with unit count (X60) is specific."""
-        assert is_specific_query("RESVERATROL NAD+VID CAP 125MG X60 HERB") is True
-
-    def test_cap_form_is_specific(self):
-        """Query with capsule form indicator is specific."""
-        assert is_specific_query("Omeprazol cap 20mg") is True
-
-    def test_tab_form_is_specific(self):
-        """Query with tablet form indicator is specific."""
-        assert is_specific_query("Metformina tab 850mg") is True
-
-    def test_caja_is_specific(self):
-        """Query with 'caja' is specific."""
-        assert is_specific_query("Losartan Potasico 50mg Biumak Caja x 30") is True
-
-    def test_frasco_is_specific(self):
-        """Query with 'frasco' is specific."""
-        assert is_specific_query("Ibuprofeno frasco 120ml") is True
-
-    def test_sobre_is_specific(self):
-        """Query with 'sobre' is specific."""
-        assert is_specific_query("Sal de Andrews sobre") is True
-
-    def test_case_insensitive(self):
-        """Detection is case-insensitive."""
-        assert is_specific_query("LOSARTAN 50MG") is True
-        assert is_specific_query("losartan 50mg") is True
-
-    def test_question_not_specific(self):
-        """A question about a drug is not specific (no dosage indicators)."""
-        assert is_specific_query("para que sirve el losartan") is False
-
-    def test_grams_is_specific(self):
-        """Query with grams is specific."""
-        assert is_specific_query("Crema 30g") is True
+    @pytest.mark.parametrize("query", [
+        "losartan",
+        "acetaminofen tabletas",
+        "para que sirve el losartan",
+    ])
+    def test_generic_queries(self, query):
+        """Queries without dosage or form indicators are not specific."""
+        assert is_specific_query(query) is False
 
 
 class TestIsProductMatch:
     """Test strict product matching (case-insensitive exact string)."""
 
-    def test_exact_same_name(self):
-        """Identical names match."""
-        assert is_product_match(
+    @pytest.mark.parametrize("name_a,name_b", [
+        (
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
-        ) is True
-
-    def test_different_casing(self):
-        """Case-insensitive match works."""
-        assert is_product_match(
+        ),
+        (
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
             "resveratrol nad+vid cap 125mg x60 herb",
-        ) is True
-
-    def test_different_product_no_match(self):
-        """Different product name does not match."""
-        assert is_product_match(
-            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
-            "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
-        ) is False
-
-    def test_different_dosage_no_match(self):
-        """Different dosage does not match."""
-        assert is_product_match(
-            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
-            "RESVERATROL NAD+VID CAP 250MG X60 HERB",
-        ) is False
-
-    def test_different_base_name_no_match(self):
-        """Different base drug name does not match."""
-        assert is_product_match(
-            "Losartan 50mg",
-            "Enalapril 50mg",
-        ) is False
-
-    def test_whitespace_trimmed(self):
-        """Leading/trailing whitespace is trimmed."""
-        assert is_product_match(
+        ),
+        (
             "  Losartan 50mg  ",
             "Losartan 50mg",
-        ) is True
+        ),
+    ])
+    def test_matching_products(self, name_a, name_b):
+        """Products that should match (identical, case-insensitive, or trimmed whitespace)."""
+        assert is_product_match(name_a, name_b) is True
 
-    def test_compound_product_not_matched_by_single_ingredient(self):
-        """A compound product (250mg/125mg) is not matched by a 125mg query."""
-        assert is_product_match(
+    @pytest.mark.parametrize("name_a,name_b", [
+        (
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
+            "Resveratrol NAD + VID 250mg-75mg-125mg Herbaplant Antioxidante x 60 Capsulas",
+        ),
+        (
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
+            "RESVERATROL NAD+VID CAP 250MG X60 HERB",
+        ),
+        (
+            "Losartan 50mg",
+            "Enalapril 50mg",
+        ),
+        (
             "RESVERATROL NAD+VID CAP 125MG X60 HERB",
             "Resveratrol + Selenio Q10 250mg/125mg Lipoico Inmuneplus x 60 Capsulas",
-        ) is False
+        ),
+    ])
+    def test_non_matching_products(self, name_a, name_b):
+        """Products that should not match (different name, dosage, or base ingredient)."""
+        assert is_product_match(name_a, name_b) is False
 
 
 class TestFilterExactResults:
@@ -270,45 +231,43 @@ class TestFormatterSimilarCount:
 class TestParseKeywords:
     """Test keyword tokenization from drug names."""
 
-    def test_basic_split(self):
-        """Split by whitespace, lowercase all tokens."""
-        result = _parse_keywords("RESVERATROL NAD+VID CAP 125MG X60 HERB")
-        assert result == ["resveratrol", "nad+vid", "cap", "125mg", "x60", "herb"]
-
-    def test_plus_preserved_within_token(self):
-        """Plus sign is preserved when adjacent to characters (no space around it)."""
-        result = _parse_keywords("NAD+VID CAP")
-        assert "nad+vid" in result
-
-    def test_plus_with_spaces_splits_into_separate_tokens(self):
-        """Plus sign with spaces around it creates separate tokens."""
-        result = _parse_keywords("NAD + VID")
-        assert result == ["nad", "+", "vid"]
-
-    def test_lowercase_applied(self):
-        """All tokens are lowercased."""
-        result = _parse_keywords("LOSARTAN 50MG GENVEN")
-        assert result == ["losartan", "50mg", "genven"]
-
-    def test_leading_trailing_whitespace_stripped(self):
-        """Leading and trailing whitespace is stripped before splitting."""
-        result = _parse_keywords("  losartan 50mg  ")
-        assert result == ["losartan", "50mg"]
-
-    def test_empty_string_returns_empty_list(self):
-        """Empty drug name returns empty list."""
-        result = _parse_keywords("")
-        assert result == []
-
-    def test_single_word(self):
-        """Single word is returned as single-element list."""
-        result = _parse_keywords("RESVERATROL")
-        assert result == ["resveratrol"]
-
-    def test_special_characters_in_tokens(self):
-        """Special chars like - and / are preserved within tokens."""
-        result = _parse_keywords("250mg-75mg-125mg x60")
-        assert result == ["250mg-75mg-125mg", "x60"]
+    @pytest.mark.parametrize("drug_name,expected", [
+        (
+            "RESVERATROL NAD+VID CAP 125MG X60 HERB",
+            ["resveratrol", "nad+vid", "cap", "125mg", "x60", "herb"],
+        ),
+        (
+            "NAD+VID CAP",
+            ["nad+vid", "cap"],
+        ),
+        (
+            "NAD + VID",
+            ["nad", "+", "vid"],
+        ),
+        (
+            "LOSARTAN 50MG GENVEN",
+            ["losartan", "50mg", "genven"],
+        ),
+        (
+            "  losartan 50mg  ",
+            ["losartan", "50mg"],
+        ),
+        (
+            "",
+            [],
+        ),
+        (
+            "RESVERATROL",
+            ["resveratrol"],
+        ),
+        (
+            "250mg-75mg-125mg x60",
+            ["250mg-75mg-125mg", "x60"],
+        ),
+    ])
+    def test_parse_keywords(self, drug_name, expected):
+        """Keyword tokenization produces correct lowercase token lists."""
+        assert _parse_keywords(drug_name) == expected
 
 
 class TestFilterExactResultsWithCrossChain:
