@@ -634,9 +634,9 @@
 ### 117. WhatsApp "processing" reaction indicator
 - **Priority:** P2 — UX Responsiveness
 - **Problem:** Users send a message and have no visual feedback that the bot received it and is working on a response. Similar to iMessage's typing dots, the bot should show it is processing.
-- **Status:** ✅ DONE (2026-05-26, v0.38.0)
-- **Solution:** Added `send_typing_indicator()` in `whatsapp.py` using WhatsApp Cloud API's native `typing_indicator` message type (three-dot bubble, added Q1 2025). In `webhook.py`, typing indicator is sent synchronously for all processed message types (text, location, interactive, image, document, audio) before the handler background task is dispatched. The dots auto-dismiss when the bot sends its response (or after 25s). No manual cleanup needed. Also added general-purpose `send_reaction()` / `remove_reaction()` utilities. Proxy mode no-op. 19 tests in `test_processing_indicator.py`.
-- **Files:** `bot/whatsapp.py` (+`send_typing_indicator`, `send_reaction`, `remove_reaction`), `bot/webhook.py` (typing indicator dispatch), `tests/test_processing_indicator.py` (new)
+- **Status:** ✅ DONE (2026-05-26, v0.38.0 → fixed v0.40.0)
+- **Solution:** Originally implemented as `send_typing_indicator()` using WhatsApp Cloud API's `typing_indicator` message type, but the API does NOT support this type — returns HTTP 400. Error was invisible (caught at `logger.debug` level). **Fixed in v0.40.0**: replaced with ⏳ emoji reaction approach. `send_reaction(sender, wa_id, "⏳")` is awaited synchronously in `webhook.py` for all processed message types (text, location, interactive, image, document, audio) before the handler background task is dispatched. The reaction is removed in `_safe_handle`'s `finally` block via `remove_reaction()` after the handler completes (success or failure). Edge-case paths (missing media_id, unhandled interactive type) remove the reaction inline. `_safe_handle` accepts `clear_reaction=True` kwarg. `_log_inbound_safe` wrapper prevents DB failures from leaving stuck reactions. `send_typing_indicator()` removed as dead code. 33 tests in `test_processing_indicator.py`.
+- **Files:** `bot/whatsapp.py` (-`send_typing_indicator`, `send_reaction`, `remove_reaction`), `bot/webhook.py` (+`_log_inbound_safe`, reaction dispatch + cleanup, `_safe_handle` with `clear_reaction`), `tests/test_processing_indicator.py` (rewritten)
 
 ### Phase 26 — Admin UI Multiline Text
 
@@ -677,6 +677,6 @@
 | 22 — Admin Chat Capacity | 114 (1 item) | P1 | ~30 min | ✅ DONE (v0.35.0) |
 | 23 — Admin UI Friendly Names | 115 (1 item) | P2 | ~2 hours | ✅ DONE (v0.36.0) |
 | 24 — English Drug Name Translation | 116 (1 item) | P2 | ~2 hours | ✅ DONE (v0.37.0) |
-| 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0) |
+| 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0 → fixed v0.40.0) |
 | 26 — Admin Multiline Text | 118 (1 item) | P2 | ~1 hour | ✅ DONE (v0.39.0) |
 | **Total** | **69 items** | | **~81 hours** | |

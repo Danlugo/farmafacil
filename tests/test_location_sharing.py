@@ -432,7 +432,11 @@ class TestWebhookLocationPayload:
         ), patch(
             "farmafacil.bot.webhook.handle_location_message",
             new=AsyncMock(),
-        ) as mock_handler:
+        ) as mock_handler, patch(
+            "farmafacil.bot.webhook.send_reaction", new=AsyncMock(),
+        ), patch(
+            "farmafacil.bot.webhook.remove_reaction", new=AsyncMock(),
+        ):
             response = await client.post("/webhook", json=payload)
             # Eagerly await all collected coroutines
             for c in coros:
@@ -492,7 +496,11 @@ class TestWebhookLocationPayload:
         ) as mock_handler, patch(
             "farmafacil.bot.webhook.send_text_message",
             new=AsyncMock(),
-        ) as mock_send:
+        ) as mock_send, patch(
+            "farmafacil.bot.webhook.send_reaction", new=AsyncMock(),
+        ), patch(
+            "farmafacil.bot.webhook.remove_reaction", new=AsyncMock(),
+        ):
             response = await client.post("/webhook", json=payload)
             for c in coros:
                 await c

@@ -254,6 +254,8 @@ class TestNonBlockingWebhook:
         with patch("farmafacil.bot.webhook.handle_incoming_message", new=slow_handler), \
              patch("farmafacil.bot.webhook.is_duplicate_message", new=AsyncMock(return_value=False)), \
              patch("farmafacil.bot.webhook.log_inbound", new=AsyncMock()), \
+             patch("farmafacil.bot.webhook.send_reaction", new=AsyncMock()), \
+             patch("farmafacil.bot.webhook.remove_reaction", new=AsyncMock()), \
              patch("farmafacil.bot.webhook._verify_signature", return_value=True):
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
