@@ -270,7 +270,8 @@ On application start (`lifespan` in `app.py`):
 
 ## Performance Architecture (v0.24.0)
 
-- **Async LLM client:** Module-level `AsyncAnthropic` singleton in `ai_responder._get_client()` — reuses httpx connection pool across all 8 LLM call sites, non-blocking `await` on event loop.
+- **Async LLM client:** Module-level `AsyncAnthropic` singleton in `ai_responder._get_client()` — reuses httpx connection pool across all LLM call sites (intent, validation, translation, etc.), non-blocking `await` on event loop.
+- **Drug name translation (v0.37.0):** `services/drug_translation.py` — when a search returns zero results, calls Claude Haiku (temperature=0) to translate English drug names to Spanish INN equivalents. Returns `TranslationResult` with token counts for billing. Guards: length bounds (3-100 chars), empty content, trailing punctuation.
 - **Settings cache:** In-memory `{key: (value, expire_ts)}` dict with 60s TTL in `settings.py`. Invalidated on writes (`set_setting`, `set_default_model`). Avoids 8+ DB round-trips per message.
 - **Non-blocking webhook:** `webhook.py` returns 200 to Meta immediately; handler runs as `asyncio.create_task()` via `_fire_and_forget()` with `_safe_handle()` error wrapper. Dedup check + `log_inbound` remain synchronous.
 - **Direct UPDATE:** `set_onboarding_step` and `update_last_search` use `update(User).where().values()` — no SELECT first.

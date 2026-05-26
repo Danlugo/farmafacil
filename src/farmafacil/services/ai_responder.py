@@ -69,6 +69,7 @@ RESPONSE: [respuesta conversacional si es una pregunta]
 
 REGLAS:
 - Si el usuario pregunta por la farmacia más cercana, farmacias cerca, dónde comprar, o cualquier variación de "qué farmacia queda cerca": clasifica como nearest_store. NO hagas preguntas — el sistema mostrará las farmacias más cercanas automáticamente. Si el usuario tiene historial de búsquedas o menciona una cadena preferida, puedes incluir un RESPONSE breve mencionándolo.
+- 🌐 NOMBRE EN INGLÉS: Si el usuario escribe un medicamento en inglés, tradúcelo al español farmacéutico en DRUG (ej: "amlodipine" → "amlodipino", "acetaminophen" → "acetaminofen", "ibuprofen" → "ibuprofeno", "omeprazole" → "omeprazol", "metformin" → "metformina"). Las farmacias venezolanas usan nombres en español.
 - Si el usuario pide CUALQUIER producto de farmacia (medicamentos, skincare, vitaminas, cuidado personal, belleza, higiene, bebé, etc.), clasifica como drug_search con el nombre en DRUG
 - Si el usuario pide un producto por nombre SIN mencionar síntomas (solo "aspirina", "omeprazol", "protector solar"), usa el nombre en DRUG y NO incluyas RESPONSE — busca directamente
 - Si mencionan SÍNTOMAS Y un producto (ej: "tengo dolor de cabeza, busca aspirina"): clasifica como drug_search, pon el producto mencionado en DRUG, incluye RESPONSE breve reconociendo el síntoma + "consulta con tu médico".
@@ -215,7 +216,11 @@ TOOL_DEFINITIONS: list[dict] = [
                 "query": {
                     "type": "string",
                     "description": (
-                        "Nombre del producto tal como lo escribió el usuario. "
+                        "Nombre del producto EN ESPAÑOL. Si el usuario escribe "
+                        "el nombre en inglés, tradúcelo al español farmacéutico "
+                        "(ej: 'amlodipine' → 'amlodipino', 'acetaminophen' → "
+                        "'acetaminofen', 'omeprazole' → 'omeprazol', "
+                        "'ibuprofen' → 'ibuprofeno', 'metformin' → 'metformina'). "
                         "Si menciona marca/laboratorio, combínalos "
                         "(ej: 'omeprazol lancasco', 'vitamina c mason natural')."
                     ),
@@ -523,6 +528,7 @@ REGLAS GENERALES:
 - NUNCA diagnostiques ni recomiendes dosis — sugiere consultar al médico.
 - ⚠️ EMERGENCIAS tienen PRIORIDAD MÁXIMA — report_emergency inmediatamente.
 - PRODUCTO + MARCA: Si el usuario menciona ambos, combínalos en query (ej: "ibuprofeno genfar" → query: "ibuprofeno genfar").
+- 🌐 NOMBRE EN INGLÉS: Si el usuario escribe un medicamento en inglés, tradúcelo al español en query (ej: "amlodipine" → "amlodipino", "acetaminophen" → "acetaminofen", "ibuprofen" → "ibuprofeno"). Las farmacias usan nombres en español.
 - 💰 MEJOR PRECIO en búsqueda nueva: Si el usuario pide 'busca losartan más barato', activa best_price en search_drug.
 - 💰 MEJOR PRECIO de búsqueda anterior: Si el usuario YA buscó algo y luego dice 'cuál es el más barato?', 'el más económico', usa get_cheapest.
 - 🏥 LA MÁS CERCANA (singular): Si el usuario pide 'la farmacia más cercana', usa find_nearest_stores con limit=1. Si dice 'farmacias cercanas' (plural), limit=5 (default)."""

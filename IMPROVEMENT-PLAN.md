@@ -615,6 +615,20 @@
 
 ---
 
+### Phase 24 — English Drug Name Translation
+
+### 116. AI-powered English-to-Spanish drug name translation
+- **Priority:** P2 — Search UX
+- **Problem:** Users sometimes search for medicines using English names (e.g., "amlodipine", "acetaminophen", "ibuprofen tablets") because they know them from international sources or packaging. Farmatodo's Algolia index uses Spanish names, so these searches return zero results. The system should detect English drug names and translate them to Spanish transparently.
+- **Status:** ✅ DONE (2026-05-26, v0.37.0)
+- **Solution:** Dual-path AI-powered translation:
+  1. **Zero-result fallback** — new `drug_translation.py` service calls Claude Haiku (temperature=0) when a search returns 0 results. If the query is an English drug name, it gets the Spanish INN equivalent and retries the search. User sees "🌐 Traduje *amlodipine* → *amlodipino*" notification.
+  2. **Proactive AI instructions** — updated `TOOL_USE_INSTRUCTIONS`, `CLASSIFY_INSTRUCTIONS`, and `search_drug` tool schema to tell the AI to translate English drug names to Spanish before searching.
+  - `TranslationResult` class returns token counts for accurate billing. Guards: length bounds (3-100 chars), empty content, trailing punctuation, API errors. 28 tests.
+- **Files:** `services/drug_translation.py` (new), `bot/handler.py`, `services/ai_responder.py`, `tests/test_drug_translation.py` (new)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -642,4 +656,5 @@
 | 21 — Admin UI Polish | 113 (1 item) | P2 | ~1 hour | ✅ DONE (v0.34.0) |
 | 22 — Admin Chat Capacity | 114 (1 item) | P1 | ~30 min | ✅ DONE (v0.35.0) |
 | 23 — Admin UI Friendly Names | 115 (1 item) | P2 | ~2 hours | ✅ DONE (v0.36.0) |
-| **Total** | **66 items** | | **~77 hours** | |
+| 24 — English Drug Name Translation | 116 (1 item) | P2 | ~2 hours | ✅ DONE (v0.37.0) |
+| **Total** | **67 items** | | **~79 hours** | |

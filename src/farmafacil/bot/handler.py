@@ -51,6 +51,7 @@ from farmafacil.services.intent import (
     classify_intent,
     classify_intent_keywords,
 )
+from farmafacil.services.drug_translation import translate_drug_query
 from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
 from farmafacil.services.search_feedback import (
     log_search,
@@ -2382,6 +2383,31 @@ async def _handle_drug_search(
         zone_name=search_zone,
     )
 
+    # ── English→Spanish drug name fallback (Item 116, v0.37.0) ─────────
+    # If zero results came back, the query might be an English drug name.
+    # Ask the AI (temperature=0) for a Spanish translation and retry once.
+    translated_from: str | None = None
+    if not response.results:
+        tr = await translate_drug_query(query)
+        if tr and tr.name.lower() != query.lower():
+            logger.info(
+                "Zero-result fallback: translating '%s' → '%s' for %s",
+                query, tr.name, sender,
+            )
+            # Track actual translation tokens
+            await increment_token_usage(
+                user.id, tr.input_tokens, tr.output_tokens, model=LLM_MODEL,
+            )
+            translated_from = query  # remember original for UX message
+            query = tr.name
+            response = await search_drug(
+                query=query,
+                city_code=search_city,
+                latitude=search_lat,
+                longitude=search_lng,
+                zone_name=search_zone,
+            )
+
     # ── Best-price filter: keep only the single cheapest in-stock result ──
     best_price_filtered = False
     if best_price and response.results:
@@ -2415,6 +2441,13 @@ async def _handle_drug_search(
     results_count = len(response.results) if response.results else 0
     search_log_id = await log_search(user.id, query, results_count, voice_message_id=voice_message_id)
     await update_last_search(sender, query, search_log_id)
+
+    # Notify user when a translation was used (Item 116, v0.37.0)
+    if translated_from and response.results:
+        await send_text_message(
+            sender,
+            f"\U0001f310 Traduje *{translated_from}* → *{query}* para buscarlo en farmacias.",
+        )
 
     # Send individual product images FIRST, then text summary below
     if response.results:
