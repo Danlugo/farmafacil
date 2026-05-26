@@ -693,6 +693,15 @@
 - **Solution:** Added `_FORM_GROUPS` dict mapping each of the 30 form words to a canonical group (oral_solid, topical, liquid_oral, injectable, inhaled, rectal, powder). New `_extract_form_groups()` helper extracts group sets from tokens. Signal 4 in `compute_relevance()`: if query specifies a form AND product has a different form group → score = 0.0. No penalty when query or product has no form. Same-group equivalences (pomada↔gel↔crema = topical, tabletas↔caps↔comp = oral_solid) work via set intersection. Updated one pre-existing test that asserted a now-incorrect match (pastillas vs injectable). 38 new tests.
 - **Files:** `src/farmafacil/services/relevance.py`, `tests/test_relevance.py`
 
+### Item 124: WhatsApp image analysis — prescription reader & medicine identifier
+- **Priority:** P1
+- **Effort:** High (~4 hours)
+- **Problem:** When users send photos via WhatsApp, the bot ignores them (only admin media is handled). Users need two capabilities: (1) send a photo of a doctor's prescription/recipe → bot reads it with Claude Vision, identifies medicines, translates medical terminology to plain Spanish, explains dosage/instructions, and offers to search for each medicine; (2) send a photo of medicine packaging (pill box, bottle) → bot identifies the medicine name and automatically searches for it in the pharmacy catalog.
+- **Status:** ✅ DONE (2026-05-26, v0.45.0)
+- **Fix:** New `services/image_analysis.py` — `analyze_image()` sends photo to Claude Vision with structured Spanish system prompt (TIPO: RECETA/MEDICAMENTO/DESCONOCIDO + MEDICAMENTOS: line). `_parse_vision_response()` extracts image type, user-facing text, and drug names (max 3). Handler flow: prescription → sends full analysis + searches each drug; medicine → identifies + auto-searches. Caption truncated to 200 chars (prompt injection guard). Response content guarded for empty/non-text. Truncation warning logged when max_tokens hit. Dead code `_extract_drug_name_from_image` removed.
+- **Files:** `src/farmafacil/services/image_analysis.py` (new), `src/farmafacil/bot/handler.py` (modified), `tests/test_image_analysis.py` (new, 32 tests), `tests/test_phase2_performance.py` (updated)
+- **Found by:** User request
+
 ---
 
 ## Summary
@@ -729,4 +738,5 @@
 | 28 — Location & Store Detail | 120-121 (2 items) | P1-P2 | ~1 hour | ✅ DONE (v0.42.0) |
 | 29 — Caption Field Labels | 122 (1 item) | P3 | ~30 min | ✅ DONE (v0.43.0) |
 | 30 — Form-Conflict Penalty | 123 (1 item) | P1 | ~1 hour | ✅ DONE (v0.44.0) |
-| **Total** | **74 items** | | **~84 hours** | |
+| 31 — Image Analysis | 124 (1 item) | P1 | ~4 hours | ✅ DONE (v0.45.0) |
+| **Total** | **75 items** | | **~88 hours** | |

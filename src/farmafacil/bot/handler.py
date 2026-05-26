@@ -884,7 +884,9 @@ async def handle_image_message(
         await _handle_admin_media(sender, user, data, actual_mime, caption)
         return
 
-    # ── Regular user: image → Vision → drug name → search ────────────
+    # ── Regular user: image → Vision → analysis/search ────────────────
+    # Item 124 (v0.45.0): Full image analysis — prescription reader +
+    # medicine identifier using Claude Vision.
     if actual_mime in SUPPORTED_IMAGE_TYPES:
         image_block = encode_image_for_vision(data, actual_mime)
         if image_block is None:
@@ -897,25 +899,77 @@ async def handle_image_message(
 
         await send_text_message(
             sender,
-            "\U0001f50d Analizando la imagen para identificar el medicamento...",
+            "\U0001f50d Analizando la imagen...",
         )
 
-        drug_name = await _extract_drug_name_from_image(image_block, caption)
-        if not drug_name:
+        from farmafacil.services.image_analysis import analyze_image
+
+        analysis = await analyze_image(image_block, caption)
+        if analysis is None or analysis.image_type == "unknown":
             await send_text_message(
                 sender,
-                "No pude identificar un medicamento en la imagen. "
+                "No pude identificar una receta ni un medicamento en la imagen. "
                 "Intenta con una foto más clara o envia el nombre por texto.",
             )
             return
 
-        await send_text_message(
-            sender,
-            f"\U0001f4ca Encontre: *{drug_name}*. Buscando disponibilidad...",
-        )
+        display_name = user.display_name or sender
 
-        # Trigger a drug search with the extracted name
-        await handle_incoming_message(sender, drug_name)
+        if analysis.image_type == "prescription":
+            # ── Prescription: send full analysis, then search each drug ──
+            if analysis.analysis_text:
+                await send_text_message(sender, analysis.analysis_text)
+
+            await _update_memory_safe(
+                user.id, display_name,
+                f"[foto de receta] {caption}" if caption else "[foto de receta]",
+                analysis.analysis_text[:200] if analysis.analysis_text else "receta analizada",
+            )
+
+            if analysis.drug_names:
+                search_msg = (
+                    "\n\U0001f50e *Buscando disponibilidad:*\n"
+                    + "\n".join(
+                        f"  {i+1}. {name}"
+                        for i, name in enumerate(analysis.drug_names)
+                    )
+                )
+                await send_text_message(sender, search_msg)
+                for drug_name in analysis.drug_names:
+                    await handle_incoming_message(sender, drug_name)
+            else:
+                await send_text_message(
+                    sender,
+                    "No pude extraer nombres de medicamentos claros de la receta. "
+                    "Envia el nombre del producto por texto y te lo busco.",
+                )
+            return
+
+        # ── Medicine photo: extract name and auto-search ────────────
+        if analysis.drug_names:
+            drug_name = analysis.drug_names[0]
+
+            if analysis.analysis_text:
+                await send_text_message(sender, analysis.analysis_text)
+
+            await send_text_message(
+                sender,
+                f"\U0001f50e Buscando *{drug_name}*...",
+            )
+
+            await _update_memory_safe(
+                user.id, display_name,
+                f"[foto de medicamento] {caption}" if caption else "[foto de medicamento]",
+                f"Identificado: {drug_name}",
+            )
+
+            await handle_incoming_message(sender, drug_name)
+        else:
+            await send_text_message(
+                sender,
+                "No pude identificar el medicamento en la imagen. "
+                "Intenta con una foto más clara o envia el nombre por texto.",
+            )
         return
 
     # ── Document (PDF/DOCX) — extract text for drug names ────────────
@@ -943,57 +997,9 @@ async def handle_image_message(
     )
 
 
-async def _extract_drug_name_from_image(
-    image_block: dict, caption: str = "",
-) -> str | None:
-    """Use Claude Vision to extract a drug name from a photo.
-
-    Sends the image to Claude with a targeted prompt asking for
-    the drug name visible in the image (prescription, drug box, label).
-
-    Returns:
-        The drug name string, or None if not found.
-    """
-    from farmafacil.config import ANTHROPIC_API_KEY
-    from farmafacil.services.ai_responder import _get_client
-    from farmafacil.services.settings import resolve_user_model
-
-    if not ANTHROPIC_API_KEY:
-        return None
-
-    content: list[dict] = [image_block]
-    user_text = (
-        "Mira esta imagen. Identifica el nombre del medicamento o producto "
-        "de farmacia que aparece. Responde SOLO con el nombre del producto "
-        "(sin dosis, sin marca, solo el nombre genérico o comercial principal). "
-        "Si hay varios, responde con el más prominente. "
-        "Si no puedes identificar ningún medicamento, responde: NONE"
-    )
-    if caption:
-        user_text += f"\n\nEl usuario también escribió: {caption}"
-
-    content.append({"type": "text", "text": user_text})
-
-    try:
-        # Resolve from app_settings so admin /model takes effect on Vision
-        # too. (v0.19.2, Item 49.)
-        resolved_model = await resolve_user_model()
-        client = _get_client()
-        response = await client.messages.create(
-            model=resolved_model,
-            max_tokens=100,
-            messages=[{"role": "user", "content": content}],
-        )
-        reply = response.content[0].text.strip()
-        logger.info("Vision drug extraction (model=%s): %s", resolved_model, reply[:100])
-
-        if reply.upper() == "NONE" or len(reply) > 100:
-            return None
-        return reply
-
-    except Exception as exc:
-        logger.error("Vision drug extraction failed: %s", exc)
-        return None
+    # _extract_drug_name_from_image removed in v0.45.0 (Item 124).
+    # Replaced by image_analysis.analyze_image() — full prescription
+    # reader & medicine identifier.
 
 
 async def _extract_drug_name_from_text(text: str) -> str | None:

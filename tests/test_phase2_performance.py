@@ -72,14 +72,17 @@ class TestAsyncAnthropicClient:
                 )
 
     def test_no_sync_anthropic_in_handler_extractors(self):
-        """handler.py vision/document extractors must use async client."""
+        """handler.py document extractor must use async client.
+
+        Note: _extract_drug_name_from_image was removed in v0.45.0 (Item 124),
+        replaced by image_analysis.analyze_image().
+        """
         import inspect
 
         from farmafacil.bot import handler
 
-        source = inspect.getsource(handler)
-        # Find _extract_drug_name_from_image and _extract_drug_name_from_text
-        for func_name in ("_extract_drug_name_from_image", "_extract_drug_name_from_text"):
+        # Only _extract_drug_name_from_text remains after Item 124.
+        for func_name in ("_extract_drug_name_from_text",):
             func = getattr(handler, func_name)
             func_source = inspect.getsource(func)
             assert "anthropic.Anthropic(" not in func_source, (

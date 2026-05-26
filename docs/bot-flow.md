@@ -358,6 +358,41 @@ audio msg → download_whatsapp_media(media_id)
 
 ---
 
+## Image Analysis — Prescription Reader & Medicine Identifier (v0.45.0)
+
+When a user sends an image, `handle_image_message()` uses Claude Vision to determine if it's a prescription or a medicine photo.
+
+```
+image msg → download_whatsapp_media(media_id)
+          → encode_image_for_vision(data, mime_type)
+          → send "🔍 Analizando la imagen..."
+          → analyze_image(image_block, caption)  ← Claude Vision API
+          → _parse_vision_response(reply)
+          → route by image_type:
+              "prescription" → send analysis text
+                             → send "Buscando disponibilidad:" list
+                             → handle_incoming_message(drug_name) × up to 3
+              "medicine"     → send analysis text
+                             → send "Buscando {drug_name}..."
+                             → handle_incoming_message(drug_name)
+              "unknown"/None → "No pude identificar una receta ni un medicamento"
+```
+
+**Service:** `services/image_analysis.py` — `analyze_image()` sends the image to Claude with a structured Spanish system prompt. The prompt instructs the model to output `TIPO: RECETA|MEDICAMENTO|DESCONOCIDO` on the first line and `MEDICAMENTOS: name1, name2, name3` on the last line. `_parse_vision_response()` extracts image type, user-facing text (everything between those markers), and drug names (capped at `MAX_DRUG_NAMES=3`).
+
+**Security:** User captions are truncated to 200 characters before inclusion in the Vision prompt (prompt injection guard). Response content is guarded for empty/non-text API responses. Truncation is logged when `stop_reason == "max_tokens"`.
+
+| Scenario | Bot response |
+|----------|-------------|
+| Prescription photo | Full analysis (drug names, doses, instructions in Spanish) + automatic search for each drug |
+| Medicine packaging | Drug identification + automatic search |
+| Unknown image | "No pude identificar una receta ni un medicamento..." |
+| Download fails | "No pude descargar el archivo..." |
+| Image too large | "La imagen es demasiado grande o no es compatible..." |
+| API failure | Same as unknown image fallback |
+
+---
+
 ## Store Lookup
 
 When a question comes in, the bot first tries to identify a pharmacy store name:
