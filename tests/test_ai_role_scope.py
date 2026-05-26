@@ -81,7 +81,7 @@ class TestPharmacyAdvisorRoleConfig:
         assert "product_scope" in rule_names
 
     def test_product_scope_rule_content(self, pharmacy_role):
-        """product_scope rule should instruct to always search pharmacy products."""
+        """product_scope rule should instruct to always use search_drug tool."""
         scope_rule = None
         for rule in pharmacy_role["rules"]:
             if rule["name"] == "product_scope":
@@ -90,7 +90,7 @@ class TestPharmacyAdvisorRoleConfig:
         assert scope_rule is not None
         content_lower = scope_rule["content"].lower()
         assert "siempre" in content_lower
-        assert "drug_search" in content_lower
+        assert "search_drug" in content_lower
 
 
 class TestFallbackPrompt:

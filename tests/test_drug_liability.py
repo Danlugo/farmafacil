@@ -578,17 +578,17 @@ class TestThreeLayerConsistency:
 
     # ── Symptom-only = question, NOT drug_search ──
 
-    def test_rule_says_symptom_only_is_question(self):
-        """Layer 1: no_drug_recommendations rule says symptom-only = question."""
+    def test_rule_says_symptom_only_is_general_reply(self):
+        """Layer 1: no_drug_recommendations rule says symptom-only = general_reply (not search_drug)."""
         content = self._get_rule_content("no_drug_recommendations")
-        assert "question" in content.lower() or "NO drug_search" in content
+        assert "general_reply" in content or "NO uses search_drug" in content
         assert "NO elijas un medicamento por el usuario" in content
 
-    def test_skill_says_symptom_only_is_question(self):
-        """Layer 2: symptom_acknowledgment skill says symptom-only = question."""
+    def test_skill_says_symptom_only_uses_general_reply(self):
+        """Layer 2: symptom_acknowledgment skill says symptom-only = general_reply (not search_drug)."""
         content = self._get_skill_content("symptom_acknowledgment")
-        assert "question" in content.lower()
-        assert "NUNCA como 'drug_search'" in content or "NO drug_search" in content or "NO como drug_search" in content or "NUNCA como drug_search" in content
+        assert "general_reply" in content
+        assert "NUNCA uses search_drug" in content
 
     def test_classify_says_symptom_only_is_question(self):
         """Layer 3: CLASSIFY_INSTRUCTIONS says specific symptom-only = question."""
@@ -646,6 +646,30 @@ class TestThreeLayerConsistency:
         assert "OTC" in skill or "opciones" in skill.lower(), "Skill doesn't mention OTC options"
         assert "OTC" in instructions or "opciones" in instructions.lower(), \
             "Classify doesn't mention OTC options"
+
+    # ── Tool_use path also consistent ──
+
+    def test_tool_use_instructions_symptom_uses_general_reply(self):
+        """Tool_use path (TOOL_USE_INSTRUCTIONS) says symptom-only = general_reply."""
+        from farmafacil.services.ai_responder import TOOL_USE_INSTRUCTIONS
+        assert "general_reply" in TOOL_USE_INSTRUCTIONS, \
+            "TOOL_USE_INSTRUCTIONS must reference general_reply for symptom-only flow"
+
+    def test_product_scope_rule_uses_search_drug(self):
+        """product_scope rule must reference search_drug (tool_use), not 'drug_search' (hybrid)."""
+        content = self._get_rule_content("product_scope")
+        assert "search_drug" in content, \
+            "product_scope rule must reference search_drug tool, not hybrid 'drug_search'"
+        assert "clasifícalo como drug_search" not in content, \
+            "product_scope must NOT contain hybrid-mode 'clasifícalo como drug_search'"
+
+    def test_emergency_redirect_uses_report_emergency(self):
+        """emergency_redirect skill must reference report_emergency tool."""
+        content = self._get_skill_content("emergency_redirect")
+        assert "report_emergency" in content, \
+            "emergency_redirect must reference report_emergency tool"
+        assert "ACTION: emergency" not in content, \
+            "emergency_redirect must NOT contain hybrid-mode 'ACTION: emergency'"
 
 
 # ── Item 44: Clarify-before-pharmacy-API discipline ──────────────────────
@@ -708,10 +732,10 @@ class TestVagueCategoryClarification:
             "Clarify rule should mention API-call discipline as motivation"
 
     def test_product_guidance_defers_to_clarify_for_new_categories(self):
-        """seed.py product_guidance rule must point multi-brand categories to clarify_needed."""
+        """seed.py product_guidance skill must point multi-brand categories to ask_clarification."""
         content = self._get_product_guidance_skill()
-        assert "clarify_needed" in content.lower() or "CLARIFY_NEEDED" in content, (
-            "product_guidance must reference clarify_needed for multi-brand categories — "
+        assert "ask_clarification" in content, (
+            "product_guidance must reference ask_clarification for multi-brand categories — "
             "otherwise the two layers contradict each other and the AI behaves unpredictably"
         )
         # Each new category should appear in the precedence list
@@ -722,10 +746,10 @@ class TestVagueCategoryClarification:
                 f"product_guidance skill missing {short!r} in clarify-precedence list"
             )
 
-    def test_product_guidance_keeps_simple_categories_as_drug_search(self):
-        """Single-variant categories (protector solar, pañales) still go to drug_search."""
+    def test_product_guidance_keeps_simple_categories_as_search_drug(self):
+        """Single-variant categories (protector solar, pañales) still go to search_drug."""
         content = self._get_product_guidance_skill()
         # These are NOT in the clarify list — they should still be searched directly.
         assert "protector solar" in content.lower()
         assert "pañales" in content.lower()
-        assert "drug_search" in content
+        assert "search_drug" in content

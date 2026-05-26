@@ -572,6 +572,14 @@
 - **Files:** `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`
 - **Code review fix:** `validate_search_results` exception branch returned 3-tuple instead of 4-tuple — fixed to `(results, 0, 0, "")` in ai_responder.py.
 
+### 112. Rewrite DB skills/rules for tool_use mode
+- **Priority:** P1 — AI Quality
+- **Problem:** 10 of 14 pharmacy_advisor skills and 1 rule (`product_scope`) contained hybrid-mode classification instructions ("clasifica como drug_search", "ACTION: emergency", "DRUG:", "CLARIFY_NEEDED") that conflicted with tool_use mode where the AI calls tools directly. The AI received contradictory routing instructions.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Rewrote all 11 seed entries to reference tool names: `search_drug`, `general_reply`, `ask_clarification`, `report_emergency`, `find_nearest_stores`, `get_cheapest`. Added call-syntax examples (e.g. `search_drug(query=..., preamble=...)`). Updated 6 test assertions and added 3 new contract tests (product_scope uses search_drug, emergency_redirect uses report_emergency, TOOL_USE_INSTRUCTIONS references general_reply).
+- **Files:** `src/farmafacil/db/seed.py`, `tests/test_drug_liability.py`, `tests/test_ai_role_scope.py`
+- **Code review fix:** Caught missed `product_scope` rule still using hybrid-mode format.
+
 ---
 
 ## Summary
@@ -597,4 +605,5 @@
 | 17 — AI-Only Tool-Use | 105 (1 item) | P1 | ~3 hours | ✅ DONE (v0.30.0) |
 | 18 — AI Tool Coverage + Validation | 106-108 (3 items) | P1-P2 | ~3 hours | ✅ DONE (v0.31.0) |
 | 19 — AI Interaction Completeness | 109-111 (3 items) | P2 | ~2 hours | ✅ DONE (v0.32.0) |
-| **Total** | **62 items** | | **~72 hours** | |
+| 20 — Skill Tool-Use Alignment | 112 (1 item) | P1 | ~1 hour | ✅ DONE (v0.33.0) |
+| **Total** | **63 items** | | **~73 hours** | |
