@@ -235,6 +235,34 @@ _NAME_NOISE = frozenset({
     "la", "el", "los", "las", "del", "de", "y", "en",
 })
 
+# Conversational prefixes users type during onboarding that Nominatim
+# cannot parse. "En la Lagunita" → 0 results, "La Lagunita" → found.
+# Alternation options don't share prefixes so match order is irrelevant.
+# Only stripped as a LEADING prefix (not mid-string), and only when the
+# remainder is non-empty and at least 3 characters (to avoid stripping
+# conversational phrases like "por favor" or "en casa" that aren't places).
+_LOCATION_PREFIX_RE = _re_normalize.compile(
+    r"^(?:(?:estoy\s+)?(?:en|por|cerca\s+de|vivo\s+en|soy\s+de)\s+)",
+    _re_normalize.IGNORECASE,
+)
+
+
+def _strip_location_prefix(text: str) -> str:
+    """Remove conversational Spanish prefixes from a location query.
+
+    Users in onboarding type "En la Lagunita" or "vivo en El Hatillo"
+    but Nominatim needs just the place name. Stripping the prefix lets
+    the geocoder find the actual place.
+
+    Returns the original text if stripping would leave an empty string
+    or a remainder shorter than 3 characters (to avoid false positives
+    on phrases like "por favor" or "en casa").
+    """
+    stripped = _LOCATION_PREFIX_RE.sub("", text).strip()
+    if stripped and len(stripped) >= 3:
+        return stripped
+    return text.strip()
+
 
 def _name_matches_query(query: str, display_name: str | None) -> bool:
     """Token-overlap check: does the result mention what the user asked?
@@ -379,6 +407,22 @@ async def resolve(
 
     # Miss — call Nominatim through the existing geocode module.
     raw = await _nominatim_search(query)
+
+    # Retry with stripped conversational prefix if the raw query returned
+    # nothing. Users type "En la Lagunita" or "vivo en El Hatillo" during
+    # onboarding; Nominatim cannot parse the "En"/"vivo en" prefix and
+    # returns 0 results, even though "La Lagunita" resolves fine.
+    used_stripped = False
+    if not raw:
+        cleaned = _strip_location_prefix(query)
+        if cleaned != query.strip():
+            logger.debug(
+                "location.resolve retrying with stripped prefix: %r → %r",
+                query, cleaned,
+            )
+            raw = await _nominatim_search(cleaned)
+            used_stripped = bool(raw)
+
     if not raw:
         return None
 
@@ -416,6 +460,15 @@ async def resolve(
         ],
     )
     await _cache_put(h, query, "forward", result)
+
+    # Also cache under the stripped query so future users typing the
+    # plain form (e.g., "La Lagunita" after someone typed "En la Lagunita")
+    # get an instant cache hit without a Nominatim call.
+    if used_stripped:
+        _, stripped_h = _forward_key(cleaned)
+        if stripped_h != h:
+            await _cache_put(stripped_h, cleaned, "forward", result)
+
     return result
 
 

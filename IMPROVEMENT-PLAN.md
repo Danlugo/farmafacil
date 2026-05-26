@@ -486,6 +486,14 @@
 - **Files:** `src/farmafacil/bot/formatter.py`, `src/farmafacil/bot/handler.py`, `tests/test_zero_price_display.py` (new, 18 tests)
 - **Tests:** 18 new tests — 8 for _format_price (zero/None/normal/discount/negative), 4 for format_search_results store-level, 6 for _build_product_caption image captions
 
+### Item 102: Strip conversational prefixes from onboarding geocode queries
+- **Priority:** P1 — Bug Fix
+- **Problem:** Users typing "En la Lagunita" during onboarding got "No logré ubicar esa zona" because Nominatim cannot parse the Spanish conversational prefix "En". The same happens with "en la Boyera", "por El Hatillo", "vivo en Altamira", etc. "La Lagunita" (without prefix) resolves fine. Reported by Carolina during test onboarding.
+- **Status:** ✅ DONE (v0.29.2, 2026-05-22)
+- **Solution:** Added `_strip_location_prefix()` in location.py with regex matching common Spanish conversational prefixes (en, por, cerca de, vivo en, soy de, estoy en/por). When `resolve()` gets 0 Nominatim results, it retries with the stripped query. 3-char minimum guard prevents false positives on phrases like "por favor". Stripped form also cached to prevent duplicate Nominatim calls. Code review: fixed fragile mock discriminator, moved cleaned computation inside retry block, added dual-cache for stripped form.
+- **Files:** `src/farmafacil/services/location.py`, `tests/test_location.py` (15 new tests)
+- **Tests:** 15 new tests — 12 for prefix stripping (all supported prefixes, plain names, edge cases, case insensitive), 3 for resolve retry (retry succeeds, no-retry, both-fail)
+
 ---
 
 ## Summary
@@ -505,4 +513,5 @@
 | 11 — Relay Context Fix | 99 (1 item) | P1 | ~1 hour | ✅ DONE (v0.28.1) |
 | 12 — Search Relevance Fix | 100 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.0) |
 | 13 — Zero-Price Display | 101 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.1) |
-| **Total** | **52 items** | | **~61 hours** | |
+| 14 — Geocode Prefix Fix | 102 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.2) |
+| **Total** | **53 items** | | **~62 hours** | |

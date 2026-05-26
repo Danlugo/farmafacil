@@ -22,6 +22,7 @@ from farmafacil.services.location import (
     _name_matches_query,
     _normalize,
     _reverse_key,
+    _strip_location_prefix,
     cleanup_expired_cache,
     geocode_health,
     resolve,
@@ -569,3 +570,146 @@ class TestCleanupExpiredCache:
             ).first()
             assert still is not None
             assert gone is None
+
+
+# ── _strip_location_prefix ───────────────────────────────────────────
+
+
+class TestStripLocationPrefix:
+    """Strip conversational Spanish prefixes from location queries."""
+
+    def test_en_la_lagunita(self):
+        """'En la Lagunita' → 'la Lagunita' — the production bug."""
+        assert _strip_location_prefix("En la Lagunita") == "la Lagunita"
+
+    def test_en_el_hatillo(self):
+        assert _strip_location_prefix("en el hatillo") == "el hatillo"
+
+    def test_en_chacao(self):
+        assert _strip_location_prefix("en Chacao") == "Chacao"
+
+    def test_por_la_boyera(self):
+        assert _strip_location_prefix("por La Boyera") == "La Boyera"
+
+    def test_cerca_de_plaza_venezuela(self):
+        assert _strip_location_prefix("cerca de Plaza Venezuela") == "Plaza Venezuela"
+
+    def test_vivo_en_altamira(self):
+        assert _strip_location_prefix("vivo en Altamira") == "Altamira"
+
+    def test_soy_de_maracaibo(self):
+        assert _strip_location_prefix("soy de Maracaibo") == "Maracaibo"
+
+    def test_estoy_en_la_boyera(self):
+        assert _strip_location_prefix("estoy en La Boyera") == "La Boyera"
+
+    def test_estoy_por_el_cafetal(self):
+        assert _strip_location_prefix("estoy por El Cafetal") == "El Cafetal"
+
+    def test_plain_name_unchanged(self):
+        """A plain place name without prefix is returned as-is."""
+        assert _strip_location_prefix("La Boyera") == "La Boyera"
+
+    def test_empty_after_strip_returns_original(self):
+        """If stripping leaves nothing, return original."""
+        # "en" alone — the regex matches but remainder is empty
+        assert _strip_location_prefix("en") == "en"
+
+    def test_case_insensitive(self):
+        assert _strip_location_prefix("EN LA LAGUNITA") == "LA LAGUNITA"
+        assert _strip_location_prefix("VIVO EN El Hatillo") == "El Hatillo"
+
+
+class TestResolveWithPrefix:
+    """resolve() retries with stripped prefix when raw query returns nothing."""
+
+    @pytest.mark.asyncio
+    async def test_en_la_lagunita_retries_and_succeeds(self):
+        """'En la Lagunita' fails Nominatim, but 'la Lagunita' succeeds."""
+        from sqlalchemy import delete as sa_delete
+        async with async_session() as session:
+            await session.execute(sa_delete(GeocodeCache))
+            await session.commit()
+
+        lagunita_hit = [
+            {
+                "lat": "10.4245",
+                "lon": "-66.8095",
+                "display_name": "La Lagunita, Caracas, Municipio El Hatillo, Miranda, Venezuela",
+                "importance": 0.16,
+                "name": "La Lagunita",
+                "address": {"state": "Miranda", "country_code": "ve"},
+            }
+        ]
+
+        call_count = 0
+        queries_seen = []
+
+        async def mock_search(query):
+            nonlocal call_count
+            call_count += 1
+            queries_seen.append(query)
+            # Raw query with prefix → empty; stripped form → hit
+            return [] if query == "En la Lagunita" else lagunita_hit
+
+        with patch(
+            "farmafacil.services.location._nominatim_search",
+            side_effect=mock_search,
+        ):
+            result = await resolve("En la Lagunita")
+
+        assert result is not None
+        assert result.zone_name == "La Lagunita"
+        assert call_count == 2
+        assert len(queries_seen) == 2
+
+    @pytest.mark.asyncio
+    async def test_plain_name_no_retry(self):
+        """'La Boyera' succeeds on first try — no retry needed."""
+        from sqlalchemy import delete as sa_delete
+        async with async_session() as session:
+            await session.execute(sa_delete(GeocodeCache))
+            await session.commit()
+
+        boyera_hit = [
+            {
+                "lat": "10.4258",
+                "lon": "-66.8422",
+                "display_name": "La Boyera, Caracas, Miranda, Venezuela",
+                "importance": 0.35,
+                "name": "La Boyera",
+                "address": {"state": "Miranda", "country_code": "ve"},
+            }
+        ]
+
+        call_count = 0
+
+        async def mock_search(query):
+            nonlocal call_count
+            call_count += 1
+            return boyera_hit
+
+        with patch(
+            "farmafacil.services.location._nominatim_search",
+            side_effect=mock_search,
+        ):
+            result = await resolve("La Boyera")
+
+        assert result is not None
+        assert call_count == 1  # No retry — first call succeeded
+
+    @pytest.mark.asyncio
+    async def test_both_fail_returns_none(self):
+        """If both raw and stripped queries fail, returns None."""
+        from sqlalchemy import delete as sa_delete
+        async with async_session() as session:
+            await session.execute(sa_delete(GeocodeCache))
+            await session.commit()
+
+        with patch(
+            "farmafacil.services.location._nominatim_search",
+            return_value=[],
+        ):
+            result = await resolve("en Planeta Marte")
+
+        assert result is None
