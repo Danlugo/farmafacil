@@ -1,6 +1,7 @@
 """User service — manage user registration, location, and preferences."""
 
 import logging
+import re
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -11,11 +12,21 @@ from farmafacil.models.database import User
 logger = logging.getLogger(__name__)
 
 
-async def get_or_create_user(phone_number: str) -> User:
+async def get_or_create_user(
+    phone_number: str,
+    wa_profile_name: str = "",
+) -> User:
     """Get an existing user or create a new one (starts onboarding).
+
+    If *wa_profile_name* is provided and this is a brand-new user, the
+    name is pre-filled from the WhatsApp contact profile so the bot can
+    skip the "¿Cómo te llamas?" step and go straight to asking for
+    location.
 
     Args:
         phone_number: WhatsApp phone number with country code.
+        wa_profile_name: Optional display name from WhatsApp profile or
+            Chamo relay ``sender_name``.
 
     Returns:
         The User record.
@@ -27,13 +38,54 @@ async def get_or_create_user(phone_number: str) -> User:
         user = result.scalar_one_or_none()
 
         if user is None:
-            user = User(phone_number=phone_number, onboarding_step="welcome")
+            # Pre-fill name from WhatsApp profile when available.
+            # Extract first name (Johnny Alejandro Gonzalez → Johnny).
+            name = _extract_first_name(wa_profile_name) if wa_profile_name else ""
+            if name:
+                user = User(
+                    phone_number=phone_number,
+                    name=name,
+                    onboarding_step="welcome_named",
+                )
+                logger.info(
+                    "New user created: %s (name pre-filled: %s)",
+                    phone_number, name,
+                )
+            else:
+                user = User(
+                    phone_number=phone_number,
+                    onboarding_step="welcome",
+                )
+                logger.info("New user created: %s", phone_number)
             session.add(user)
             await session.commit()
             await session.refresh(user)
-            logger.info("New user created: %s", phone_number)
 
         return user
+
+
+def _extract_first_name(full_name: str) -> str:
+    """Extract a clean first name from a WhatsApp profile name.
+
+    WhatsApp profile names can be anything: full legal names, nicknames,
+    business names, emoji-laden strings, or phone numbers.  We extract
+    the first word if it looks like a real name and ignore the rest.
+
+    Returns:
+        A title-cased first name, or empty string if unusable.
+    """
+    # Strip whitespace and non-printable chars
+    cleaned = full_name.strip()
+    if not cleaned:
+        return ""
+    # Take the first word
+    first = cleaned.split()[0].strip()
+    # Remove any non-letter characters (emoji, numbers, punctuation)
+    first = re.sub(r"[^a-zA-ZáéíóúñÁÉÍÓÚÑüÜ]", "", first)
+    # Must be 2-20 chars and look like a name
+    if len(first) < 2 or len(first) > 20:
+        return ""
+    return first.title()
 
 
 async def _get_user(phone_number: str) -> User:

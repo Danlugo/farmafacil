@@ -105,7 +105,8 @@ class ChatRequest(BaseModel):
     )
     sender_name: str = Field(
         "", max_length=100,
-        description="Display name of the sender (reserved for future onboarding pre-fill; currently logged but not used by the handler)",
+        description="Display name of the sender — used to pre-fill the user's "
+        "name during onboarding so the bot can greet them by name.",
     )
     text: str = Field(
         ..., min_length=1, max_length=2000,
@@ -204,6 +205,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         await handle_incoming_message(
             sender=body.sender_id,
             message_text=body.text,
+            wa_profile_name=body.sender_name,
         )
     except Exception:
         logger.error(
@@ -249,7 +251,8 @@ async def chat_voice(
 
     Args:
         sender_id: Phone number identifying the user (e.g. ``'584127006823'``).
-        sender_name: Display name of the sender (reserved for future use).
+        sender_name: Display name of the sender — used to pre-fill the
+            user's name during onboarding.
         audio: The audio file bytes (OGG, MP3, M4A, etc.).
 
     Returns:
@@ -280,7 +283,7 @@ async def chat_voice(
 
     # --- 2. Get or create the user ----------------------------------------
     try:
-        user = await get_or_create_user(sender_id)
+        user = await get_or_create_user(sender_id, wa_profile_name=sender_name)
         user = await validate_user_profile(user)
     except Exception:
         logger.error(
@@ -366,6 +369,7 @@ async def chat_voice(
             sender=sender_id,
             message_text=transcription,
             voice_message_id=voice_msg_id,
+            wa_profile_name=sender_name,
         )
     except Exception:
         logger.error(

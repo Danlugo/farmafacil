@@ -14,6 +14,13 @@ MSG_WELCOME = (
     "*¿Cómo te llamas?*"
 )
 
+MSG_WELCOME_NAMED = (
+    "\U0001f48a *¡Hola {name}! Soy FarmaFacil*\n\n"
+    "Te ayudo a encontrar productos en farmacias de Venezuela.\n\n"
+    "*¿En qué zona o barrio estás?*\n"
+    "Ejemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+)
+
 MSG_ASK_LOCATION = (
     "¡Mucho gusto *{name}*! \U0001f91d\n\n"
     "*¿En qué zona o barrio estás?*\n"

@@ -360,11 +360,13 @@ class TestHandleVoiceMessage:
             assert "losartan" in ack_msg
 
             # Should process transcription as text — voice_message_id
-            # is None here because the mock DB session doesn't assign an ID
+            # is None here because the mock DB session doesn't assign an ID.
+            # wa_profile_name is empty because none was passed to handle_voice_message.
             mock_handle.assert_called_once_with(
                 "14258904657", "necesito losartan",
                 wa_message_id="wamid.ok",
                 voice_message_id=None,
+                wa_profile_name="",
             )
 
 

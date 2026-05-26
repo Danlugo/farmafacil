@@ -29,11 +29,11 @@ POST /webhook
 
 ## Onboarding Flow
 
-New users go through a 4-step wizard. Each step is stored in `users.onboarding_step`.
+New users go through a 3-to-4-step wizard depending on whether the WhatsApp profile name is available. Each step is stored in `users.onboarding_step`.
 
-### Step 1: Welcome (`step = "welcome"`)
+### Step 1a: Welcome (`step = "welcome"`)
 
-Triggered on the very first message from any phone number.
+Triggered on the very first message from a phone number **when the WhatsApp profile name is missing or unusable** (emoji-only, single character, phone number, etc.).
 
 **Bot sends:**
 > Hola! Soy FarmaFacil
@@ -41,6 +41,25 @@ Triggered on the very first message from any phone number.
 > Como te llamas?
 
 **Side effect:** Step advances to `awaiting_name`.
+
+### Step 1b: Welcome Named (`step = "welcome_named"`)
+
+Triggered on the very first message from a phone number **when the WhatsApp profile name is available**. The name is pre-filled from `contacts[0].profile.name` in the webhook payload (or `sender_name` from the Chamo relay API). Only the first name is extracted (e.g., "Johnny Alejandro Gonzalez" → "Johnny") via `_extract_first_name()` in `users.py`.
+
+**Bot sends:**
+> 💊 ¡Hola Johnny! Soy FarmaFacil
+> Te ayudo a encontrar productos en farmacias de Venezuela.
+> ¿En qué zona o barrio estás?
+
+**Side effect:** Step advances to `awaiting_location`. The handler **falls through** to the `awaiting_location` handler in the same request, so if the user's first message contains a zone name (e.g., "Vivo en Los Naranjos"), it gets processed immediately without a wasted round-trip.
+
+**Name extraction rules** (`_extract_first_name()`):
+- Takes first word of profile name
+- Strips non-letter characters (emoji, numbers, punctuation)
+- Allows Spanish characters (á, é, í, ó, ú, ñ, ü)
+- Must be 2-20 characters after cleaning
+- Title-cased (e.g., "JOHNNY" → "Johnny")
+- Returns empty string if unusable → falls back to Step 1a
 
 ---
 

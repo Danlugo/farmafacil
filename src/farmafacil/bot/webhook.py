@@ -213,6 +213,18 @@ async def receive_webhook(request: Request) -> dict | Response:
         for change in entry.get("changes", []):
             value = change.get("value", {})
 
+            # Extract WhatsApp profile name from contacts array.
+            # Meta sends: {"contacts": [{"profile": {"name": "..."}}]}
+            # Used to pre-fill the user's name during onboarding so we
+            # can skip the "¿Cómo te llamas?" step.
+            _contacts = value.get("contacts", [])
+            wa_profile_name = ""
+            if _contacts:
+                # Use ``or ""`` to coerce explicit JSON null → empty string.
+                wa_profile_name = (
+                    _contacts[0].get("profile", {}).get("name") or ""
+                )
+
             for message in value.get("messages", []):
                 sender = message.get("from", "")
                 msg_type = message.get("type", "")
@@ -250,7 +262,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                     # Dispatch handler as background task — return 200 immediately
                     _fire_and_forget(
                         _safe_handle(
-                            handle_incoming_message(sender, text, wa_message_id=wa_id),
+                            handle_incoming_message(
+                                sender, text,
+                                wa_message_id=wa_id,
+                                wa_profile_name=wa_profile_name,
+                            ),
                             sender, wa_id, clear_reaction=True,
                         )
                     )
@@ -295,7 +311,11 @@ async def receive_webhook(request: Request) -> dict | Response:
 
                     _fire_and_forget(
                         _safe_handle(
-                            handle_location_message(sender, lat, lng, wa_message_id=wa_id),
+                            handle_location_message(
+                                sender, lat, lng,
+                                wa_message_id=wa_id,
+                                wa_profile_name=wa_profile_name,
+                            ),
                             sender, wa_id, clear_reaction=True,
                         )
                     )
@@ -360,6 +380,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                                 handle_image_message(
                                     sender, media_id, mime_type,
                                     caption=caption, wa_message_id=wa_id,
+                                    wa_profile_name=wa_profile_name,
                                 ),
                                 sender, wa_id, clear_reaction=True,
                             )
@@ -390,6 +411,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                                 handle_image_message(
                                     sender, media_id, mime_type,
                                     caption=caption or filename, wa_message_id=wa_id,
+                                    wa_profile_name=wa_profile_name,
                                 ),
                                 sender, wa_id, clear_reaction=True,
                             )
@@ -415,7 +437,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                     if media_id:
                         _fire_and_forget(
                             _safe_handle(
-                                handle_voice_message(sender, media_id, wa_message_id=wa_id),
+                                handle_voice_message(
+                                    sender, media_id,
+                                    wa_message_id=wa_id,
+                                    wa_profile_name=wa_profile_name,
+                                ),
                                 sender, wa_id, clear_reaction=True,
                             )
                         )

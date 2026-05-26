@@ -700,6 +700,7 @@ async def handle_voice_message(
     sender: str,
     media_id: str,
     wa_message_id: str | None = None,
+    wa_profile_name: str = "",
 ) -> None:
     """Handle a voice note sent via WhatsApp.
 
@@ -711,6 +712,8 @@ async def handle_voice_message(
         sender: WhatsApp phone number.
         media_id: WhatsApp media ID for downloading the audio.
         wa_message_id: WhatsApp message ID for read receipts.
+        wa_profile_name: Optional WhatsApp profile display name for
+            onboarding pre-fill (see ``get_or_create_user``).
     """
     from farmafacil.services.media import download_whatsapp_media
     from farmafacil.services.voice import (
@@ -723,7 +726,7 @@ async def handle_voice_message(
     if wa_message_id:
         asyncio.create_task(send_read_receipt(sender, wa_message_id))
 
-    user = await get_or_create_user(sender)
+    user = await get_or_create_user(sender, wa_profile_name=wa_profile_name)
     user = await validate_user_profile(user)
 
     # Download the audio file from WhatsApp
@@ -816,6 +819,7 @@ async def handle_voice_message(
         sender, transcription,
         wa_message_id=wa_message_id,
         voice_message_id=voice_msg.id,
+        wa_profile_name=wa_profile_name,
     )
 
 
@@ -825,6 +829,7 @@ async def handle_image_message(
     mime_type: str,
     caption: str = "",
     wa_message_id: str | None = None,
+    wa_profile_name: str = "",
 ) -> None:
     """Handle an image or document sent via WhatsApp.
 
@@ -840,6 +845,8 @@ async def handle_image_message(
         mime_type: MIME type of the media.
         caption: Optional caption text from the user.
         wa_message_id: WhatsApp message ID for read receipts.
+        wa_profile_name: Optional WhatsApp profile display name for
+            onboarding pre-fill (see ``get_or_create_user``).
     """
     from farmafacil.services.media import (
         ALL_IMAGE_TYPES,
@@ -851,7 +858,8 @@ async def handle_image_message(
     if wa_message_id:
         asyncio.create_task(send_read_receipt(sender, wa_message_id))
 
-    user = await get_or_create_user(sender)
+    user = await get_or_create_user(sender, wa_profile_name=wa_profile_name)
+    user = await validate_user_profile(user)
 
     # Download the media
     result = await download_whatsapp_media(media_id)
@@ -1236,6 +1244,7 @@ async def handle_location_message(
     latitude: float,
     longitude: float,
     wa_message_id: str = "",
+    wa_profile_name: str = "",
 ) -> None:
     """Handle an inbound WhatsApp location pin share.
 
@@ -1258,8 +1267,10 @@ async def handle_location_message(
         latitude: Latitude from the WhatsApp location payload.
         longitude: Longitude from the WhatsApp location payload.
         wa_message_id: The WhatsApp message ID (for read receipts).
+        wa_profile_name: Optional WhatsApp profile display name for
+            onboarding pre-fill (see ``get_or_create_user``).
     """
-    user = await get_or_create_user(sender)
+    user = await get_or_create_user(sender, wa_profile_name=wa_profile_name)
     user = await validate_user_profile(user)
 
     # Blue checks + typing bubble (fire-and-forget)
@@ -1304,7 +1315,9 @@ async def handle_location_message(
             )
             return
 
-        # Onboarding complete
+        # Onboarding complete — if the user had a pre-filled name
+        # (welcome_named step) they haven't been greeted yet, so
+        # MSG_READY serves as both greeting and completion banner.
         await send_text_message(
             sender, MSG_READY.format(name=user.name or "amigo"),
         )
@@ -1400,6 +1413,7 @@ async def handle_incoming_message(
     message_text: str,
     wa_message_id: str = "",
     voice_message_id: int | None = None,
+    wa_profile_name: str = "",
 ) -> None:
     """Process an incoming WhatsApp message with smart profile detection.
 
@@ -1412,12 +1426,16 @@ async def handle_incoming_message(
         wa_message_id: The WhatsApp message ID (for read receipts).
         voice_message_id: Optional ID of the voice message that originated
             this text (threaded to search_logs/user_feedback/user_suggestions).
+        wa_profile_name: Optional WhatsApp profile display name from the
+            webhook ``contacts`` array.  Used to pre-fill the user's name
+            during onboarding so the bot can greet them by name instead
+            of asking "¿Cómo te llamas?".
     """
     text = message_text.strip()
     if not text:
         return
 
-    user = await get_or_create_user(sender)
+    user = await get_or_create_user(sender, wa_profile_name=wa_profile_name)
     user = await validate_user_profile(user)
     step = user.onboarding_step
     text_lower = text.lower()
@@ -1669,6 +1687,20 @@ async def handle_incoming_message(
         await set_onboarding_step(sender, "awaiting_name")
         await send_text_message(sender, MSG_WELCOME)
         return
+
+    # ── Pre-filled name from WhatsApp profile (Item 126, v0.46.0) ────
+    # When get_or_create_user detects the contact's profile name, it
+    # pre-fills user.name and sets step to "welcome_named".  We greet
+    # the user by name, advance to awaiting_location, and then
+    # fall through to the awaiting_location handler so their first
+    # message (which may already contain a zone name) is processed
+    # immediately — no wasted round-trip.
+    if step == "welcome_named":
+        await send_text_message(
+            sender, MSG_WELCOME_NAMED.format(name=user.name or "amigo"),
+        )
+        await set_onboarding_step(sender, "awaiting_location")
+        step = "awaiting_location"  # fall through to location handler below
 
     if step == "awaiting_name":
         # Always use AI here to distinguish greetings from actual names

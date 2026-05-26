@@ -713,6 +713,19 @@
 
 ---
 
+## Phase 33 — WhatsApp Profile Name Pre-Fill (v0.46.0)
+
+### Item 126: Auto-detect WhatsApp profile name to skip onboarding name step
+- **Priority:** P2
+- **Effort:** Medium (~2 hours)
+- **Problem:** When a new user messages the bot, it always asks "¿Cómo te llamas?" even though WhatsApp provides the contact's display name in the webhook payload (`contacts[0].profile.name`). This adds an unnecessary step to onboarding.
+- **Status:** ✅ DONE (2026-05-26, v0.46.0)
+- **Fix:** `get_or_create_user()` now accepts `wa_profile_name` — when available, `_extract_first_name()` extracts a clean first name (first word, letters only, 2-20 chars, Spanish accents allowed, title-cased). If valid, user is created with `name=extracted_name` and `onboarding_step="welcome_named"` (new step). Handler sends personalized greeting (`MSG_WELCOME_NAMED`) and falls through to `awaiting_location` handler so the first message can contain a zone name. All 4 handler entry points (`handle_incoming_message`, `handle_image_message`, `handle_location_message`, `handle_voice_message`) propagate `wa_profile_name`. Webhook extracts name from contacts array with null coercion. Chamo relay passes `sender_name` as `wa_profile_name`. Code review fixes: None coercion in webhook (`or ""`), missing `validate_user_profile` in image handler, `import re` moved to module level.
+- **Files:** `src/farmafacil/services/users.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/bot/webhook.py`, `src/farmafacil/api/routes.py`, `src/farmafacil/bot/messages.py`, `tests/test_wa_profile_name.py` (new, 36 tests), `tests/test_voice.py`, `docs/bot-flow.md`
+- **Found by:** User observation (new user "Johnny Alejandro Gonzalez lugo" in test group was asked for name despite visible profile)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -749,4 +762,5 @@
 | 30 — Form-Conflict Penalty | 123 (1 item) | P1 | ~1 hour | ✅ DONE (v0.44.0) |
 | 31 — Image Analysis | 124 (1 item) | P1 | ~4 hours | ✅ DONE (v0.45.0) |
 | 32 — Image Bugfix + HEIC | 125 (1 item) | P0 | ~2 hours | ✅ DONE (v0.45.1) |
-| **Total** | **76 items** | | **~90 hours** | |
+| 33 — WA Profile Name Pre-Fill | 126 (1 item) | P2 | ~2 hours | ✅ DONE (v0.46.0) |
+| **Total** | **77 items** | | **~92 hours** | |
