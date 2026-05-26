@@ -33,7 +33,14 @@ from farmafacil.services.ai_responder import (
 from farmafacil.services.admin_chat import build_tools_manifest
 from farmafacil.services.ai_roles import assemble_prompt, get_role
 from farmafacil.services.user_memory import auto_update_memory, get_memory
-from farmafacil.services.location import geocode_zone, reverse_geocode
+from farmafacil.services.location import (
+    DEFAULT_MIN_CONFIDENCE,
+    LocationResult,
+    _name_matches_query,
+    geocode_zone,
+    resolve as _resolve_location,
+    reverse_geocode,
+)
 from farmafacil.services.intent import (
     HELP_MESSAGE,
     _get_keyword_cache,
@@ -99,19 +106,75 @@ _pending_temp_location: dict[str, tuple[dict, float]] = {}
 _PENDING_LOC_TTL_SECONDS = 600  # 10 minutes
 
 # ── Pending location confirmation (onboarding low-confidence geocode) ──
-# When onboarding geocode is low-confidence, we stash the candidate here
-# and set step to "awaiting_location_confirm".  User responds sí/no.
-_pending_location_confirm: dict[str, dict] = {}
+# When onboarding geocode is ambiguous, we stash a list of candidate
+# locations here and set step to "awaiting_location_confirm". The user
+# picks a number or types a new location.
+_pending_location_confirm: dict[str, list[dict]] = {}
 
 
-def _stash_location_confirm(sender: str, result: dict) -> None:
-    """Stash a geocode result pending user confirmation during onboarding."""
-    _pending_location_confirm[sender] = result
+def _stash_location_confirm(sender: str, candidates: list[dict]) -> None:
+    """Stash geocode candidates pending user selection during onboarding."""
+    _pending_location_confirm[sender] = candidates
 
 
-def _pop_location_confirm(sender: str) -> dict | None:
-    """Pop and return the pending location confirmation, or None."""
+def _pop_location_confirm(sender: str) -> list[dict] | None:
+    """Pop and return the pending location candidates, or None."""
     return _pending_location_confirm.pop(sender, None)
+
+
+async def _offer_location_alternatives(
+    sender: str,
+    query: str,
+    result: LocationResult,
+) -> None:
+    """Build a numbered list of location candidates and ask the user to pick.
+
+    Called when onboarding geocode returns a low-confidence or
+    name-mismatched result.  Stashes the candidates as a list[dict] and
+    sets step to ``awaiting_location_confirm`` so the next message from
+    this user enters the selection handler.
+
+    The "Otra ubicación" option is always last.  Its number is
+    ``len(candidates) + 1`` — the confirmation handler uses the same
+    convention so they stay in sync.
+    """
+    # Build candidates list: top result + alternatives from Nominatim
+    candidates: list[dict] = [
+        {
+            "lat": result.lat,
+            "lng": result.lng,
+            "zone_name": result.zone_name,
+            "city_code": result.city_code,
+            "display_name": result.display_name,
+        }
+    ]
+    for alt in result.alternatives:
+        candidates.append({
+            "lat": alt["lat"],
+            "lng": alt["lng"],
+            "zone_name": alt.get("zone_name") or query.strip().title(),
+            "city_code": alt.get("city_code", "CCS"),
+            "display_name": alt["display_name"],
+        })
+
+    # Build the numbered message
+    lines: list[str] = [
+        "📍 No encontramos exactamente esa zona. "
+        "¿Te refieres a alguna de estas?\n",
+    ]
+    for i, cand in enumerate(candidates, 1):
+        display = cand["display_name"]
+        if len(display) > 80:
+            display = display[:77] + "…"
+        lines.append(f"*{i}.* {display}")
+
+    other_num = len(candidates) + 1
+    lines.append(f"*{other_num}.* Otra ubicación")
+    lines.append("\nEscribe el número o envía otra zona.")
+
+    _stash_location_confirm(sender, candidates)
+    await set_onboarding_step(sender, "awaiting_location_confirm")
+    await send_text_message(sender, "\n".join(lines))
 
 
 def _stash_temp_location(sender: str, location: dict) -> None:
@@ -1342,21 +1405,15 @@ async def handle_incoming_message(
         # confidence + alternatives. Daniel's "La Boyera → La Hoyadita"
         # silent miss happened because the legacy `geocode_zone` swallowed
         # the confidence signal.
-        from farmafacil.services.location import (
-            DEFAULT_MIN_CONFIDENCE,
-            resolve as _resolve_location,
-        )
-
         result = await _resolve_location(location_text)
         if result is None:
             await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
             return
 
-        # Confidence guard — if Nominatim returned a low-confidence hit
-        # AND the display_name doesn't include the user's input tokens,
-        # we suspect a wrong-place match. Tell the user what we found and
-        # ask them to share their location pin instead.
-        from farmafacil.services.location import _name_matches_query
+        # Confidence guard — intentionally stricter than location.py's
+        # own reject gate (which uses `not (name_ok OR confidence_ok)`).
+        # During onboarding we challenge the user whenever EITHER signal
+        # is bad, because a one-time wrong-place save is hard to undo.
         name_ok = _name_matches_query(location_text, result.display_name)
         confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
         if not (name_ok and confidence_ok):
@@ -1364,17 +1421,8 @@ async def handle_incoming_message(
                 "Onboarding geocode low-confidence: query=%r → display=%r confidence=%.2f",
                 location_text, result.display_name, result.confidence,
             )
-            # Stash the candidate and ask for confirmation instead of
-            # auto-accepting.  User responds sí/no on the next message.
-            _stash_location_confirm(sender, {
-                "lat": result.lat, "lng": result.lng,
-                "zone_name": result.zone_name, "city_code": result.city_code,
-            })
-            await set_onboarding_step(sender, "awaiting_location_confirm")
-            await send_text_message(
-                sender,
-                f"📍 Encontré *{result.display_name}* — ¿es correcto?\n\n"
-                f"Responde *sí* o *no*.",
+            await _offer_location_alternatives(
+                sender, location_text, result,
             )
             return
 
@@ -1389,31 +1437,41 @@ async def handle_incoming_message(
 
     if step == "awaiting_location_confirm":
         answer = text.strip().lower().rstrip(".!¡?¿")
-        confirmed = answer in ("sí", "si", "yes", "s", "ok", "correcto", "correcta", "eso", "1")
-        denied = answer in ("no", "n", "nop", "nope", "nel", "0")
+        candidates = _pop_location_confirm(sender)
 
-        if confirmed:
-            loc = _pop_location_confirm(sender)
-            if loc:
-                user = await update_user_location(
-                    sender, loc["lat"], loc["lng"],
-                    loc["zone_name"], loc["city_code"],
-                )
-                await send_text_message(
-                    sender, MSG_READY.format(name=user.name or "amigo")
-                )
-            else:
-                # Stash expired — ask for location again
-                await set_onboarding_step(sender, "awaiting_location")
-                await send_text_message(
-                    sender,
-                    "⏳ Se venció la confirmación. "
-                    "Escribe tu zona de nuevo (ej: *La Boyera, Caracas*).",
-                )
+        if candidates is None:
+            # Stash expired — ask for location again
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender,
+                "⏳ Se venció la confirmación. "
+                "Escribe tu zona de nuevo (ej: *La Boyera, Caracas*).",
+            )
             return
 
-        if denied:
-            _pop_location_confirm(sender)  # discard candidate
+        num_candidates = len(candidates)
+        other_num = num_candidates + 1
+
+        # Try to parse the answer as a number (1, 2, 3, …)
+        try:
+            choice = int(answer)
+        except ValueError:
+            choice = None
+
+        if choice is not None and 1 <= choice <= num_candidates:
+            # User picked a numbered candidate
+            picked = candidates[choice - 1]
+            user = await update_user_location(
+                sender, picked["lat"], picked["lng"],
+                picked["zone_name"], picked["city_code"],
+            )
+            await send_text_message(
+                sender, MSG_READY.format(name=user.name or "amigo"),
+            )
+            return
+
+        if choice == other_num:
+            # User selected "Otra ubicación" — ask again
             await set_onboarding_step(sender, "awaiting_location")
             await send_text_message(
                 sender,
@@ -1423,49 +1481,35 @@ async def handle_incoming_message(
             )
             return
 
-        # Unrecognized response — treat as a new location attempt
-        _pop_location_confirm(sender)
-        await set_onboarding_step(sender, "awaiting_location")
-        # Fall through to awaiting_location will NOT happen because we
-        # already consumed this step.  Re-enter by recursing the location
-        # handler logic. Simplest: just set step and let the next message
-        # handle it.  But the user might have typed a better location —
-        # re-process it now.
+        # Not a valid number — treat as a new location attempt.
+        # The user may have typed a zone name directly instead of
+        # picking a number.
+        # NOTE: we do NOT reset the onboarding step before the geocode
+        # await — doing so would create a race window where a concurrent
+        # message routes to the wrong code path during the 10s Nominatim
+        # timeout.  Each outcome branch sets the step explicitly.
         logger.info(
             "Location confirm: unrecognized %r — treating as new location input",
             text,
         )
-        # Redirect to awaiting_location by updating step and re-handling
-        # the same text. Use a minimal inline geocode attempt.
-        from farmafacil.services.location import (
-            DEFAULT_MIN_CONFIDENCE,
-            resolve as _resolve_location,
-            _name_matches_query,
-        )
         result = await _resolve_location(text)
         if result is None:
+            await set_onboarding_step(sender, "awaiting_location")
             await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
             return
         name_ok = _name_matches_query(text, result.display_name)
         confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
         if not (name_ok and confidence_ok):
-            _stash_location_confirm(sender, {
-                "lat": result.lat, "lng": result.lng,
-                "zone_name": result.zone_name, "city_code": result.city_code,
-            })
-            await set_onboarding_step(sender, "awaiting_location_confirm")
-            await send_text_message(
-                sender,
-                f"📍 Encontré *{result.display_name}* — ¿es correcto?\n\n"
-                f"Responde *sí* o *no*.",
-            )
+            # _offer_location_alternatives sets step to
+            # awaiting_location_confirm internally.
+            await _offer_location_alternatives(sender, text, result)
             return
         user = await update_user_location(
             sender, result.lat, result.lng,
             result.zone_name, result.city_code,
         )
         await send_text_message(
-            sender, MSG_READY.format(name=user.name or "amigo")
+            sender, MSG_READY.format(name=user.name or "amigo"),
         )
         return
 

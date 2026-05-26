@@ -11,10 +11,11 @@ last occurrence.  A similar guard was added for price_rows.
 Fix 2 — Location confirmation flow (handler.py)
 ------------------------------------------------
 When onboarding geocode returns a low-confidence result the handler now stashes
-the candidate in ``_pending_location_confirm`` and sets the onboarding step to
-``awaiting_location_confirm`` instead of auto-accepting.  The user is prompted
-"¿es correcto?".  Responding "sí" saves the location; "no" discards it and
-re-asks; anything else is treated as a new location attempt.
+a list of numbered candidates in ``_pending_location_confirm`` and sets the
+onboarding step to ``awaiting_location_confirm``.  The user sees a numbered
+list (e.g. *1.* La Boyera, *2.* La Boyera del Sur, *3.* Otra ubicación)
+and picks a number.  Typing an unrecognized string is treated as a new
+location attempt.
 """
 
 from decimal import Decimal
@@ -297,38 +298,52 @@ class TestProductUpsertDeduplication:
 class TestStashPopLocationConfirm:
     """Unit tests for the in-memory stash helpers.
 
-    These are pure in-memory operations — no DB, no async.
+    Since v0.29.3 the stash stores a ``list[dict]`` (numbered candidates)
+    instead of a single dict.  These are pure in-memory operations — no
+    DB, no async.
     """
 
     def setup_method(self):
         """Clear the global stash before every test."""
         _pending_location_confirm.clear()
 
-    def test_stash_stores_result(self):
-        """_stash_location_confirm must store the result keyed by sender."""
-        result = {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS"}
-        _stash_location_confirm("5491111111111", result)
+    def test_stash_stores_candidates_list(self):
+        """_stash_location_confirm must store a list of candidates."""
+        candidates = [
+            {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS",
+             "display_name": "La Boyera, Caracas"},
+        ]
+        _stash_location_confirm("5491111111111", candidates)
         assert "5491111111111" in _pending_location_confirm
-        assert _pending_location_confirm["5491111111111"] == result
+        assert _pending_location_confirm["5491111111111"] == candidates
 
-    def test_pop_returns_stored_result(self):
-        """_pop_location_confirm must return the stashed dict."""
-        result = {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS"}
-        _stash_location_confirm("5491111111112", result)
+    def test_pop_returns_stored_list(self):
+        """_pop_location_confirm must return the stashed list."""
+        candidates = [
+            {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS",
+             "display_name": "La Boyera, Caracas"},
+        ]
+        _stash_location_confirm("5491111111112", candidates)
         popped = _pop_location_confirm("5491111111112")
-        assert popped == result
+        assert popped == candidates
 
     def test_pop_removes_entry(self):
         """After pop, the sender key must no longer be in the stash."""
-        result = {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS"}
-        _stash_location_confirm("5491111111113", result)
+        candidates = [
+            {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS",
+             "display_name": "La Boyera, Caracas"},
+        ]
+        _stash_location_confirm("5491111111113", candidates)
         _pop_location_confirm("5491111111113")
         assert "5491111111113" not in _pending_location_confirm
 
     def test_pop_second_call_returns_none(self):
-        """Calling pop twice for the same sender must return None on the second call."""
-        result = {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS"}
-        _stash_location_confirm("5491111111114", result)
+        """Calling pop twice for the same sender must return None."""
+        candidates = [
+            {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS",
+             "display_name": "La Boyera, Caracas"},
+        ]
+        _stash_location_confirm("5491111111114", candidates)
         _pop_location_confirm("5491111111114")
         assert _pop_location_confirm("5491111111114") is None
 
@@ -338,11 +353,27 @@ class TestStashPopLocationConfirm:
 
     def test_stash_overwrites_previous_entry(self):
         """A second stash for the same sender overwrites the first."""
-        result_old = {"lat": 1.0, "lng": 1.0, "zone_name": "OldZone", "city_code": "CCS"}
-        result_new = {"lat": 2.0, "lng": 2.0, "zone_name": "NewZone", "city_code": "MAR"}
-        _stash_location_confirm("5491111111115", result_old)
-        _stash_location_confirm("5491111111115", result_new)
-        assert _pop_location_confirm("5491111111115") == result_new
+        old = [{"lat": 1.0, "lng": 1.0, "zone_name": "Old", "city_code": "CCS",
+                "display_name": "Old Place"}]
+        new = [{"lat": 2.0, "lng": 2.0, "zone_name": "New", "city_code": "MAR",
+                "display_name": "New Place"}]
+        _stash_location_confirm("5491111111115", old)
+        _stash_location_confirm("5491111111115", new)
+        assert _pop_location_confirm("5491111111115") == new
+
+    def test_stash_multiple_candidates(self):
+        """Stash can hold multiple candidates for a single sender."""
+        candidates = [
+            {"lat": 10.48, "lng": -66.87, "zone_name": "La Boyera", "city_code": "CCS",
+             "display_name": "La Boyera, Caracas"},
+            {"lat": 10.50, "lng": -66.90, "zone_name": "El Cafetal", "city_code": "CCS",
+             "display_name": "El Cafetal, Caracas"},
+        ]
+        _stash_location_confirm("5491111111116", candidates)
+        popped = _pop_location_confirm("5491111111116")
+        assert len(popped) == 2
+        assert popped[0]["zone_name"] == "La Boyera"
+        assert popped[1]["zone_name"] == "El Cafetal"
 
 
 # ===========================================================================
@@ -358,6 +389,16 @@ _LOW_CONF_RESULT = LocationResult(
     source="forward",
     city_code="CCS",
     zone_name="La Boyera",
+    alternatives=[
+        {
+            "lat": 10.50,
+            "lng": -66.90,
+            "display_name": "La Boyera del Sur, Miranda, Venezuela",
+            "confidence": 0.15,
+            "city_code": "CCS",
+            "zone_name": "La Boyera del Sur",
+        },
+    ],
 )
 
 _HIGH_CONF_RESULT = LocationResult(
@@ -372,22 +413,48 @@ _HIGH_CONF_RESULT = LocationResult(
 
 
 class TestAwaitingLocationConfirmFlow:
-    """Integration tests for the new ``awaiting_location_confirm`` handler step.
+    """Integration tests for the numbered location alternatives flow.
 
-    All external calls (WhatsApp, LLM, geocoder) are mocked so tests run
-    without network access or a real Nominatim endpoint.
+    v0.29.3 replaced the old sí/no confirmation with a numbered list:
+    the user sees candidates (1, 2, …) plus "Otra ubicación" as the
+    last option.  Typing a number picks a candidate; typing text is
+    treated as a new location attempt.
+
+    All external calls (WhatsApp, LLM, geocoder) are mocked.
     """
 
+    # ── Helper to build a candidates list matching the stash format ──
+
+    @staticmethod
+    def _candidates_from(result: LocationResult) -> list[dict]:
+        """Mirror what _offer_location_alternatives builds."""
+        candidates = [{
+            "lat": result.lat,
+            "lng": result.lng,
+            "zone_name": result.zone_name,
+            "city_code": result.city_code,
+            "display_name": result.display_name,
+        }]
+        for alt in result.alternatives:
+            candidates.append({
+                "lat": alt["lat"],
+                "lng": alt["lng"],
+                "zone_name": alt.get("zone_name", "Unknown"),
+                "city_code": alt.get("city_code", "CCS"),
+                "display_name": alt["display_name"],
+            })
+        return candidates
+
     # -----------------------------------------------------------------------
-    # Test: low-confidence geocode → stash + set awaiting_location_confirm
+    # Test: low-confidence geocode → stash + numbered alternatives message
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_low_confidence_geocode_stashes_and_asks_confirmation(self):
+    async def test_low_confidence_geocode_shows_numbered_alternatives(self):
         """When the geocode result is low-confidence, the handler must:
         - set onboarding_step to 'awaiting_location_confirm'
         - NOT call update_user_location yet
-        - ask the user to confirm ('¿es correcto?')
+        - send a numbered list of alternatives
         """
         phone = "5493399010000"
         await _seed_user(phone, name="Ana", step="awaiting_location")
@@ -397,11 +464,11 @@ class TestAwaitingLocationConfirmFlow:
         with patch.object(
             handler, "classify_intent", new=AsyncMock(return_value=intent),
         ), patch(
-            "farmafacil.services.location.resolve",
+            "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=_LOW_CONF_RESULT),
         ), patch(
-            "farmafacil.services.location._name_matches_query",
-            return_value=False,  # forces the low-confidence branch
+            "farmafacil.bot.handler._name_matches_query",
+            return_value=False,
         ), patch.object(
             handler, "update_user_location", new=AsyncMock(),
         ) as mock_update_loc, patch.object(
@@ -409,38 +476,30 @@ class TestAwaitingLocationConfirmFlow:
         ) as mock_send:
             await handle_incoming_message(phone, "La Boyera")
 
-        # Location must NOT have been saved yet
         mock_update_loc.assert_not_awaited()
 
-        # Step must advance to awaiting_location_confirm
         refreshed = await _fetch_user(phone)
         assert refreshed.onboarding_step == "awaiting_location_confirm"
 
-        # Must ask for confirmation
+        # Must contain numbered alternatives and "Otra ubicación"
         sent_text = mock_send.await_args.args[1]
-        assert "¿es correcto?" in sent_text or "es correcto" in sent_text.lower()
+        assert "*1.*" in sent_text
+        assert "Otra ubicación" in sent_text
+        assert "Escribe el número" in sent_text
 
     # -----------------------------------------------------------------------
-    # Test: user responds "sí" → location saved, onboarding complete
+    # Test: user types "1" → picks first candidate, saves location
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_si_response_saves_location_and_completes_onboarding(self):
-        """Responding 'sí' to the confirmation prompt must save the stashed
-        location and set onboarding_step to None (complete)."""
+    async def test_pick_number_1_saves_first_candidate(self):
+        """Typing '1' must pick the first candidate and complete onboarding."""
         phone = "5493399010001"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        # Pre-stash a candidate
-        candidate = {
-            "lat": _LOW_CONF_RESULT.lat,
-            "lng": _LOW_CONF_RESULT.lng,
-            "zone_name": _LOW_CONF_RESULT.zone_name,
-            "city_code": _LOW_CONF_RESULT.city_code,
-        }
-        _stash_location_confirm(phone, candidate)
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
 
-        # Build a mock User returned by update_user_location
         mock_user = MagicMock()
         mock_user.name = "Ana"
 
@@ -449,147 +508,99 @@ class TestAwaitingLocationConfirmFlow:
         ) as mock_update_loc, patch.object(
             handler, "send_text_message", new=AsyncMock(),
         ) as mock_send:
-            await handle_incoming_message(phone, "sí")
+            await handle_incoming_message(phone, "1")
 
-        # Location must have been saved with the stashed coordinates
+        # First candidate must be saved
         mock_update_loc.assert_awaited_once_with(
             phone,
-            candidate["lat"],
-            candidate["lng"],
-            candidate["zone_name"],
-            candidate["city_code"],
+            candidates[0]["lat"],
+            candidates[0]["lng"],
+            candidates[0]["zone_name"],
+            candidates[0]["city_code"],
         )
-
-        # Confirmation message must include success indicator
         sent_text = mock_send.await_args.args[1]
         assert "Listo" in sent_text or "Ana" in sent_text
 
     @pytest.mark.asyncio
-    async def test_si_variants_all_confirm(self):
-        """Multiple affirmative answers ('si', 'yes', 'ok', '1') must all
-        trigger location save."""
-        affirmative_answers = ["si", "sí", "yes", "ok", "1", "correcto"]
+    async def test_pick_number_2_saves_second_candidate(self):
+        """Typing '2' must pick the second candidate (first alternative)."""
+        phone = "5493399010002"
+        await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        for answer in affirmative_answers:
-            phone = f"5493399010002"
-            # Re-create user and stash for each iteration
-            await _seed_user(phone, name="Test", step="awaiting_location_confirm")
-            candidate = {
-                "lat": 10.48, "lng": -66.87,
-                "zone_name": "La Boyera", "city_code": "CCS",
-            }
-            _stash_location_confirm(phone, candidate)
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        assert len(candidates) >= 2, "Test requires at least 2 candidates"
+        _stash_location_confirm(phone, candidates)
 
-            mock_user = MagicMock()
-            mock_user.name = "Test"
+        mock_user = MagicMock()
+        mock_user.name = "Ana"
 
-            with patch.object(
-                handler, "update_user_location", new=AsyncMock(return_value=mock_user),
-            ) as mock_update_loc, patch.object(
-                handler, "send_text_message", new=AsyncMock(),
-            ):
-                await handle_incoming_message(phone, answer)
+        with patch.object(
+            handler, "update_user_location", new=AsyncMock(return_value=mock_user),
+        ) as mock_update_loc, patch.object(
+            handler, "send_text_message", new=AsyncMock(),
+        ):
+            await handle_incoming_message(phone, "2")
 
-            mock_update_loc.assert_awaited_once(), f"'{answer}' should have confirmed"
+        mock_update_loc.assert_awaited_once_with(
+            phone,
+            candidates[1]["lat"],
+            candidates[1]["lng"],
+            candidates[1]["zone_name"],
+            candidates[1]["city_code"],
+        )
 
     # -----------------------------------------------------------------------
-    # Test: user responds "no" → step goes back to awaiting_location
+    # Test: user picks "Otra ubicación" number → reset to awaiting_location
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_no_response_discards_candidate_and_reasks(self):
-        """Responding 'no' must discard the stashed candidate, set step back
-        to 'awaiting_location', and ask the user to re-enter their zone."""
+    async def test_pick_otra_ubicacion_number_reasks(self):
+        """Typing the 'Otra ubicación' number must reset to awaiting_location."""
         phone = "5493399010003"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        candidate = {
-            "lat": _LOW_CONF_RESULT.lat,
-            "lng": _LOW_CONF_RESULT.lng,
-            "zone_name": _LOW_CONF_RESULT.zone_name,
-            "city_code": _LOW_CONF_RESULT.city_code,
-        }
-        _stash_location_confirm(phone, candidate)
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
+        otra_num = str(len(candidates) + 1)  # "3" when 2 candidates
 
         with patch.object(
             handler, "update_user_location", new=AsyncMock(),
         ) as mock_update_loc, patch.object(
             handler, "send_text_message", new=AsyncMock(),
         ) as mock_send:
-            await handle_incoming_message(phone, "no")
+            await handle_incoming_message(phone, otra_num)
 
-        # Location must NOT have been saved
         mock_update_loc.assert_not_awaited()
 
-        # Step must be reset to awaiting_location
         refreshed = await _fetch_user(phone)
         assert refreshed.onboarding_step == "awaiting_location"
 
-        # Stash must be cleared
-        assert _pop_location_confirm(phone) is None
-
-        # Must re-ask for location with guidance
         sent_text = mock_send.await_args.args[1]
-        assert "zona" in sent_text.lower() or "ubicaci" in sent_text.lower() or "Sin problema" in sent_text
-
-    @pytest.mark.asyncio
-    async def test_no_variants_all_deny(self):
-        """Multiple denial answers ('nop', 'nope', 'nel', '0') must all
-        discard the candidate and reset to awaiting_location."""
-        denial_answers = ["no", "n", "nop", "nope", "nel", "0"]
-
-        for answer in denial_answers:
-            phone = "5493399010004"
-            await _seed_user(phone, name="Test", step="awaiting_location_confirm")
-            candidate = {
-                "lat": 10.48, "lng": -66.87,
-                "zone_name": "La Boyera", "city_code": "CCS",
-            }
-            _stash_location_confirm(phone, candidate)
-
-            with patch.object(
-                handler, "update_user_location", new=AsyncMock(),
-            ) as mock_update_loc, patch.object(
-                handler, "send_text_message", new=AsyncMock(),
-            ):
-                await handle_incoming_message(phone, answer)
-
-            mock_update_loc.assert_not_awaited(), f"'{answer}' should have denied"
-
-            refreshed = await _fetch_user(phone)
-            assert refreshed.onboarding_step == "awaiting_location", (
-                f"'{answer}' should reset step to awaiting_location"
-            )
+        assert "Sin problema" in sent_text or "zona" in sent_text.lower()
 
     # -----------------------------------------------------------------------
-    # Test: unrecognized response → treated as new location input
+    # Test: unrecognized text → treated as new location attempt
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_unrecognized_response_treated_as_new_location_high_confidence(self):
-        """An unrecognized answer (e.g. typing a new zone) must be passed
-        through the geocoder.  If the new geocode is high-confidence, the
-        location is saved and onboarding completes."""
+    async def test_unrecognized_text_treated_as_new_location_high_confidence(self):
+        """Typing a zone name instead of a number must re-geocode.
+        If high-confidence, the location is saved and onboarding completes."""
         phone = "5493399010005"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        # Stash an old low-confidence candidate
-        _stash_location_confirm(phone, {
-            "lat": _LOW_CONF_RESULT.lat,
-            "lng": _LOW_CONF_RESULT.lng,
-            "zone_name": _LOW_CONF_RESULT.zone_name,
-            "city_code": _LOW_CONF_RESULT.city_code,
-        })
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
 
         mock_user = MagicMock()
         mock_user.name = "Ana"
 
         with patch(
-            "farmafacil.services.location.resolve",
+            "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=_HIGH_CONF_RESULT),
         ), patch(
-            "farmafacil.services.location._name_matches_query",
-            return_value=True,  # high confidence + name matches → auto-accept
+            "farmafacil.bot.handler._name_matches_query",
+            return_value=True,
         ), patch.object(
             handler, "update_user_location", new=AsyncMock(return_value=mock_user),
         ) as mock_update_loc, patch.object(
@@ -597,27 +608,19 @@ class TestAwaitingLocationConfirmFlow:
         ):
             await handle_incoming_message(phone, "Chacao")
 
-        # Geocode must have been attempted on the new text
         mock_update_loc.assert_awaited_once()
-
-        # The stash must have been cleared
         assert _pop_location_confirm(phone) is None
 
     @pytest.mark.asyncio
-    async def test_unrecognized_response_treated_as_new_location_low_confidence(self):
-        """An unrecognized answer that itself geocodes to low-confidence must
-        re-stash the new candidate and stay in awaiting_location_confirm."""
+    async def test_unrecognized_text_low_confidence_shows_alternatives_again(self):
+        """Typing a zone that geocodes to low-confidence must show
+        numbered alternatives again (not the old sí/no prompt)."""
         phone = "5493399010006"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        _stash_location_confirm(phone, {
-            "lat": _LOW_CONF_RESULT.lat,
-            "lng": _LOW_CONF_RESULT.lng,
-            "zone_name": _LOW_CONF_RESULT.zone_name,
-            "city_code": _LOW_CONF_RESULT.city_code,
-        })
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
 
-        # New geocode also low-confidence
         new_low_result = LocationResult(
             lat=8.0,
             lng=-63.0,
@@ -629,10 +632,10 @@ class TestAwaitingLocationConfirmFlow:
         )
 
         with patch(
-            "farmafacil.services.location.resolve",
+            "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=new_low_result),
         ), patch(
-            "farmafacil.services.location._name_matches_query",
+            "farmafacil.bot.handler._name_matches_query",
             return_value=False,
         ), patch.object(
             handler, "update_user_location", new=AsyncMock(),
@@ -641,32 +644,28 @@ class TestAwaitingLocationConfirmFlow:
         ) as mock_send:
             await handle_incoming_message(phone, "Somewhere obscure")
 
-        # Location must NOT have been saved
         mock_update_loc.assert_not_awaited()
 
-        # Step must remain at awaiting_location_confirm with a new stash
         refreshed = await _fetch_user(phone)
         assert refreshed.onboarding_step == "awaiting_location_confirm"
 
-        # Must re-ask for confirmation with the new candidate
+        # Must show numbered alternatives (not old "¿es correcto?")
         sent_text = mock_send.await_args.args[1]
-        assert "¿es correcto?" in sent_text or "es correcto" in sent_text.lower()
+        assert "*1.*" in sent_text
+        assert "Otra ubicación" in sent_text
 
     @pytest.mark.asyncio
-    async def test_unrecognized_response_geocode_not_found(self):
-        """An unrecognized answer that geocodes to None must send the
-        'not found' message."""
+    async def test_unrecognized_text_geocode_not_found(self):
+        """Typing text that geocodes to None must send MSG_LOCATION_NOT_FOUND."""
         phone = "5493399010007"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        _stash_location_confirm(phone, {
-            "lat": 10.48, "lng": -66.87,
-            "zone_name": "La Boyera", "city_code": "CCS",
-        })
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
 
         with patch(
-            "farmafacil.services.location.resolve",
-            new=AsyncMock(return_value=None),  # geocoder found nothing
+            "farmafacil.bot.handler._resolve_location",
+            new=AsyncMock(return_value=None),
         ), patch.object(
             handler, "update_user_location", new=AsyncMock(),
         ) as mock_update_loc, patch.object(
@@ -676,37 +675,105 @@ class TestAwaitingLocationConfirmFlow:
 
         mock_update_loc.assert_not_awaited()
         sent_text = mock_send.await_args.args[1]
-        # MSG_LOCATION_NOT_FOUND contains "No logré ubicar"
         assert "No logré ubicar" in sent_text or "zona" in sent_text.lower()
 
     # -----------------------------------------------------------------------
-    # Test: stash expired (popped returns None) — sí response edge case
+    # Test: stash expired → reset to awaiting_location
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_si_response_when_stash_expired_reasks_location(self):
-        """If the user confirms but the stash has already been popped (e.g.
-        TTL expired or duplicate message), the handler must gracefully reset
-        to awaiting_location and prompt the user to try again."""
+    async def test_stash_expired_reasks_location(self):
+        """If the stash has been popped (expiry or duplicate message),
+        any input must reset to awaiting_location with a friendly message."""
         phone = "5493399010008"
         await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
 
-        # Do NOT stash anything — stash is empty (simulates expiry)
+        # Do NOT stash anything — simulates expiry
 
         with patch.object(
             handler, "update_user_location", new=AsyncMock(),
         ) as mock_update_loc, patch.object(
             handler, "send_text_message", new=AsyncMock(),
         ) as mock_send:
-            await handle_incoming_message(phone, "sí")
+            await handle_incoming_message(phone, "1")
 
-        # Location must NOT be saved
         mock_update_loc.assert_not_awaited()
 
-        # Step must fall back to awaiting_location
         refreshed = await _fetch_user(phone)
         assert refreshed.onboarding_step == "awaiting_location"
 
-        # Must inform the user that confirmation expired
         sent_text = mock_send.await_args.args[1]
-        assert "venció" in sent_text or "zona" in sent_text.lower() or "de nuevo" in sent_text
+        assert "venció" in sent_text or "zona" in sent_text.lower()
+
+    # -----------------------------------------------------------------------
+    # Test: single candidate → still shows numbered list with 1 + Otra
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_single_candidate_shows_two_options(self):
+        """Even with only 1 Nominatim result, the user should see '1.' and
+        '2. Otra ubicación'."""
+        phone = "5493399010009"
+        await _seed_user(phone, name="Ana", step="awaiting_location")
+
+        single_result = LocationResult(
+            lat=10.48,
+            lng=-66.87,
+            display_name="La Boyera, Caracas",
+            confidence=DEFAULT_MIN_CONFIDENCE - 0.1,
+            source="forward",
+            city_code="CCS",
+            zone_name="La Boyera",
+            alternatives=[],  # no alternatives
+        )
+
+        intent = Intent(action="unknown", detected_location="La Boyera")
+
+        with patch.object(
+            handler, "classify_intent", new=AsyncMock(return_value=intent),
+        ), patch(
+            "farmafacil.bot.handler._resolve_location",
+            new=AsyncMock(return_value=single_result),
+        ), patch(
+            "farmafacil.bot.handler._name_matches_query",
+            return_value=False,
+        ), patch.object(
+            handler, "update_user_location", new=AsyncMock(),
+        ), patch.object(
+            handler, "send_text_message", new=AsyncMock(),
+        ) as mock_send:
+            await handle_incoming_message(phone, "La Boyera")
+
+        sent_text = mock_send.await_args.args[1]
+        assert "*1.*" in sent_text
+        assert "*2.* Otra ubicación" in sent_text
+        # Must NOT have a *3.* option
+        assert "*3.*" not in sent_text
+
+    # -----------------------------------------------------------------------
+    # Test: out-of-range number → treated as new location attempt
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_number_treated_as_new_location(self):
+        """A number beyond the 'Otra' option must be treated as
+        unrecognized text and re-geocoded."""
+        phone = "5493399010004"
+        await _seed_user(phone, name="Ana", step="awaiting_location_confirm")
+
+        candidates = self._candidates_from(_LOW_CONF_RESULT)
+        _stash_location_confirm(phone, candidates)
+
+        with patch(
+            "farmafacil.bot.handler._resolve_location",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            handler, "update_user_location", new=AsyncMock(),
+        ), patch.object(
+            handler, "send_text_message", new=AsyncMock(),
+        ) as mock_send:
+            # "99" is way beyond the valid range
+            await handle_incoming_message(phone, "99")
+
+        sent_text = mock_send.await_args.args[1]
+        assert "No logré ubicar" in sent_text

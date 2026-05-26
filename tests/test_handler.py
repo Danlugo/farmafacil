@@ -311,9 +311,9 @@ class TestOnboardingAwaitingLocation:
         ), patch.object(
             handler, "increment_token_usage", new=AsyncMock(),
         ), patch(
-            "farmafacil.services.location.resolve", new=AsyncMock(return_value=resolved),
+            "farmafacil.bot.handler._resolve_location", new=AsyncMock(return_value=resolved),
         ), patch(
-            "farmafacil.services.location._name_matches_query", return_value=True,
+            "farmafacil.bot.handler._name_matches_query", return_value=True,
         ), patch.object(
             handler, "send_text_message", new=AsyncMock(),
         ) as mock_send:

@@ -494,6 +494,14 @@
 - **Files:** `src/farmafacil/services/location.py`, `tests/test_location.py` (15 new tests)
 - **Tests:** 15 new tests — 12 for prefix stripping (all supported prefixes, plain names, edge cases, case insensitive), 3 for resolve retry (retry succeeds, no-retry, both-fail)
 
+### Item 103: Numbered location alternatives for ambiguous geocoding
+- **Priority:** P2 — UX Enhancement
+- **Problem:** When onboarding geocode returns a low-confidence or name-mismatched result, the bot showed a single "¿es correcto?" sí/no prompt. This was confusing when Nominatim had multiple possible matches — the user could only accept or reject the top hit. User requested a numbered list showing all candidates so they can pick the right one.
+- **Status:** ✅ DONE (v0.29.3, 2026-05-26)
+- **Solution:** Replaced the sí/no confirmation with a numbered list of candidates. When geocoding is ambiguous, the bot shows "*1.* La Boyera, Caracas", "*2.* La Boyera del Sur, Miranda", "*3.* Otra ubicación" etc. The user types a number to select, or types a zone name to re-geocode. The `_pending_location_confirm` stash changed from `dict[str, dict]` to `dict[str, list[dict]]`. New `_offer_location_alternatives()` function builds the numbered message. The `awaiting_location_confirm` step was fully rewritten for number selection. `resolve()` alternatives now include `city_code` and `zone_name`. Code review: fixed step-reset race (BLOCKER), moved inline imports to top-level (MAJOR), documented intentional stricter confidence gate, fixed test patch targets.
+- **Files:** `src/farmafacil/bot/handler.py`, `src/farmafacil/services/location.py`, `tests/test_location_confirm_and_dedup.py`, `tests/test_handler.py`
+- **Tests:** 23 tests in test_location_confirm_and_dedup.py (7 stash unit + 6 dedup + 10 handler integration), 1 fix in test_handler.py
+
 ---
 
 ## Summary
@@ -514,4 +522,5 @@
 | 12 — Search Relevance Fix | 100 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.0) |
 | 13 — Zero-Price Display | 101 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.1) |
 | 14 — Geocode Prefix Fix | 102 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.2) |
-| **Total** | **53 items** | | **~62 hours** | |
+| 15 — Location Alternatives | 103 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.3) |
+| **Total** | **54 items** | | **~63 hours** | |

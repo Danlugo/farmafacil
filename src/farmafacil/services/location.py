@@ -455,6 +455,8 @@ async def resolve(
                 "lng": float(alt["lon"]),
                 "display_name": alt.get("display_name", ""),
                 "confidence": _confidence_from_importance(alt.get("importance")),
+                "city_code": _extract_city_code(alt),
+                "zone_name": alt.get("name") or query.strip().title(),
             }
             for alt in raw[1:1 + ALTERNATIVES_TOP_N]
         ],
