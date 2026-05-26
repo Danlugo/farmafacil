@@ -233,6 +233,9 @@ def _confidence_from_importance(importance: float | None) -> float:
 # has all tokens stripped → onboarding falsely warns "no estoy seguro").
 _NAME_NOISE = frozenset({
     "la", "el", "los", "las", "del", "de", "y", "en",
+    # Place-type descriptors — no disambiguation signal (Item 120, v0.42.0).
+    # Values are accent-stripped (post-_normalize).
+    "urbanizacion", "urb", "barrio", "sector", "conjunto", "residencias",
 })
 
 # Conversational prefixes users type during onboarding that Nominatim
@@ -241,18 +244,26 @@ _NAME_NOISE = frozenset({
 # Only stripped as a LEADING prefix (not mid-string), and only when the
 # remainder is non-empty and at least 3 characters (to avoid stripping
 # conversational phrases like "por favor" or "en casa" that aren't places).
+#
+# Also strips place-type descriptors that Venezuelan users commonly prepend:
+# "urbanización Los Naranjos" → Nominatim needs just "Los Naranjos".
+# (Item 120, v0.42.0)
 _LOCATION_PREFIX_RE = _re_normalize.compile(
-    r"^(?:(?:estoy\s+)?(?:en|por|cerca\s+de|vivo\s+en|soy\s+de)\s+)",
+    r"^(?:"
+    r"(?:estoy\s+)?(?:en|por|cerca\s+de|vivo\s+en|soy\s+de)\s+"
+    r"|"
+    r"(?:urbanizaci[oó]n|urb\.?|barrio|sector|conjunto|residencias)\s+"
+    r")",
     _re_normalize.IGNORECASE,
 )
 
 
 def _strip_location_prefix(text: str) -> str:
-    """Remove conversational Spanish prefixes from a location query.
+    """Remove conversational/descriptor prefixes from a location query.
 
-    Users in onboarding type "En la Lagunita" or "vivo en El Hatillo"
-    but Nominatim needs just the place name. Stripping the prefix lets
-    the geocoder find the actual place.
+    Users in onboarding type "En la Lagunita", "vivo en El Hatillo", or
+    "urbanización Los Naranjos" — Nominatim needs just the place name.
+    Stripping the prefix lets the geocoder find the actual place.
 
     Returns the original text if stripping would leave an empty string
     or a remainder shorter than 3 characters (to avoid false positives

@@ -661,6 +661,24 @@
 
 ---
 
+### Phase 28 — Location & Store Detail Fixes
+
+### 120. Strip "urbanización" and place-type descriptors from geocode queries
+- **Priority:** P1 — Onboarding Bug
+- **Problem:** Users typing "urbanización Los Naranjos" during onboarding got wrong results (Palo Negro, Tinaquillo) or "no encontramos" because Nominatim can't parse "urbanización" as a location prefix. "Urbanización Los Naranjos el Hatillo" also failed completely. The prefix stripping regex only handled conversational prefixes ("en", "vivo en", etc.) but not Venezuelan place-type descriptors.
+- **Status:** ✅ DONE (2026-05-26, v0.42.0)
+- **Solution:** Added `urbanización`, `urbanizacion`, `urb.`, `barrio`, `sector`, `conjunto`, `residencias` to `_LOCATION_PREFIX_RE` regex as an alternation group. Also added accent-stripped forms to `_NAME_NOISE` frozenset so they don't pollute the token-overlap validation. 19 new tests.
+- **Files:** `services/location.py` (`_LOCATION_PREFIX_RE`, `_NAME_NOISE`, `_strip_location_prefix` docstring), `tests/test_location_prefix_and_store_info.py` (new)
+
+### 121. Enrich store detail response with phone, website, hours
+- **Priority:** P2 — Feature Completeness
+- **Problem:** When a user asks "cual es el telefono de esa farmacia", the `lookup_store` tool returns a full PharmacyLocation with phone, website, opening_hours, is_24h, zone_name — but `format_store_info()` only showed address, city, and Google Maps link. Users couldn't get the phone number they asked for.
+- **Status:** ✅ DONE (2026-05-26, v0.42.0)
+- **Solution:** Enriched `format_store_info()` in `store_backfill.py` to display all available fields: zone name, opening hours (🌙 24h or 🕐 hours with truncation for verbose OSM strings), phone (📞), website (🌐), plus existing address and maps link. Added chain-name deduplication (same pattern as `format_nearby_stores`). 13 new tests.
+- **Files:** `services/store_backfill.py` (`format_store_info`), `tests/test_location_prefix_and_store_info.py` (new)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -692,4 +710,5 @@
 | 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0 → fixed v0.40.0) |
 | 26 — Admin Multiline Text | 118 (1 item) | P2 | ~1 hour | ✅ DONE (v0.39.0) |
 | 27 — Search Result URL Display | 119 (1 item) | P3 | ~30 min | ✅ DONE (v0.41.0) |
-| **Total** | **70 items** | | **~81.5 hours** | |
+| 28 — Location & Store Detail | 120-121 (2 items) | P1-P2 | ~1 hour | ✅ DONE (v0.42.0) |
+| **Total** | **72 items** | | **~82.5 hours** | |

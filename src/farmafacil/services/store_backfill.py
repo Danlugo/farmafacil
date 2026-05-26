@@ -412,12 +412,47 @@ async def lookup_store(name: str, chain: str | None = None) -> PharmacyLocation 
 
 
 def format_store_info(store: PharmacyLocation) -> str:
-    """Format store info as a WhatsApp-friendly message."""
-    lines = [f"\U0001f3e5 *{store.pharmacy_chain} {store.name}*"]
+    """Format store info as a WhatsApp-friendly message.
+
+    Shows all available details: address, zone, hours, phone, website,
+    and a Google Maps link. Follows the same field display pattern as
+    ``formatter.format_nearby_stores()`` but for a single store.
+    (Enriched in Item 121, v0.42.0.)
+    """
+    # Title — skip chain prefix if the store name already contains it
+    chain = (store.pharmacy_chain or "").strip()
+    name = (store.name or "").strip()
+    if name.lower().startswith(chain.lower()):
+        title = name
+    else:
+        title = f"{chain} {name}" if chain else name
+    lines = [f"\U0001f3e5 *{title}*"]
+
     if store.address:
         lines.append(f"\U0001f4cd {store.address}")
+    if store.zone_name:
+        lines.append(f"Zona: {store.zone_name}")
     if store.city_code:
         lines.append(f"Ciudad: {store.city_code}")
+
+    # Opening hours
+    if store.is_24h:
+        lines.append("\U0001f319 24 horas")
+    elif store.opening_hours:
+        hours = store.opening_hours.strip()
+        # Compact verbose OSM strings (same pattern as formatter._short_hours)
+        if len(hours) > 40:
+            hours = hours.split(";", 1)[0].strip()
+            if len(hours) > 40:
+                hours = hours[:37] + "..."
+            else:
+                hours += " ..."
+        lines.append(f"\U0001f550 {hours}")
+
+    if store.phone:
+        lines.append(f"\U0001f4de {store.phone}")
+    if store.website:
+        lines.append(f"\U0001f310 {store.website}")
     if store.latitude and store.longitude:
         maps_url = f"https://maps.google.com/?q={store.latitude},{store.longitude}"
         lines.append(f"\U0001f5fa Ver en mapa: {maps_url}")
