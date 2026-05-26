@@ -121,15 +121,14 @@ def _format_price(result: DrugResult) -> str:
     """Format price with discount info for a result.
 
     When ``price_bs`` is zero (bad data from the pharmacy API), returns
-    a "price not available" message with a link to the product page so
-    the user can check the price themselves.
+    a "price not available" message.  The product URL (if any) is rendered
+    on a separate line by the caller — see ``format_search_results``.
     """
     if result.price_bs is None:
         return ""
     if result.price_bs == 0:
-        # Bs. 0.00 = missing/bad price data from the API
-        if result.url:
-            return f"Precio no disponible — ver en {result.url}"
+        # Bs. 0.00 = missing/bad price data from the API.
+        # URL is handled separately by the caller on its own line.
         return "Precio no disponible"
     price_str = f"Bs. {result.price_bs:,.2f}"
     if result.full_price_bs and result.full_price_bs != result.price_bs:
@@ -231,6 +230,11 @@ def format_search_results(response: SearchResponse) -> str:
             if not result.available:
                 pharmacy_line += " | _Sin stock_"
             line += pharmacy_line
+
+            # Product page link on its own line when price is unavailable.
+            # WhatsApp auto-links the raw URL so the user can tap through.
+            if result.price_bs is not None and result.price_bs == 0 and result.url:
+                line += f"\n      \U0001f517 {result.url}"
 
             # Nearby stores
             if result.nearby_stores:

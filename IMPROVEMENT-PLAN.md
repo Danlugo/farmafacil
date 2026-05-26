@@ -649,6 +649,18 @@
 
 ---
 
+### Phase 27 — Search Result URL Display
+
+### 119. Product URL on separate line in search results
+- **Priority:** P3 — UX Polish
+- **Problem:** When a product has zero-price data (Bs. 0.00 = bad API data), the fallback "Precio no disponible — ver en https://www.farmaciasaas.com/long/product/path" was displayed inline on the pharmacy line. The long URL cluttered the message and made the pharmacy name hard to read on mobile.
+- **Status:** ✅ DONE (2026-05-26, v0.41.0)
+- **Solution:** Moved the product URL to its own indented line below the pharmacy name with a 🔗 prefix. `_format_price()` no longer includes the URL — it returns just "Precio no disponible". `format_search_results()` adds the URL on a `\n      🔗 {url}` line when `price_bs == 0` and `url` is set. Full URL preserved (not truncated) so WhatsApp auto-links it. Image caption format (`_build_product_caption`) unchanged — already used a separate line. 6 new tests.
+- **Files:** `bot/formatter.py` (`_format_price`, `format_search_results`), `tests/test_zero_price_display.py` (+`TestProductUrlSeparateLine`)
+- **Note:** WhatsApp plain text does not support hyperlinked text (`[name](url)`) — only raw URLs are auto-linked.
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -679,4 +691,5 @@
 | 24 — English Drug Name Translation | 116 (1 item) | P2 | ~2 hours | ✅ DONE (v0.37.0) |
 | 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0 → fixed v0.40.0) |
 | 26 — Admin Multiline Text | 118 (1 item) | P2 | ~1 hour | ✅ DONE (v0.39.0) |
-| **Total** | **69 items** | | **~81 hours** | |
+| 27 — Search Result URL Display | 119 (1 item) | P3 | ~30 min | ✅ DONE (v0.41.0) |
+| **Total** | **70 items** | | **~81.5 hours** | |

@@ -53,16 +53,16 @@ def _make_search_response(results: list[DrugResult], query: str = "queloides") -
 class TestFormatPriceZero:
     """_format_price handles Bs. 0.00 as missing/bad price data."""
 
-    def test_zero_price_with_url_shows_link(self):
-        """Bs. 0.00 + product URL → 'Precio no disponible — ver en <url>'."""
+    def test_zero_price_with_url_returns_plain_message(self):
+        """Bs. 0.00 + product URL → just 'Precio no disponible' (URL on separate line by caller)."""
         result = _make_result(
             price_bs=Decimal("0.00"),
             url="https://www.farmaciasaas.com/product/17919/p",
         )
         text = _format_price(result)
-        assert "Precio no disponible" in text
-        assert "https://www.farmaciasaas.com/product/17919/p" in text
-        assert "Bs." not in text
+        assert text == "Precio no disponible"
+        # URL is NOT in the price string — rendered separately by format_search_results
+        assert "https://" not in text
 
     def test_zero_price_without_url_shows_plain_message(self):
         """Bs. 0.00 without URL → 'Precio no disponible' (no link)."""
@@ -197,6 +197,84 @@ class TestFormatSearchResultsStoreZeroPrice:
         text = format_search_results(response)
         assert "Precio no disponible" in text
         assert "Bs. 0.00" not in text
+
+
+# ===========================================================================
+# format_search_results — product URL on separate line (v0.41.0, Item 119)
+# ===========================================================================
+
+class TestProductUrlSeparateLine:
+    """Product URL is shown on its own indented line below the pharmacy name."""
+
+    def test_zero_price_url_on_own_line(self):
+        """Zero-price result with URL shows 🔗 on a separate indented line."""
+        result = _make_result(
+            price_bs=Decimal("0.00"),
+            url="https://www.farmaciasaas.com/product/17919/p",
+        )
+        response = _make_search_response([result])
+        text = format_search_results(response)
+
+        # URL must be on its own line, not inline with the pharmacy name
+        lines = text.split("\n")
+        url_lines = [l for l in lines if "https://www.farmaciasaas.com" in l]
+        assert len(url_lines) == 1, f"Expected exactly 1 URL line, got {len(url_lines)}"
+
+        url_line = url_lines[0]
+        # Should have 🔗 prefix
+        assert "\U0001f517" in url_line
+        # URL should NOT be on the same line as "Precio no disponible"
+        pharmacy_lines = [l for l in lines if "Precio no disponible" in l]
+        assert len(pharmacy_lines) == 1
+        assert "https://" not in pharmacy_lines[0]
+
+    def test_zero_price_no_url_no_link_line(self):
+        """Zero-price result without URL shows no 🔗 line."""
+        result = _make_result(price_bs=Decimal("0.00"), url=None)
+        response = _make_search_response([result])
+        text = format_search_results(response)
+        assert "\U0001f517" not in text
+
+    def test_normal_price_no_link_line(self):
+        """Normal-priced result (even with URL) shows no 🔗 line."""
+        result = _make_result(
+            price_bs=Decimal("50.00"),
+            url="https://www.farmaciasaas.com/product/12345/p",
+        )
+        response = _make_search_response([result])
+        text = format_search_results(response)
+        assert "\U0001f517" not in text
+        assert "https://www.farmaciasaas.com" not in text
+
+    def test_none_price_no_link_line(self):
+        """Result with price_bs=None (no price data at all) shows no 🔗 line."""
+        result = _make_result(price_bs=None, url="https://example.com/product")
+        response = _make_search_response([result])
+        text = format_search_results(response)
+        assert "\U0001f517" not in text
+
+    def test_url_line_indented_under_pharmacy(self):
+        """The URL line uses the same indentation as nearby store lines."""
+        result = _make_result(
+            price_bs=Decimal("0.00"),
+            url="https://www.farmaciasaas.com/product/17919/p",
+        )
+        response = _make_search_response([result])
+        text = format_search_results(response)
+
+        lines = text.split("\n")
+        url_line = [l for l in lines if "\U0001f517" in l][0]
+        # Should start with 6-space indent (same as 📍 store lines)
+        assert url_line.startswith("      ")
+
+    def test_url_preserved_full_for_auto_linking(self):
+        """Full URL including protocol is preserved so WhatsApp auto-links it."""
+        long_url = "https://www.farmaciasaas.com/kmplus-pharmaceutical-salbutamol-inh-100mcg-x200-dosis-kmp-21401/p"
+        result = _make_result(price_bs=Decimal("0.00"), url=long_url)
+        response = _make_search_response([result])
+        text = format_search_results(response)
+        # Full URL must be present (not truncated) for WhatsApp to auto-link
+        assert long_url in text
 
 
 # ===========================================================================
