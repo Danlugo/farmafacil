@@ -702,6 +702,15 @@
 - **Files:** `src/farmafacil/services/image_analysis.py` (new), `src/farmafacil/bot/handler.py` (modified), `tests/test_image_analysis.py` (new, 32 tests), `tests/test_phase2_performance.py` (updated)
 - **Found by:** User request
 
+### Item 125: Image analysis bugfix + HEIC support + English drug translation
+- **Priority:** P0
+- **Effort:** Medium (~2 hours)
+- **Problem:** (1) v0.45.0 BLOCKER: `handle_image_message` used `user.display_name` but User model has `name` — `AttributeError` crashed the handler after Vision analysis succeeded, causing user to see only "Analizando la imagen..." with no result. (2) iPhone/Samsung HEIC photos sent as documents not supported. (3) Large phone photos (4032px) sent at full resolution waste Vision API tokens. (4) English drug names from Vision not always translated to Spanish before searching.
+- **Status:** ✅ DONE (2026-05-26, v0.45.1)
+- **Fix:** (1) Fixed `user.display_name` → `user.name` in handler.py line 916. (2) Added `pillow-heif` dependency + HEIC/HEIF/AVIF→JPEG conversion via `_preprocess_image()`. (3) Auto-resize images > 1568px (Anthropic Vision optimal), EXIF orientation correction, RGBA→RGB compositing on white. (4) Proactive `translate_drug_query()` on Vision-extracted drug names before searching. (5) `ALL_IMAGE_TYPES` union replaces `SUPPORTED_IMAGE_TYPES` for image detection gates. (6) Vision prompt updated with English→Spanish INN translation examples. Updated old test_media.py tests to use real Pillow images.
+- **Files:** `src/farmafacil/bot/handler.py` (bugfix + ALL_IMAGE_TYPES + translation), `src/farmafacil/services/media.py` (preprocessing pipeline), `src/farmafacil/services/image_analysis.py` (prompt update), `pyproject.toml` (pillow-heif dep), `tests/test_image_preprocessing.py` (new, 24 tests), `tests/test_media.py` (updated)
+- **Found by:** Production crash (user test)
+
 ---
 
 ## Summary
@@ -739,4 +748,5 @@
 | 29 — Caption Field Labels | 122 (1 item) | P3 | ~30 min | ✅ DONE (v0.43.0) |
 | 30 — Form-Conflict Penalty | 123 (1 item) | P1 | ~1 hour | ✅ DONE (v0.44.0) |
 | 31 — Image Analysis | 124 (1 item) | P1 | ~4 hours | ✅ DONE (v0.45.0) |
-| **Total** | **75 items** | | **~88 hours** | |
+| 32 — Image Bugfix + HEIC | 125 (1 item) | P0 | ~2 hours | ✅ DONE (v0.45.1) |
+| **Total** | **76 items** | | **~90 hours** | |

@@ -6,10 +6,12 @@ encode_image_for_vision (types, size, encoding), extract_text_from_document
 """
 
 import base64
+import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from PIL import Image
 
 from farmafacil.services.media import (
     MAX_IMAGE_BYTES,
@@ -19,6 +21,20 @@ from farmafacil.services.media import (
     encode_image_for_vision,
     extract_text_from_document,
 )
+
+
+def _make_image(fmt: str, width: int = 50, height: int = 50) -> bytes:
+    """Create a minimal valid image in the given format."""
+    mode = "RGBA" if fmt == "PNG" else "RGB"
+    img = Image.new(mode, (width, height), color=(128, 64, 32))
+    buf = io.BytesIO()
+    save_kwargs = {}
+    if fmt == "JPEG":
+        if mode == "RGBA":
+            img = img.convert("RGB")
+        save_kwargs["quality"] = 85
+    img.save(buf, format=fmt, **save_kwargs)
+    return buf.getvalue()
 
 
 # ── download_whatsapp_media ────────────────────────────────────────────
@@ -124,28 +140,28 @@ class TestEncodeImageForVision:
     """Test Anthropic Vision block encoding."""
 
     def test_jpeg_encoding(self):
-        data = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        data = _make_image("JPEG")
         result = encode_image_for_vision(data, "image/jpeg")
         assert result is not None
         assert result["type"] == "image"
         assert result["source"]["media_type"] == "image/jpeg"
-        # Verify the base64 round-trips
+        # Verify the base64 round-trips to the same bytes (fast-path)
         decoded = base64.standard_b64decode(result["source"]["data"])
         assert decoded == data
 
     def test_png_encoding(self):
-        data = b"\x89PNG" + b"\x00" * 50
+        data = _make_image("PNG")
         result = encode_image_for_vision(data, "image/png")
         assert result is not None
         assert result["source"]["media_type"] == "image/png"
 
     def test_webp_encoding(self):
-        data = b"RIFF" + b"\x00" * 50
+        data = _make_image("WEBP")
         result = encode_image_for_vision(data, "image/webp")
         assert result is not None
 
     def test_gif_encoding(self):
-        data = b"GIF89a" + b"\x00" * 50
+        data = _make_image("GIF")
         result = encode_image_for_vision(data, "image/gif")
         assert result is not None
 
@@ -159,8 +175,12 @@ class TestEncodeImageForVision:
         assert result is None
 
     def test_exactly_max_size_accepted(self):
-        data = b"\x00" * MAX_IMAGE_BYTES
-        result = encode_image_for_vision(data, "image/jpeg")
+        """Size gate allows exactly MAX_IMAGE_BYTES (mock preprocessing)."""
+        data = _make_image("JPEG")
+        with patch("farmafacil.services.media._preprocess_image", return_value=(data, "image/jpeg")):
+            # Create data at exactly MAX_IMAGE_BYTES
+            padded = b"\x00" * MAX_IMAGE_BYTES
+            result = encode_image_for_vision(padded, "image/jpeg")
         assert result is not None
 
 

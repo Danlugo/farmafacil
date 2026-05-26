@@ -842,7 +842,7 @@ async def handle_image_message(
         wa_message_id: WhatsApp message ID for read receipts.
     """
     from farmafacil.services.media import (
-        SUPPORTED_IMAGE_TYPES,
+        ALL_IMAGE_TYPES,
         download_whatsapp_media,
         encode_image_for_vision,
         extract_text_from_document,
@@ -887,7 +887,7 @@ async def handle_image_message(
     # ── Regular user: image → Vision → analysis/search ────────────────
     # Item 124 (v0.45.0): Full image analysis — prescription reader +
     # medicine identifier using Claude Vision.
-    if actual_mime in SUPPORTED_IMAGE_TYPES:
+    if actual_mime in ALL_IMAGE_TYPES:
         image_block = encode_image_for_vision(data, actual_mime)
         if image_block is None:
             await send_text_message(
@@ -913,7 +913,25 @@ async def handle_image_message(
             )
             return
 
-        display_name = user.display_name or sender
+        display_name = user.name or sender
+
+        # Proactively translate English drug names to Spanish before
+        # searching.  The Vision prompt asks for Spanish INN names, but
+        # English prescriptions or imported packaging may still yield
+        # English names.  translate_drug_query is a no-op for already-
+        # Spanish names (returns None).
+        if analysis.drug_names:
+            translated_names: list[str] = []
+            for name in analysis.drug_names:
+                tr = await translate_drug_query(name)
+                if tr is not None:
+                    logger.info(
+                        "Image drug name translated: %s → %s", name, tr.name,
+                    )
+                    translated_names.append(tr.name)
+                else:
+                    translated_names.append(name)
+            analysis.drug_names = translated_names
 
         if analysis.image_type == "prescription":
             # ── Prescription: send full analysis, then search each drug ──
@@ -923,6 +941,7 @@ async def handle_image_message(
             await _update_memory_safe(
                 user.id, display_name,
                 f"[foto de receta] {caption}" if caption else "[foto de receta]",
+                # Truncate for memory context — full text may be long.
                 analysis.analysis_text[:200] if analysis.analysis_text else "receta analizada",
             )
 
@@ -1059,12 +1078,12 @@ async def _handle_admin_media(
 ) -> None:
     """Handle media in admin mode — pass to admin AI for analysis."""
     from farmafacil.services.media import (
-        SUPPORTED_IMAGE_TYPES,
+        ALL_IMAGE_TYPES,
         encode_image_for_vision,
         extract_text_from_document,
     )
 
-    if mime_type in SUPPORTED_IMAGE_TYPES:
+    if mime_type in ALL_IMAGE_TYPES:
         image_block = encode_image_for_vision(data, mime_type)
         if image_block is None:
             await send_text_message(sender, "Imagen demasiado grande o formato no soportado.")
@@ -1132,7 +1151,7 @@ async def _run_batch_simulation(
     results back as a WhatsApp message + saves to user's file folder.
     """
     from farmafacil.services.media import (
-        SUPPORTED_IMAGE_TYPES,
+        ALL_IMAGE_TYPES,
         extract_text_from_document,
     )
     from farmafacil.services.ai_responder import classify_with_ai
@@ -1144,7 +1163,7 @@ async def _run_batch_simulation(
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             text = data.decode("latin-1")
-    elif mime_type in SUPPORTED_IMAGE_TYPES:
+    elif mime_type in ALL_IMAGE_TYPES:
         await send_text_message(
             sender,
             "Para /ai_simulate necesito un archivo de texto (.txt, .pdf, .docx), no una imagen.",

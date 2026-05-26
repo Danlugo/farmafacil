@@ -125,6 +125,11 @@ TIPO: DESCONOCIDO
 - La línea MEDICAMENTOS: debe ser la última línea y contener SOLO los \
 nombres de los medicamentos separados por coma (máximo 3). \
 Usa el nombre genérico cuando sea posible para facilitar la búsqueda.
+- **Si el medicamento está en inglés**, traduce al nombre genérico en \
+español (INN latinoamericano). Ejemplos: Acetaminophen → Paracetamol, \
+Ibuprofen → Ibuprofeno, Amlodipine → Amlodipino, Metformin → Metformina, \
+Omeprazole → Omeprazol. La línea MEDICAMENTOS siempre debe tener el \
+nombre en español.
 - NO incluyas dosis en la línea MEDICAMENTOS (solo nombres).
 - Si no puedes leer un nombre, NO lo incluyas en MEDICAMENTOS.
 - Usa formato WhatsApp: *negrita*, _cursiva_.

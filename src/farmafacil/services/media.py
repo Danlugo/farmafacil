@@ -2,6 +2,10 @@
 
 Handles downloading images and documents from WhatsApp Cloud API,
 encoding images for Claude Vision, and extracting text from PDFs/DOCX.
+
+v0.45.0 (Item 124): Added image preprocessing — HEIC/HEIF→JPEG
+conversion (iPhone/Samsung photos), auto-resize large photos to
+1568px (Anthropic Vision optimal), EXIF orientation correction.
 """
 
 import base64
@@ -9,19 +13,43 @@ import io
 import logging
 
 import httpx
+from PIL import Image
 
 from farmafacil.config import WHATSAPP_API_TOKEN
 
 logger = logging.getLogger(__name__)
 
+# Register HEIC/HEIF opener so Pillow can read iPhone photos.
+# Graceful: if pillow-heif is not installed, HEIC files simply won't open.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIF_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _HEIF_AVAILABLE = False
+
 # WhatsApp Cloud API media endpoint
 _GRAPH_BASE = "https://graph.facebook.com/v22.0"
 
-# Supported image types for Claude Vision
+# Supported image types for Claude Vision (Anthropic-native formats).
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+# Additional types we accept and convert to JPEG before Vision.
+_CONVERTIBLE_IMAGE_TYPES = {"image/heic", "image/heif", "image/avif"}
+
+# Union of all image types we can handle (native + convertible).
+ALL_IMAGE_TYPES = SUPPORTED_IMAGE_TYPES | _CONVERTIBLE_IMAGE_TYPES
 
 # Max image size (bytes) — WhatsApp compresses images but we cap at 10MB
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+# Anthropic Vision optimal max dimension — larger images are auto-resized
+# by the API but cost more tokens in transit.  Pre-resizing saves bandwidth
+# and token budget (~4× token reduction for a 4032px → 1568px photo).
+_VISION_MAX_DIMENSION = 1568
+
+# JPEG quality for pre-processed images (resize / HEIC conversion).
+_JPEG_QUALITY = 85
 
 # ── Module-level httpx client singleton ─────────────────────────────────
 # A single AsyncClient reuses the underlying connection pool for all
@@ -93,19 +121,91 @@ async def download_whatsapp_media(media_id: str) -> tuple[bytes, str] | None:
     return None
 
 
+def _preprocess_image(data: bytes, mime_type: str) -> tuple[bytes, str] | None:
+    """Preprocess an image for Claude Vision: convert, resize, orient.
+
+    Handles:
+    - HEIC/HEIF/AVIF → JPEG conversion (iPhone/Samsung photos).
+    - Large images → resize to ``_VISION_MAX_DIMENSION`` px longest side.
+    - EXIF orientation → apply rotation so the image is upright.
+    - PNG/WebP with transparency → composited on white background.
+
+    Returns:
+        ``(processed_bytes, final_mime_type)`` or ``None`` on error.
+        If the image is already small enough and in a native format,
+        returns the original bytes unchanged (zero-copy fast path).
+    """
+    needs_conversion = mime_type in _CONVERTIBLE_IMAGE_TYPES
+    try:
+        img = Image.open(io.BytesIO(data))
+    except Exception as exc:
+        logger.warning("Cannot open image (%s): %s", mime_type, exc)
+        return None
+
+    # Apply EXIF orientation (phone photos often have rotation metadata).
+    try:
+        from PIL import ImageOps
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass  # No EXIF or rotation fails — continue with original
+
+    w, h = img.size
+    longest = max(w, h)
+    needs_resize = longest > _VISION_MAX_DIMENSION
+
+    # Fast path: native format, small enough, no conversion needed.
+    if not needs_conversion and not needs_resize:
+        return data, mime_type
+
+    # Resize if needed (maintain aspect ratio).
+    if needs_resize:
+        ratio = _VISION_MAX_DIMENSION / longest
+        new_w = int(w * ratio)
+        new_h = int(h * ratio)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        logger.info(
+            "Resized image %dx%d → %dx%d for Vision",
+            w, h, new_w, new_h,
+        )
+
+    # Convert to RGB (handles RGBA, palette, HEIC color spaces).
+    if img.mode in ("RGBA", "P", "LA"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        background.paste(img, mask=img.split()[-1])
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Encode as JPEG.
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+    processed = buf.getvalue()
+
+    logger.info(
+        "Preprocessed image: %s %d bytes → JPEG %d bytes",
+        mime_type, len(data), len(processed),
+    )
+    return processed, "image/jpeg"
+
+
 def encode_image_for_vision(
     data: bytes, mime_type: str,
 ) -> dict | None:
     """Encode image bytes as an Anthropic Vision content block.
 
+    Handles HEIC/HEIF/AVIF conversion and auto-resizes large phone
+    photos (> 1568px) to save Vision API tokens.
+
     Args:
         data: Raw image bytes.
-        mime_type: MIME type (must be in SUPPORTED_IMAGE_TYPES).
+        mime_type: MIME type (must be in ``ALL_IMAGE_TYPES``).
 
     Returns:
         Anthropic image content block dict, or None if unsupported/too large.
     """
-    if mime_type not in SUPPORTED_IMAGE_TYPES:
+    if mime_type not in ALL_IMAGE_TYPES:
         logger.warning("Unsupported image type for Vision: %s", mime_type)
         return None
 
@@ -113,13 +213,19 @@ def encode_image_for_vision(
         logger.warning("Image too large for Vision: %d bytes", len(data))
         return None
 
-    b64 = base64.standard_b64encode(data).decode("ascii")
+    # Preprocess: HEIC→JPEG, resize, EXIF orient.
+    result = _preprocess_image(data, mime_type)
+    if result is None:
+        return None
+    processed_data, final_mime = result
+
+    b64 = base64.standard_b64encode(processed_data).decode("ascii")
 
     return {
         "type": "image",
         "source": {
             "type": "base64",
-            "media_type": mime_type,
+            "media_type": final_mime,
             "data": b64,
         },
     }
