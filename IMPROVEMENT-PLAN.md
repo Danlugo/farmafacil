@@ -604,6 +604,17 @@
 
 ---
 
+### Phase 23 — Admin UI Friendly Names
+
+### 115. FK columns show human-readable names instead of bare IDs
+- **Priority:** P2 — Admin UX
+- **Problem:** Nine SQLAdmin views displayed raw integer IDs for foreign key columns (user_id, role_id, product_id, pharmacy_id, conversation_log_id). Admins had to memorize or cross-reference IDs to understand relationships. Example: UserMemory list showed "user_id: 4" instead of "Jose (14258904657)".
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Added `_fk_formatter()` DRY helper in admin.py that renders FK columns as clickable `<a>` links showing the related object's `__repr__` (XSS-safe via `markupsafe.escape`, URL-safe via `int()` cast). Applied to 9 admin views: UserMemoryAdmin, AiRoleRuleAdmin, AiRoleSkillAdmin, SearchLogAdmin, UserFeedbackAdmin, UserSuggestionAdmin, ProductPriceAdmin, DrugListingAdmin, VoiceMessageAdmin. Added `lazy="selectin"` to 9 ORM relationships for async-safe eager loading in admin list views. Added `viewonly=True` relationships with `foreign()` annotation for SearchLog.user and DrugListing.pharmacy (no formal FK constraint). Added `__repr__` to Pharmacy, Product, DrugListing models. Updated `column_labels` to use human-friendly names ("User" not "User ID"). Updated skill files (farmafacil-new-feature.md, farmafacil-update.md, farmafacil-review.md) with the friendly-name rule for future implementations. 27 new tests (10 parametrized formatter checks, 9 label checks, 3 helper unit tests, 5 model repr tests).
+- **Files:** `src/farmafacil/models/database.py`, `src/farmafacil/api/admin.py`, `tests/test_admin_user_form.py`, `.claude/commands/farmafacil-new-feature.md`, `.claude/commands/farmafacil-update.md`, `.claude/commands/farmafacil-review.md`
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -630,4 +641,5 @@
 | 20 — Skill Tool-Use Alignment | 112 (1 item) | P1 | ~1 hour | ✅ DONE (v0.33.0) |
 | 21 — Admin UI Polish | 113 (1 item) | P2 | ~1 hour | ✅ DONE (v0.34.0) |
 | 22 — Admin Chat Capacity | 114 (1 item) | P1 | ~30 min | ✅ DONE (v0.35.0) |
-| **Total** | **65 items** | | **~75 hours** | |
+| 23 — Admin UI Friendly Names | 115 (1 item) | P2 | ~2 hours | ✅ DONE (v0.36.0) |
+| **Total** | **66 items** | | **~77 hours** | |

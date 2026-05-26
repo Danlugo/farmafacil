@@ -217,6 +217,45 @@ USER_FORM_TOOLTIPS: dict[str, str] = {
 }
 
 
+def _fk_formatter(
+    rel_attr: str,
+    fk_attr: str,
+    detail_path: str,
+):
+    """Build a column_formatter rendering FK IDs as linked friendly names.
+
+    Replaces bare integer IDs (e.g., ``3``) with a clickable link showing
+    the related object's ``__repr__`` (e.g., ``Daniel (14258904657)``).
+    The raw ID is preserved in the HTML ``title`` attribute for debugging.
+
+    Parameters
+    ----------
+    rel_attr : str
+        Relationship attribute name on the model (e.g., ``"user"``).
+    fk_attr : str
+        Foreign-key attribute name (e.g., ``"user_id"``).
+    detail_path : str
+        Admin URL path segment for the related model (e.g., ``"user"``).
+        Used to build ``/admin/{detail_path}/details/{pk}``.
+
+    Returns
+    -------
+    callable
+        A ``(model_instance, column_name) -> str | Markup`` formatter.
+    """
+    def _fmt(m, _name):
+        fk_val = getattr(m, fk_attr, None)
+        if fk_val is None:
+            return "—"
+        related = getattr(m, rel_attr, None)
+        label = _escape(str(related)) if related else f"#{fk_val}"
+        return Markup(
+            f'<a href="/admin/{detail_path}/details/{int(fk_val)}"'
+            f' title="ID: {int(fk_val)}">{label}</a>'
+        )
+    return _fmt
+
+
 def _coerce_optional_str(value: object) -> str | None:
     """WTForms coerce that maps empty submissions to NULL.
 
@@ -696,7 +735,7 @@ class ProductPriceAdmin(ModelView, model=ProductPrice):
     column_default_sort = ("refreshed_at", True)
 
     column_labels = {
-        "product_id": "Product ID",
+        "product_id": "Product",
         "city_code": "City Code",
         "full_price_bs": "Full Price (Bs)",
         "offer_price_bs": "Offer Price (Bs)",
@@ -705,6 +744,10 @@ class ProductPriceAdmin(ModelView, model=ProductPrice):
         "stores_in_stock_count": "Stores In Stock",
         "stores_with_stock_ids": "Store IDs (JSON)",
         "refreshed_at": "Last Refreshed",
+    }
+
+    column_formatters = {
+        ProductPrice.product_id: _fk_formatter("product", "product_id", "product"),
     }
 
     can_create = False
@@ -887,7 +930,7 @@ class SearchLogAdmin(ModelView, model=SearchLog):
     column_default_sort = ("searched_at", True)
 
     column_labels = {
-        "user_id": "User ID",
+        "user_id": "User",
         "query": "Search Query",
         "results_count": "Results Found",
         "feedback": "Feedback",
@@ -898,6 +941,7 @@ class SearchLogAdmin(ModelView, model=SearchLog):
     }
 
     column_formatters = {
+        SearchLog.user_id: _fk_formatter("user", "user_id", "user"),
         SearchLog.voice_message_id: lambda m, _: Markup(
             f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
             f"🎙️ #{int(m.voice_message_id)}</a>"
@@ -971,7 +1015,7 @@ class DrugListingAdmin(ModelView, model=DrugListing):
     column_default_sort = ("scraped_at", True)
 
     column_labels = {
-        "pharmacy_id": "Pharmacy ID",
+        "pharmacy_id": "Pharmacy",
         "drug_name": "Drug Name",
         "drug_name_normalized": "Normalized Name",
         "price_usd": "Price (USD)",
@@ -979,6 +1023,10 @@ class DrugListingAdmin(ModelView, model=DrugListing):
         "available": "Available",
         "product_url": "Product URL",
         "scraped_at": "Scraped At",
+    }
+
+    column_formatters = {
+        DrugListing.pharmacy_id: _fk_formatter("pharmacy", "pharmacy_id", "pharmacy-chain"),
     }
 
     can_create = False
@@ -1054,7 +1102,7 @@ class AiRoleRuleAdmin(ModelView, model=AiRoleRule):
     column_default_sort = [("role_id", False), ("sort_order", False)]
 
     column_labels = {
-        "role_id": "Role ID",
+        "role_id": "Role",
         "name": "Rule Name",
         "description": "Description",
         "content": "Rule Content",
@@ -1062,6 +1110,10 @@ class AiRoleRuleAdmin(ModelView, model=AiRoleRule):
         "is_active": "Active",
         "created_at": "Created",
         "updated_at": "Updated",
+    }
+
+    column_formatters = {
+        AiRoleRule.role_id: _fk_formatter("role", "role_id", "ai-role"),
     }
 
     form_widget_args = {
@@ -1097,13 +1149,17 @@ class AiRoleSkillAdmin(ModelView, model=AiRoleSkill):
     column_default_sort = [("role_id", False), ("name", False)]
 
     column_labels = {
-        "role_id": "Role ID",
+        "role_id": "Role",
         "name": "Skill Name",
         "description": "Description",
         "content": "Skill Definition",
         "is_active": "Active",
         "created_at": "Created",
         "updated_at": "Updated",
+    }
+
+    column_formatters = {
+        AiRoleSkill.role_id: _fk_formatter("role", "role_id", "ai-role"),
     }
 
     form_widget_args = {
@@ -1143,10 +1199,10 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
     column_default_sort = ("created_at", True)
 
     column_labels = {
-        "user_id": "User ID",
+        "user_id": "User",
         "feedback_type": "Type",
         "message": "Message",
-        "conversation_log_id": "Conversation Log ID",
+        "conversation_log_id": "Conversation Log",
         "voice_message_id": "🎙️ Voice",
         "reviewed": "Reviewed",
         "reviewer_notes": "Reviewer Notes",
@@ -1155,6 +1211,14 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
     }
 
     column_formatters = {
+        UserFeedback.user_id: _fk_formatter("user", "user_id", "user"),
+        # conversation_log has no ORM relationship on UserFeedback — inline
+        # formatter with the same title="ID: …" pattern as _fk_formatter.
+        UserFeedback.conversation_log_id: lambda m, _: Markup(
+            f'<a href="/admin/conversation-log/details/{int(m.conversation_log_id)}"'
+            f' title="ID: {int(m.conversation_log_id)}">'
+            f"Log #{int(m.conversation_log_id)}</a>"
+        ) if m.conversation_log_id else "—",
         UserFeedback.voice_message_id: lambda m, _: Markup(
             f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
             f"🎙️ #{int(m.voice_message_id)}</a>"
@@ -1211,7 +1275,7 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
     column_default_sort = ("created_at", True)
 
     column_labels = {
-        "user_id": "User ID",
+        "user_id": "User",
         "phone_number": "Phone",
         "message": "Suggestion",
         "voice_message_id": "🎙️ Voice",
@@ -1222,6 +1286,7 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
     }
 
     column_formatters = {
+        UserSuggestion.user_id: _fk_formatter("user", "user_id", "user"),
         UserSuggestion.voice_message_id: lambda m, _: Markup(
             f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
             f"🎙️ #{int(m.voice_message_id)}</a>"
@@ -1273,11 +1338,15 @@ class UserMemoryAdmin(ModelView, model=UserMemory):
     column_default_sort = ("updated_at", True)
 
     column_labels = {
-        "user_id": "User ID",
+        "user_id": "User",
         "memory_text": "Memory (Markdown)",
         "updated_by": "Updated By",
         "created_at": "Created",
         "updated_at": "Updated",
+    }
+
+    column_formatters = {
+        UserMemory.user_id: _fk_formatter("user", "user_id", "user"),
     }
 
     form_widget_args = {
@@ -1421,6 +1490,7 @@ class VoiceMessageAdmin(ModelView, model=VoiceMessage):
     page_size = 25
 
     column_formatters = {
+        VoiceMessage.user_id: _fk_formatter("user", "user_id", "user"),
         VoiceMessage.transcription: lambda m, _: (
             (m.transcription[:80] + "...") if m.transcription and len(m.transcription) > 80
             else (m.transcription or "—")

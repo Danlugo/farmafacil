@@ -635,3 +635,170 @@ class TestResolutionFunctionsAcceptCanonicalValues:
     def test_resolve_post_feedback_null_user_falls_to_global(self):
         from farmafacil.services.settings import resolve_post_feedback
         assert resolve_post_feedback(None, "true") is True
+
+
+# --- Friendly-name formatters on FK columns (v0.36.0, Item 115) -----------
+#
+# Every admin view that displays a foreign-key ID column must have a
+# column_formatter rendering the related object's __repr__ as a clickable
+# link.  These tests verify the invariant so future admin views can't
+# regress to bare integer IDs.
+
+
+class TestFriendlyNameFormatters:
+    """FK columns in admin list views must render human-friendly linked names.
+
+    Each parametrized case checks that the admin class has a
+    ``column_formatters`` entry for the FK column attribute, and that the
+    formatter produces a Markup ``<a>`` link (not a bare integer).
+    """
+
+    # (admin_class_name, model_fk_attribute_name, relationship_attr)
+    FK_FORMATTER_CASES = [
+        ("UserMemoryAdmin", "user_id", "user"),
+        ("AiRoleRuleAdmin", "role_id", "role"),
+        ("AiRoleSkillAdmin", "role_id", "role"),
+        ("SearchLogAdmin", "user_id", "user"),
+        ("UserFeedbackAdmin", "user_id", "user"),
+        ("UserFeedbackAdmin", "conversation_log_id", None),
+        ("UserSuggestionAdmin", "user_id", "user"),
+        ("ProductPriceAdmin", "product_id", "product"),
+        ("DrugListingAdmin", "pharmacy_id", "pharmacy"),
+        ("VoiceMessageAdmin", "user_id", "user"),
+    ]
+
+    @pytest.mark.parametrize(
+        "admin_cls_name,fk_attr,rel_attr",
+        FK_FORMATTER_CASES,
+        ids=[f"{c[0]}.{c[1]}" for c in FK_FORMATTER_CASES],
+    )
+    def test_fk_column_has_formatter(self, admin_cls_name, fk_attr, rel_attr):
+        """Admin view registers a column_formatter for the FK column."""
+        import farmafacil.api.admin as admin_module
+        admin_cls = getattr(admin_module, admin_cls_name)
+
+        # column_formatters keys can be InstrumentedAttribute or string
+        formatter_keys = set()
+        for key in admin_cls.column_formatters:
+            if hasattr(key, "key"):
+                formatter_keys.add(key.key)
+            else:
+                formatter_keys.add(str(key))
+
+        assert fk_attr in formatter_keys, (
+            f"{admin_cls_name} is missing a column_formatter for '{fk_attr}'. "
+            f"FK columns must render friendly names, not bare IDs."
+        )
+
+    @pytest.mark.parametrize(
+        "admin_cls_name,fk_attr",
+        [
+            ("UserMemoryAdmin", "user_id"),
+            ("AiRoleRuleAdmin", "role_id"),
+            ("AiRoleSkillAdmin", "role_id"),
+            ("SearchLogAdmin", "user_id"),
+            ("UserFeedbackAdmin", "user_id"),
+            ("UserSuggestionAdmin", "user_id"),
+            ("ProductPriceAdmin", "product_id"),
+            ("DrugListingAdmin", "pharmacy_id"),
+            ("VoiceMessageAdmin", "user_id"),
+        ],
+        ids=[
+            "UserMemory.user_id", "AiRoleRule.role_id", "AiRoleSkill.role_id",
+            "SearchLog.user_id", "UserFeedback.user_id", "UserSuggestion.user_id",
+            "ProductPrice.product_id", "DrugListing.pharmacy_id", "VoiceMessage.user_id",
+        ],
+    )
+    def test_fk_column_label_is_friendly(self, admin_cls_name, fk_attr):
+        """Column labels for FK columns must NOT end with 'ID'."""
+        import farmafacil.api.admin as admin_module
+        admin_cls = getattr(admin_module, admin_cls_name)
+
+        label = admin_cls.column_labels.get(fk_attr, fk_attr)
+        assert not label.strip().endswith("ID"), (
+            f"{admin_cls_name}.column_labels['{fk_attr}'] = '{label}' "
+            f"still ends with 'ID'. Use a friendly name like 'User' or 'Product'."
+        )
+
+
+class TestFkFormatterHelper:
+    """Unit tests for the _fk_formatter helper function."""
+
+    def test_returns_dash_for_null_fk(self):
+        from farmafacil.api.admin import _fk_formatter
+
+        fmt = _fk_formatter("user", "user_id", "user")
+
+        class FakeModel:
+            user_id = None
+            user = None
+
+        result = fmt(FakeModel(), "user_id")
+        assert result == "—"
+
+    def test_returns_link_with_repr(self):
+        from farmafacil.api.admin import _fk_formatter
+        from markupsafe import Markup
+
+        fmt = _fk_formatter("user", "user_id", "user")
+
+        class FakeUser:
+            def __repr__(self):
+                return "Daniel (14258904657)"
+
+        class FakeModel:
+            user_id = 3
+            user = FakeUser()
+
+        result = fmt(FakeModel(), "user_id")
+        assert isinstance(result, Markup)
+        assert "/admin/user/details/3" in result
+        assert "Daniel" in result
+
+    def test_falls_back_to_id_when_relationship_missing(self):
+        from farmafacil.api.admin import _fk_formatter
+        from markupsafe import Markup
+
+        fmt = _fk_formatter("user", "user_id", "user")
+
+        class FakeModel:
+            user_id = 99
+            user = None
+
+        result = fmt(FakeModel(), "user_id")
+        assert isinstance(result, Markup)
+        assert "#99" in result
+        assert "/admin/user/details/99" in result
+
+
+class TestModelReprForAdmin:
+    """Models referenced by FK formatters must have useful __repr__."""
+
+    def test_user_repr_includes_name_and_phone(self):
+        from farmafacil.models.database import User
+        u = User(name="Daniel", phone_number="14258904657")
+        assert "Daniel" in repr(u)
+        assert "14258904657" in repr(u)
+
+    def test_user_repr_phone_only_when_no_name(self):
+        from farmafacil.models.database import User
+        u = User(name=None, phone_number="14258904657")
+        assert repr(u) == "14258904657"
+
+    def test_product_repr_includes_drug_and_chain(self):
+        from farmafacil.models.database import Product
+        p = Product(drug_name="Losartán 50mg", pharmacy_chain="Farmatodo",
+                    external_id="test")
+        assert "Losartán 50mg" in repr(p)
+        assert "Farmatodo" in repr(p)
+
+    def test_pharmacy_repr_is_name(self):
+        from farmafacil.models.database import Pharmacy
+        ph = Pharmacy(name="Farmatodo", website_url="https://farmatodo.com")
+        assert repr(ph) == "Farmatodo"
+
+    def test_ai_role_repr_uses_display_name(self):
+        from farmafacil.models.database import AiRole
+        r = AiRole(display_name="Asesor Farmacéutico", name="pharmacy_advisor",
+                   system_prompt="test")
+        assert "Asesor Farmacéutico" in repr(r)

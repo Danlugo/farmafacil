@@ -179,6 +179,9 @@ class Pharmacy(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
+    def __repr__(self) -> str:
+        return self.name
+
 
 class DrugListing(Base):
     """A drug found on a pharmacy website."""
@@ -197,6 +200,19 @@ class DrugListing(Base):
     available: Mapped[bool] = mapped_column(Boolean, default=True)
     product_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Admin display — viewonly because pharmacy_id has no ForeignKey constraint.
+    # DrugListing is a legacy scraping table; adding a formal FK would require
+    # a migration.  lazy="selectin" for admin formatter.  (v0.36.0, Item 115.)
+    pharmacy: Mapped["Pharmacy"] = relationship(
+        "Pharmacy",
+        primaryjoin="foreign(DrugListing.pharmacy_id) == Pharmacy.id",
+        lazy="selectin",
+        viewonly=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"{self.drug_name} (#{self.id})"
 
 
 class ConversationLog(Base):
@@ -349,6 +365,9 @@ class Product(Base):
         UniqueConstraint("external_id", "pharmacy_chain", name="uq_product_external"),
     )
 
+    def __repr__(self) -> str:
+        return f"{self.drug_name} ({self.pharmacy_chain})"
+
 
 class ProductKeyword(Base):
     """Inverted index of product keywords for fast cross-chain keyword matching.
@@ -410,7 +429,7 @@ class ProductPrice(Base):
         comment="When this price was last updated from the API",
     )
 
-    product: Mapped["Product"] = relationship("Product", back_populates="prices")
+    product: Mapped["Product"] = relationship("Product", back_populates="prices", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint("product_id", "city_code", name="uq_price_product_city"),
@@ -536,7 +555,7 @@ class AiRoleRule(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    role: Mapped["AiRole"] = relationship("AiRole", back_populates="rules")
+    role: Mapped["AiRole"] = relationship("AiRole", back_populates="rules", lazy="selectin")
 
     def __repr__(self) -> str:
         return self.name
@@ -571,7 +590,7 @@ class AiRoleSkill(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    role: Mapped["AiRole"] = relationship("AiRole", back_populates="skills")
+    role: Mapped["AiRole"] = relationship("AiRole", back_populates="skills", lazy="selectin")
 
     def __repr__(self) -> str:
         return self.name
@@ -606,6 +625,7 @@ class UserMemory(Base):
 
     user: Mapped["User"] = relationship(
         "User",
+        lazy="selectin",
         backref=backref("memory", uselist=False, passive_deletes=True),
     )
 
@@ -643,6 +663,18 @@ class SearchLog(Base):
 
     voice_message: Mapped["VoiceMessage | None"] = relationship(
         "VoiceMessage", foreign_keys=[voice_message_id],
+    )
+    # Admin display — viewonly because user_id has no ForeignKey constraint.
+    # lazy="selectin" so the admin column_formatter can access m.user for the
+    # friendly name.  Adds one extra query when SearchLog rows are loaded in
+    # the bot path (e.g., search_feedback.py), but that's a single-row lookup
+    # which is negligible compared to the LLM / WhatsApp API calls in the same
+    # request.  (v0.36.0, Item 115.)
+    user: Mapped["User | None"] = relationship(
+        "User",
+        primaryjoin="foreign(SearchLog.user_id) == User.id",
+        lazy="selectin",
+        viewonly=True,
     )
 
 
@@ -691,7 +723,7 @@ class UserFeedback(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["User"] = relationship("User", lazy="selectin")
     voice_message: Mapped["VoiceMessage | None"] = relationship(
         "VoiceMessage", foreign_keys=[voice_message_id],
     )
@@ -740,7 +772,7 @@ class UserSuggestion(Base):
         comment="Link to voice message that triggered this suggestion (NULL = typed text)",
     )
 
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["User"] = relationship("User", lazy="selectin")
     voice_message: Mapped["VoiceMessage | None"] = relationship(
         "VoiceMessage", foreign_keys=[voice_message_id],
     )
@@ -906,7 +938,7 @@ class VoiceMessage(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["User"] = relationship("User", lazy="selectin")
     conversation_log: Mapped["ConversationLog | None"] = relationship("ConversationLog")
 
     def __repr__(self) -> str:
