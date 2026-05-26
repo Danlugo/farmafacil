@@ -464,19 +464,20 @@ The bot supports two response modes, controlled globally via `app_settings.respo
 | Mode | Behavior |
 |------|----------|
 | `hybrid` (default) | Keywords + preset answers first, LLM for complex questions |
-| `ai_only` | Anthropic tool_use API — AI receives 10 tool schemas and decides which to call. No keyword matching, no text parsing, no if/elif routing. (v0.30.0, Items 105-108) |
+| `ai_only` | Anthropic tool_use API — AI receives 11 tool schemas and decides which to call. No keyword matching, no text parsing, no if/elif routing. (v0.30.0, Items 105-111) |
 
 Resolution: user override → global setting → fallback to `hybrid`.
 
-### AI-Only Tool-Use Architecture (v0.30.0, expanded v0.31.0)
+### AI-Only Tool-Use Architecture (v0.30.0, expanded v0.31.0–v0.32.0)
 
-In `ai_only` mode, every message is handled by `classify_with_tools()` which sends 10 tool definitions to the Anthropic API:
+In `ai_only` mode, every message is handled by `classify_with_tools()` which sends 11 tool definitions to the Anthropic API:
 
 | Tool | Purpose | Handler |
 |------|---------|---------|
 | `search_drug` | Drug/product search (with optional location, preamble, best_price) | `_handle_drug_search()` |
+| `get_cheapest` | Get cheapest product from last search (no params) | `_handle_drug_search(best_price=True)` |
 | `change_location` | Update user's saved location | `_handle_location_change()` |
-| `find_nearest_stores` | Show nearby pharmacies | `_handle_nearest_store()` |
+| `find_nearest_stores` | Show nearby pharmacies (optional `limit` 1-5) | `_handle_nearest_store(max_stores=)` |
 | `view_similar` | Show similar products from last search | `_handle_view_similar()` |
 | `change_name` | Update user's display name | `update_user_name()` |
 | `lookup_store` | Find a specific pharmacy by name/chain | `lookup_store()` + `format_store_info()` |
@@ -485,7 +486,7 @@ In `ai_only` mode, every message is handled by `classify_with_tools()` which sen
 | `show_help` | Display help/command list | `HELP_MESSAGE` |
 | `general_reply` | Conversational response (fallback) | `generate_response()` if empty |
 
-`_dispatch_tool_use()` maps each tool call to the corresponding handler. Unknown tool names log a warning and fall through to `general_reply`.
+`_dispatch_tool_use()` maps each tool call to the corresponding handler. Unknown tool names log a warning and fall through to `general_reply`. All dispatch branches call `_update_memory_safe()` (or delegate to a sub-handler that does) so the AI retains context across turns.
 
 #### AI Result Validation (v0.31.0, Item 108)
 

@@ -225,6 +225,7 @@ _KNOWN_TOOLS = frozenset({
     "search_drug", "change_location", "find_nearest_stores",
     "view_similar", "ask_clarification", "report_emergency",
     "show_help", "general_reply", "change_name", "lookup_store",
+    "get_cheapest",
 })
 
 
@@ -291,6 +292,10 @@ async def _dispatch_tool_use(
     if tool == "change_location":
         location = args.get("location", "").strip() or None
         await _handle_location_change(sender, location)
+        await _update_memory_safe(
+            user.id, display_name, text,
+            f"Location change requested: {location or 'prompted for zone'}",
+        )
         return
 
     # ── find_nearest_stores ──────────────────────────────────────────
@@ -308,16 +313,26 @@ async def _dispatch_tool_use(
         preamble = args.get("preamble", "")
         if preamble:
             await send_text_message(sender, preamble)
+        # AI can request a limit (1 = "la más cercana", default 5)
+        store_limit = args.get("limit", 5)
+        if not isinstance(store_limit, int) or store_limit < 1:
+            store_limit = 5
+        store_limit = min(store_limit, 5)
         await _handle_nearest_store(
             sender, user, display_name,
             debug_on=debug_on, ai_result=tool_result,
             temp_location=temp_loc,
+            max_stores=store_limit,
         )
         return
 
     # ── view_similar ─────────────────────────────────────────────────
     if tool == "view_similar":
         await _handle_view_similar(sender, user)
+        await _update_memory_safe(
+            user.id, display_name, text,
+            f"Showed similar products for: {user.last_search_query or 'unknown'}",
+        )
         return
 
     # ── change_name (Item 106, v0.31.0) ─────────────────────────────
@@ -342,6 +357,30 @@ async def _dispatch_tool_use(
         await send_text_message(sender, reply)
         # Update AI memory so next turn reflects the new name
         await _update_memory_safe(user.id, display_name, text, reply)
+        return
+
+    # ── get_cheapest (Item 109) ─────────────────────────────────────
+    if tool == "get_cheapest":
+        last_query = user.last_search_query
+        if last_query:
+            # Re-run the last search with best_price=true.
+            # Note: _handle_drug_search calls _update_memory_safe internally.
+            await _handle_drug_search(
+                sender, user, last_query, display_name,
+                debug_on=debug_on, ai_result=tool_result,
+                best_price=True,
+                voice_message_id=voice_message_id,
+            )
+        else:
+            reply = (
+                "No tengo una búsqueda reciente para comparar precios. "
+                "Primero busca un producto (ej: 'losartan') y luego "
+                "pregúntame cuál es el más barato."
+            )
+            if debug_on:
+                reply += await _build_debug(sender, user.id, tool_result)
+            await send_text_message(sender, reply)
+            await _update_memory_safe(user.id, display_name, text, reply)
         return
 
     # ── lookup_store (Item 107, v0.31.0) ─────────────────────────────
@@ -371,6 +410,7 @@ async def _dispatch_tool_use(
         if debug_on:
             reply += await _build_debug(sender, user.id, tool_result)
         await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
         return
 
     # ── ask_clarification ────────────────────────────────────────────
@@ -400,11 +440,13 @@ async def _dispatch_tool_use(
         if debug_on:
             reply += await _build_debug(sender, user.id, tool_result)
         await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
         return
 
     # ── show_help ────────────────────────────────────────────────────
     if tool == "show_help":
         await send_text_message(sender, HELP_MESSAGE)
+        await _update_memory_safe(user.id, display_name, text, "Showed help")
         return
 
     # ── general_reply (default / unknown tool fallthrough) ──────────
@@ -2412,6 +2454,7 @@ async def _handle_nearest_store(
     debug_on: bool = False,
     ai_result: AiResponse | ToolUseResult | None = None,
     temp_location: dict | None = None,
+    max_stores: int = 5,
 ) -> None:
     """Find and send nearest pharmacy stores to the user.
 
@@ -2426,6 +2469,7 @@ async def _handle_nearest_store(
         ai_result: Classification result for debug footer (AiResponse from
             hybrid mode, ToolUseResult from AI-only tool_use mode, or None).
         temp_location: One-time location override.
+        max_stores: Maximum number of stores to return (1-5, default 5).
     """
     search_lat = temp_location["lat"] if temp_location else user.latitude
     search_lng = temp_location["lng"] if temp_location else user.longitude
@@ -2433,18 +2477,19 @@ async def _handle_nearest_store(
 
     if temp_location:
         logger.info(
-            "Nearest store from %s/%s — TEMP location %s, home=%s",
-            sender, display_name, search_zone, user.zone_name,
+            "Nearest store from %s/%s — TEMP location %s, home=%s (limit=%d)",
+            sender, display_name, search_zone, user.zone_name, max_stores,
         )
     else:
         logger.info(
-            "Nearest store query from %s/%s (%s)",
-            sender, display_name, user.zone_name,
+            "Nearest store query from %s/%s (%s, limit=%d)",
+            sender, display_name, user.zone_name, max_stores,
         )
 
     stores = await get_all_nearby_stores(
         latitude=search_lat,
         longitude=search_lng,
+        max_stores=max_stores,
     )
 
     reply = format_nearby_stores(stores, zone_name=search_zone)

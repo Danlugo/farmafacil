@@ -548,6 +548,32 @@
 
 ---
 
+### Phase 19 — AI Interaction Completeness
+
+### 109. Get cheapest from last search (re-run with best_price)
+- **Priority:** P2 — UX Gap
+- **Problem:** When the user searches "losartan" and then asks "¿cuál es el más barato?", there's no tool to handle this follow-up. The `best_price` flag only works for new searches. The AI needs a tool that re-runs the last search query with `best_price=true` to return only the single cheapest result.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** New `get_cheapest` tool (no params). AI reads `user.last_search_query`, calls `_handle_drug_search(best_price=True)`. If no previous search, tells user to search first. 11 tools total.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`
+
+### 110. Closest pharmacy — single result
+- **Priority:** P2 — UX Gap
+- **Problem:** `find_nearest_stores` always returns 5 stores. When user asks "¿cuál es la farmacia más cercana?", they expect a single answer. The AI needs the ability to limit the result count.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Added optional `limit` parameter (int, 1-5, default 5) to `find_nearest_stores` tool schema. Validated in dispatch (type check, min 1, clamped to 5). Passed as `max_stores` to `_handle_nearest_store()` → `get_all_nearby_stores()`. AI sets `limit=1` for singular requests.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`, `tests/test_temp_location.py`
+
+### 111. Memory updates for all AI tool dispatch branches
+- **Priority:** P2 — AI Quality
+- **Problem:** Several `_dispatch_tool_use()` branches don't call `_update_memory_safe()`: `lookup_store`, `report_emergency`, `show_help`, `view_similar`, `change_location`. The AI forgets these interactions on the next turn.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Added `_update_memory_safe()` calls to all 5 branches. `get_cheapest` success path delegates memory to `_handle_drug_search` (documented with comment).
+- **Files:** `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`
+- **Code review fix:** `validate_search_results` exception branch returned 3-tuple instead of 4-tuple — fixed to `(results, 0, 0, "")` in ai_responder.py.
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -570,4 +596,5 @@
 | 16 — Inline Location Change | 104 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.4) |
 | 17 — AI-Only Tool-Use | 105 (1 item) | P1 | ~3 hours | ✅ DONE (v0.30.0) |
 | 18 — AI Tool Coverage + Validation | 106-108 (3 items) | P1-P2 | ~3 hours | ✅ DONE (v0.31.0) |
-| **Total** | **59 items** | | **~70 hours** | |
+| 19 — AI Interaction Completeness | 109-111 (3 items) | P2 | ~2 hours | ✅ DONE (v0.32.0) |
+| **Total** | **62 items** | | **~72 hours** | |

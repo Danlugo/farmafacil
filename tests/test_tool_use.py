@@ -29,23 +29,27 @@ from farmafacil.services.ai_responder import (
 
 class MockUser:
     """Minimal User stand-in for handler tests."""
-    id = 1
-    name = "TestUser"
-    phone_number = "5559930001"
-    latitude = 10.43
-    longitude = -66.86
-    zone_name = "La Boyera"
-    city_code = "CCS"
-    display_preference = "grid"
-    response_mode = None
-    chat_debug = None
-    onboarding_step = None
-    last_search_query = "losartan"
-    last_search_log_id = 42
-    awaiting_clarification_context = None
-    awaiting_category_search = None
-    chat_admin = False
-    admin_mode_active = False
+
+    def __init__(self, **overrides):
+        self.id = 1
+        self.name = "TestUser"
+        self.phone_number = "5559930001"
+        self.latitude = 10.43
+        self.longitude = -66.86
+        self.zone_name = "La Boyera"
+        self.city_code = "CCS"
+        self.display_preference = "grid"
+        self.response_mode = None
+        self.chat_debug = None
+        self.onboarding_step = None
+        self.last_search_query = "losartan"
+        self.last_search_log_id = 42
+        self.awaiting_clarification_context = None
+        self.awaiting_category_search = None
+        self.chat_admin = False
+        self.admin_mode_active = False
+        for key, val in overrides.items():
+            setattr(self, key, val)
 
 
 def _make_tool_use_response(tool_name: str, tool_input: dict):
@@ -92,7 +96,7 @@ class TestToolDefinitions:
 
     def test_tool_definitions_is_list(self):
         assert isinstance(TOOL_DEFINITIONS, list)
-        assert len(TOOL_DEFINITIONS) == 10  # 8 original + change_name + lookup_store
+        assert len(TOOL_DEFINITIONS) == 11  # 8 original + change_name + lookup_store + get_cheapest
 
     def test_each_tool_has_required_fields(self):
         for tool in TOOL_DEFINITIONS:
@@ -117,6 +121,7 @@ class TestToolDefinitions:
             "search_drug", "change_location", "find_nearest_stores",
             "view_similar", "ask_clarification", "report_emergency",
             "show_help", "general_reply", "change_name", "lookup_store",
+            "get_cheapest",
         }
         assert names == expected
 
@@ -1197,3 +1202,275 @@ class TestValidateSearchResults:
         assert len(filtered) == 2
         assert filtered[0].drug_name == "A"
         assert filtered[1].drug_name == "B"
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — Item 109: get_cheapest tool
+# ---------------------------------------------------------------------------
+
+class TestGetCheapestTool:
+    """Tests for get_cheapest tool definition and dispatch."""
+
+    def test_get_cheapest_tool_exists(self):
+        """get_cheapest tool is defined in TOOL_DEFINITIONS."""
+        names = {t["name"] for t in TOOL_DEFINITIONS}
+        assert "get_cheapest" in names
+
+    def test_get_cheapest_has_empty_required(self):
+        """get_cheapest takes no required parameters."""
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "get_cheapest")
+        assert tool["input_schema"]["required"] == []
+
+    @pytest.mark.asyncio
+    async def test_dispatch_get_cheapest_with_last_search(self):
+        """get_cheapest re-runs last search with best_price=True."""
+        user = MockUser(last_search_query="losartan")
+        tool_result = ToolUseResult(
+            tool_name="get_cheapest",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="el más barato")
+
+        mock_search.assert_awaited_once()
+        call_kwargs = mock_search.call_args
+        assert mock_search.call_args.kwargs["best_price"] is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_get_cheapest_no_last_search(self):
+        """get_cheapest with no previous search tells user to search first."""
+        user = MockUser(last_search_query=None)
+        tool_result = ToolUseResult(
+            tool_name="get_cheapest",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock) as mock_send,
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock),
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="el más barato")
+
+        mock_send.assert_awaited_once()
+        msg = mock_send.call_args[0][1]
+        assert "búsqueda reciente" in msg
+
+    @pytest.mark.asyncio
+    async def test_dispatch_get_cheapest_success_delegates_memory(self):
+        """get_cheapest success path delegates memory update to _handle_drug_search."""
+        user = MockUser(last_search_query="losartan")
+        tool_result = ToolUseResult(
+            tool_name="get_cheapest",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_drug_search", new_callable=AsyncMock) as mock_search,
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="el más barato")
+
+        # _handle_drug_search was called (it handles memory internally)
+        mock_search.assert_awaited_once()
+        # _update_memory_safe NOT called directly — delegated to sub-handler
+        mock_mem.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — Item 110: find_nearest_stores limit parameter
+# ---------------------------------------------------------------------------
+
+class TestFindNearestStoresLimit:
+    """Tests for find_nearest_stores limit parameter."""
+
+    def test_find_nearest_has_limit_property(self):
+        """find_nearest_stores tool has a limit property."""
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "find_nearest_stores")
+        assert "limit" in tool["input_schema"]["properties"]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_nearest_stores_with_limit_1(self):
+        """find_nearest_stores with limit=1 passes max_stores=1."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="find_nearest_stores",
+            tool_input={"limit": 1},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_nearest_store", new_callable=AsyncMock) as mock_store,
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="la más cercana")
+
+        mock_store.assert_awaited_once()
+        assert mock_store.call_args.kwargs.get("max_stores") == 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_nearest_stores_default_limit(self):
+        """find_nearest_stores with no limit uses default 5."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="find_nearest_stores",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_nearest_store", new_callable=AsyncMock) as mock_store,
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="farmacias cercanas")
+
+        mock_store.assert_awaited_once()
+        assert mock_store.call_args.kwargs.get("max_stores") == 5
+
+    @pytest.mark.asyncio
+    async def test_dispatch_nearest_stores_invalid_limit(self):
+        """Invalid limit (negative, string) falls back to 5."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="find_nearest_stores",
+            tool_input={"limit": -1},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_nearest_store", new_callable=AsyncMock) as mock_store,
+            patch("farmafacil.bot.handler.validate_user_profile", new_callable=AsyncMock, return_value=user),
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="farmacias cercanas")
+
+        mock_store.assert_awaited_once()
+        assert mock_store.call_args.kwargs.get("max_stores") == 5
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — Item 111: Memory updates on all dispatch branches
+# ---------------------------------------------------------------------------
+
+class TestDispatchMemoryUpdates:
+    """Verify _update_memory_safe is called across all dispatch branches."""
+
+    @pytest.mark.asyncio
+    async def test_change_location_updates_memory(self):
+        """change_location dispatch calls _update_memory_safe."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="change_location",
+            tool_input={"location": "Chacao"},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_location_change", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="me mudé a Chacao")
+
+        mock_mem.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lookup_store_updates_memory(self):
+        """lookup_store dispatch calls _update_memory_safe."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="lookup_store",
+            tool_input={"store_name": "TEPUY"},
+            response_text="",
+        )
+
+        mock_store = MagicMock()
+        mock_store.pharmacy_chain = "Farmatodo"
+        mock_store.name = "TEPUY"
+        mock_store.address = "Av. Baralt"
+        mock_store.latitude = 10.5
+        mock_store.longitude = -66.9
+        mock_store.city = "Caracas"
+        mock_store.state = "Miranda"
+
+        with (
+            patch("farmafacil.bot.handler.lookup_store", new_callable=AsyncMock, return_value=mock_store),
+            patch("farmafacil.bot.handler.format_store_info", return_value="Farmatodo TEPUY - Av. Baralt"),
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="donde queda tepuy")
+
+        mock_mem.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_report_emergency_updates_memory(self):
+        """report_emergency dispatch calls _update_memory_safe."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="report_emergency",
+            tool_input={"message": "Llama al 911"},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="me estoy ahogando")
+
+        mock_mem.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_show_help_updates_memory(self):
+        """show_help dispatch calls _update_memory_safe."""
+        user = MockUser()
+        tool_result = ToolUseResult(
+            tool_name="show_help",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.send_text_message", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="ayuda")
+
+        mock_mem.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_view_similar_updates_memory(self):
+        """view_similar dispatch calls _update_memory_safe."""
+        user = MockUser(last_search_query="losartan")
+        tool_result = ToolUseResult(
+            tool_name="view_similar",
+            tool_input={},
+            response_text="",
+        )
+
+        with (
+            patch("farmafacil.bot.handler._handle_view_similar", new_callable=AsyncMock),
+            patch("farmafacil.bot.handler._update_memory_safe", new_callable=AsyncMock) as mock_mem,
+        ):
+            from farmafacil.bot.handler import _dispatch_tool_use
+            await _dispatch_tool_use("1234", user, "Test", tool_result, text="ver similares")
+
+        mock_mem.assert_awaited_once()

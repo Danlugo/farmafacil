@@ -240,7 +240,9 @@ class TestNearestStoreTempLocation:
                 temp_location=temp_loc,
             )
 
-            mock_stores.assert_called_once_with(latitude=10.50, longitude=-66.90)
+            mock_stores.assert_called_once_with(
+                latitude=10.50, longitude=-66.90, max_stores=5,
+            )
 
     @pytest.mark.asyncio
     async def test_no_temp_uses_user_coords(self, mock_user):
@@ -261,6 +263,7 @@ class TestNearestStoreTempLocation:
 
             mock_stores.assert_called_once_with(
                 latitude=mock_user.latitude, longitude=mock_user.longitude,
+                max_stores=5,
             )
 
     @pytest.mark.asyncio

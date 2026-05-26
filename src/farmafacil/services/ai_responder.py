@@ -283,7 +283,8 @@ TOOL_DEFINITIONS: list[dict] = [
             "Buscar las farmacias más cercanas a la ubicación del usuario. "
             "Usa esta herramienta cuando pregunte por farmacias cerca, "
             "dónde comprar, qué farmacia queda cerca, etc. NO hagas preguntas "
-            "— el sistema mostrará las farmacias automáticamente."
+            "— el sistema mostrará las farmacias automáticamente. "
+            "Si el usuario pide LA más cercana (singular), usa limit=1."
         ),
         "input_schema": {
             "type": "object",
@@ -303,6 +304,17 @@ TOOL_DEFINITIONS: list[dict] = [
                         "usuario tiene historial de búsquedas o menciona una "
                         "cadena preferida."
                     ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Número máximo de farmacias a mostrar (1-5). "
+                        "Usa 1 cuando el usuario pide 'la más cercana' (singular). "
+                        "Default: 5."
+                    ),
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 5,
                 },
             },
             "required": [],
@@ -447,6 +459,22 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "get_cheapest",
+        "description": (
+            "Obtener el producto MÁS BARATO de la ÚLTIMA búsqueda del usuario. "
+            "Usa cuando el usuario YA buscó un producto y luego pregunta: "
+            "'cuál es el más barato?', 'dame el más económico', 'cuál cuesta menos?', "
+            "'el precio más bajo'. NO usar para búsquedas nuevas — para eso, "
+            "usa search_drug con best_price=true. get_cheapest es SOLO para "
+            "seguimiento de una búsqueda anterior."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
         "name": "general_reply",
         "description": (
             "Responder de forma conversacional. Usa para:\n"
@@ -495,7 +523,9 @@ REGLAS GENERALES:
 - NUNCA diagnostiques ni recomiendes dosis — sugiere consultar al médico.
 - ⚠️ EMERGENCIAS tienen PRIORIDAD MÁXIMA — report_emergency inmediatamente.
 - PRODUCTO + MARCA: Si el usuario menciona ambos, combínalos en query (ej: "ibuprofeno genfar" → query: "ibuprofeno genfar").
-- 💰 MEJOR PRECIO: Si el usuario pide 'el más barato', 'mejor precio', etc., activa best_price en search_drug."""
+- 💰 MEJOR PRECIO en búsqueda nueva: Si el usuario pide 'busca losartan más barato', activa best_price en search_drug.
+- 💰 MEJOR PRECIO de búsqueda anterior: Si el usuario YA buscó algo y luego dice 'cuál es el más barato?', 'el más económico', usa get_cheapest.
+- 🏥 LA MÁS CERCANA (singular): Si el usuario pide 'la farmacia más cercana', usa find_nearest_stores con limit=1. Si dice 'farmacias cercanas' (plural), limit=5 (default)."""
 
 
 @dataclass
@@ -1057,7 +1087,7 @@ async def validate_search_results(
         logger.error(
             "AI validation — unexpected error for '%s'", query, exc_info=True,
         )
-        return results, 0, 0
+        return results, 0, 0, ""
 
 
 async def _call_llm(
