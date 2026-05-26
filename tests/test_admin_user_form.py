@@ -771,6 +771,189 @@ class TestFkFormatterHelper:
         assert "/admin/user/details/99" in result
 
 
+# --- _text_detail_formatter helper (v0.39.0, Item 118) --------------------
+
+
+class TestTextDetailFormatterHelper:
+    """Unit tests for the _text_detail_formatter helper function."""
+
+    def test_returns_dict_with_keys(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        result = _text_detail_formatter("field_a", "field_b")
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {"field_a", "field_b"}
+
+    def test_single_attr_returns_single_key(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        result = _text_detail_formatter("memory_text")
+        assert set(result.keys()) == {"memory_text"}
+
+    def test_formatter_renders_pre_wrap_div(self):
+        from farmafacil.api.admin import _text_detail_formatter
+        from markupsafe import Markup
+
+        fmts = _text_detail_formatter("content")
+        fmt = fmts["content"]
+
+        class FakeModel:
+            content = "Line 1\nLine 2\nLine 3"
+
+        result = fmt(FakeModel(), "content")
+        assert isinstance(result, Markup)
+        assert "white-space:pre-wrap" in result
+        assert "Line 1\nLine 2\nLine 3" in result
+
+    def test_formatter_returns_dash_for_empty(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        fmts = _text_detail_formatter("content")
+        fmt = fmts["content"]
+
+        class FakeModel:
+            content = None
+
+        assert fmt(FakeModel(), "content") == "—"
+
+    def test_formatter_returns_dash_for_empty_string(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        fmts = _text_detail_formatter("content")
+        fmt = fmts["content"]
+
+        class FakeModel:
+            content = ""
+
+        assert fmt(FakeModel(), "content") == "—"
+
+    def test_formatter_returns_dash_for_whitespace_only(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        fmts = _text_detail_formatter("content")
+        fmt = fmts["content"]
+
+        class FakeModel:
+            content = "   \n  \t  "
+
+        assert fmt(FakeModel(), "content") == "—"
+
+    def test_formatter_escapes_html(self):
+        from farmafacil.api.admin import _text_detail_formatter
+
+        fmts = _text_detail_formatter("content")
+        fmt = fmts["content"]
+
+        class FakeModel:
+            content = "<script>alert('xss')</script>"
+
+        result = fmt(FakeModel(), "content")
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+
+# --- Detail view multiline formatters (v0.39.0, Item 118) -----------------
+#
+# Every admin view with long Text columns must have column_formatters_detail
+# entries rendering them with pre-wrap styling, so text isn't truncated.
+
+
+class TestDetailViewMultilineFormatters:
+    """Admin views with Text columns must have column_formatters_detail
+    for pre-wrap rendering in the detail view."""
+
+    # (admin_class_name, list of text column attr names)
+    DETAIL_TEXT_CASES = [
+        ("IntentKeywordAdmin", ["response"]),
+        ("PharmacyLocationAdmin", ["address"]),
+        ("ProductAdmin", ["description"]),
+        ("AppSettingAdmin", ["description"]),
+        ("ConversationLogAdmin", ["message_text"]),
+        ("AiRoleAdmin", ["system_prompt", "description"]),
+        ("AiRoleRuleAdmin", ["content", "description"]),
+        ("AiRoleSkillAdmin", ["content", "description"]),
+        ("UserFeedbackAdmin", ["message", "reviewer_notes"]),
+        ("UserSuggestionAdmin", ["message", "admin_notes"]),
+        ("UserMemoryAdmin", ["memory_text"]),
+        ("ScheduledTaskAdmin", ["last_result"]),
+        ("VoiceMessageAdmin", ["transcription", "translation_es", "translation_en"]),
+    ]
+
+    @pytest.mark.parametrize(
+        "admin_cls_name,text_attrs",
+        DETAIL_TEXT_CASES,
+        ids=[c[0] for c in DETAIL_TEXT_CASES],
+    )
+    def test_detail_formatter_registered(self, admin_cls_name, text_attrs):
+        """Admin view has column_formatters_detail for each Text column."""
+        import farmafacil.api.admin as admin_module
+        admin_cls = getattr(admin_module, admin_cls_name)
+
+        detail_fmts = getattr(admin_cls, "column_formatters_detail", {})
+        detail_keys = set()
+        for key in detail_fmts:
+            if hasattr(key, "key"):
+                detail_keys.add(key.key)
+            else:
+                detail_keys.add(str(key))
+
+        for attr in text_attrs:
+            assert attr in detail_keys, (
+                f"{admin_cls_name} is missing column_formatters_detail for "
+                f"'{attr}'. Long text must use pre-wrap in detail views."
+            )
+
+
+# --- Edit form textarea rows (v0.39.0, Item 118) --------------------------
+#
+# Every admin view with editable Text columns must have form_widget_args
+# with `rows` set so the edit form shows a multiline textarea.
+
+
+class TestEditFormTextareaRows:
+    """Admin views with editable Text columns must have form_widget_args
+    with rows for textarea rendering in the edit form."""
+
+    # (admin_class_name, field, expected_min_rows)
+    TEXTAREA_CASES = [
+        ("AiRoleAdmin", "system_prompt", 10),
+        ("AiRoleAdmin", "description", 2),
+        ("AiRoleRuleAdmin", "content", 10),
+        ("AiRoleRuleAdmin", "description", 2),
+        ("AiRoleSkillAdmin", "content", 10),
+        ("AiRoleSkillAdmin", "description", 2),
+        ("UserFeedbackAdmin", "message", 4),
+        ("UserFeedbackAdmin", "reviewer_notes", 4),
+        ("UserSuggestionAdmin", "message", 4),
+        ("UserSuggestionAdmin", "admin_notes", 4),
+        ("UserMemoryAdmin", "memory_text", 10),
+        ("IntentKeywordAdmin", "response", 3),
+        ("PharmacyLocationAdmin", "address", 2),
+        ("ProductAdmin", "description", 3),
+        ("AppSettingAdmin", "description", 2),
+    ]
+
+    @pytest.mark.parametrize(
+        "admin_cls_name,field,min_rows",
+        TEXTAREA_CASES,
+        ids=[f"{c[0]}.{c[1]}" for c in TEXTAREA_CASES],
+    )
+    def test_field_has_rows(self, admin_cls_name, field, min_rows):
+        """Editable Text field has form_widget_args with rows >= min_rows."""
+        import farmafacil.api.admin as admin_module
+        admin_cls = getattr(admin_module, admin_cls_name)
+
+        widget_args = getattr(admin_cls, "form_widget_args", {})
+        assert field in widget_args, (
+            f"{admin_cls_name}.form_widget_args missing '{field}'"
+        )
+        rows = widget_args[field].get("rows", 0)
+        assert rows >= min_rows, (
+            f"{admin_cls_name}.form_widget_args['{field}']['rows'] = {rows}, "
+            f"expected >= {min_rows}"
+        )
+
+
 class TestModelReprForAdmin:
     """Models referenced by FK formatters must have useful __repr__."""
 

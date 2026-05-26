@@ -638,6 +638,15 @@
 - **Solution:** Added `send_typing_indicator()` in `whatsapp.py` using WhatsApp Cloud API's native `typing_indicator` message type (three-dot bubble, added Q1 2025). In `webhook.py`, typing indicator is sent synchronously for all processed message types (text, location, interactive, image, document, audio) before the handler background task is dispatched. The dots auto-dismiss when the bot sends its response (or after 25s). No manual cleanup needed. Also added general-purpose `send_reaction()` / `remove_reaction()` utilities. Proxy mode no-op. 19 tests in `test_processing_indicator.py`.
 - **Files:** `bot/whatsapp.py` (+`send_typing_indicator`, `send_reaction`, `remove_reaction`), `bot/webhook.py` (typing indicator dispatch), `tests/test_processing_indicator.py` (new)
 
+### Phase 26 — Admin UI Multiline Text
+
+### 118. Admin detail view multiline text rendering
+- **Priority:** P2 — UI Readability
+- **Problem:** Long Text columns (UserMemory.memory_text, AiRole.system_prompt, AiRoleRule.content, etc.) are truncated to a single line in the SQLAdmin detail view, making them unreadable. Edit forms for some Text fields (IntentKeyword.response, PharmacyLocation.address, Product.description, AppSetting.description) also render as single-line inputs instead of textareas.
+- **Status:** ✅ DONE (2026-05-26, v0.39.0)
+- **Solution:** New `_text_detail_formatter()` DRY helper in admin.py renders Text values in a styled `<div>` with `white-space: pre-wrap`, monospace font, and a subtle background panel. Applied `column_formatters_detail` across 13 admin views (26 Text columns total). Added `form_widget_args` with `rows` to 4 views that were missing textarea rendering on their edit forms. XSS-safe via `markupsafe.escape()`. Handles None, empty string, and whitespace-only gracefully (shows "—"). 32 new tests.
+- **Files:** `api/admin.py` (+`_text_detail_formatter`, 13 views updated), `tests/test_admin_user_form.py` (+TestTextDetailFormatterHelper, +TestDetailViewMultilineFormatters, +TestEditFormTextareaRows)
+
 ---
 
 ## Summary
@@ -669,4 +678,5 @@
 | 23 — Admin UI Friendly Names | 115 (1 item) | P2 | ~2 hours | ✅ DONE (v0.36.0) |
 | 24 — English Drug Name Translation | 116 (1 item) | P2 | ~2 hours | ✅ DONE (v0.37.0) |
 | 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0) |
-| **Total** | **68 items** | | **~80 hours** | |
+| 26 — Admin Multiline Text | 118 (1 item) | P2 | ~1 hour | ✅ DONE (v0.39.0) |
+| **Total** | **69 items** | | **~81 hours** | |

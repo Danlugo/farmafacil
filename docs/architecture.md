@@ -117,6 +117,17 @@ Pattern for ModelView classes in `api/admin.py`:
 
 Current dropdown fields: `IntentKeyword.action`, `PharmacyLocation.pharmacy_chain`, `PharmacyLocation.city_code`, `Product.pharmacy_chain`, `ScheduledTask.task_key`, `User.city_code`, `User.display_preference`, `User.response_mode`, `User.chat_debug`, `User.onboarding_step`, `User.post_feedback_*`.
 
+### Admin UI Text Convention (v0.39.0)
+
+**Rule: Every Text column MUST have both a detail-view formatter (pre-wrap) and an edit-form textarea (`rows`).**
+
+Pattern for ModelView classes in `api/admin.py`:
+1. Add `column_formatters_detail = {**_text_detail_formatter("field_a", "field_b")}` — renders long text with `white-space: pre-wrap` in a styled monospace panel. XSS-safe via `markupsafe.escape()`.
+2. Add `form_widget_args = {"field": {"rows": N}}` — renders the edit form input as a multiline `<textarea>` with N rows.
+3. For views that already have `column_formatters_detail`, merge with `**_text_detail_formatter(...)` unpack.
+
+Current pre-wrap detail fields: `IntentKeyword.response`, `PharmacyLocation.address`, `Product.description`, `AppSetting.description`, `ConversationLog.message_text`, `AiRole.system_prompt/description`, `AiRoleRule.content/description`, `AiRoleSkill.content/description`, `UserFeedback.message/reviewer_notes`, `UserSuggestion.message/admin_notes`, `UserMemory.memory_text`, `ScheduledTask.last_result`, `VoiceMessage.transcription/translation_es/translation_en`.
+
 ## External Services
 
 | Service | Purpose | Auth |

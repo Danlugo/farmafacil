@@ -217,6 +217,40 @@ USER_FORM_TOOLTIPS: dict[str, str] = {
 }
 
 
+def _text_detail_formatter(*attrs: str):
+    """Build column_formatters_detail entries for long Text fields.
+
+    Wraps the value in a ``<div>`` with ``white-space: pre-wrap`` and a
+    monospace font so multiline text is readable in the detail view
+    (instead of being truncated to a single line in the table cell).
+
+    Parameters
+    ----------
+    *attrs : str
+        One or more model attribute names to format.
+
+    Returns
+    -------
+    dict[str, callable]
+        Mapping of attribute name → formatter, ready to be unpacked into
+        ``column_formatters_detail``.
+    """
+    def _make_fmt(attr: str):
+        def _fmt(m, _name):
+            value = getattr(m, attr, None)
+            if not value or not str(value).strip():
+                return "—"
+            return Markup(
+                '<div style="white-space:pre-wrap;max-width:800px;'
+                "font-family:monospace;font-size:13px;"
+                "background:#f8f9fa;padding:12px;border-radius:4px;"
+                'border:1px solid #dee2e6;">'
+                f"{_escape(value)}</div>"
+            )
+        return _fmt
+    return {attr: _make_fmt(attr) for attr in attrs}
+
+
 def _fk_formatter(
     rel_attr: str,
     fk_attr: str,
@@ -560,6 +594,10 @@ class IntentKeywordAdmin(ModelView, model=IntentKeyword):
         "updated_at": "Updated",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("response"),
+    }
+
     form_overrides = {"action": SelectField}
     form_args = {
         "action": {
@@ -567,6 +605,9 @@ class IntentKeywordAdmin(ModelView, model=IntentKeyword):
             "coerce": str,
             "description": "The bot action triggered when this keyword is matched.",
         },
+    }
+    form_widget_args = {
+        "response": {"rows": 4},
     }
 
     form_include_pk = False
@@ -625,6 +666,10 @@ class PharmacyLocationAdmin(ModelView, model=PharmacyLocation):
         "updated_at": "Updated",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("address"),
+    }
+
     form_overrides = {
         "pharmacy_chain": SelectField,
         "city_code": SelectField,
@@ -639,6 +684,9 @@ class PharmacyLocationAdmin(ModelView, model=PharmacyLocation):
             "coerce": _coerce_optional_str,
             "validate_choice": False,
         },
+    }
+    form_widget_args = {
+        "address": {"rows": 3},
     }
 
     form_include_pk = False
@@ -689,12 +737,19 @@ class ProductAdmin(ModelView, model=Product):
         "updated_at": "Updated",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("description"),
+    }
+
     form_overrides = {"pharmacy_chain": SelectField}
     form_args = {
         "pharmacy_chain": {
             "choices": PHARMACY_CHAIN_CHOICES,
             "coerce": str,
         },
+    }
+    form_widget_args = {
+        "description": {"rows": 4},
     }
 
     can_create = False
@@ -828,6 +883,10 @@ class AppSettingAdmin(ModelView, model=AppSetting):
         "updated_at": "Last Updated",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("description"),
+    }
+
     form_args = {
         "value": {
             "description": (
@@ -835,6 +894,9 @@ class AppSettingAdmin(ModelView, model=AppSetting):
                 "the Description column. Invalid values will be rejected."
             ),
         },
+    }
+    form_widget_args = {
+        "description": {"rows": 3},
     }
 
     form_include_pk = False
@@ -892,6 +954,10 @@ class ConversationLogAdmin(ModelView, model=ConversationLog):
         "message_type": "Type",
         "wa_message_id": "WhatsApp Message ID",
         "created_at": "Timestamp",
+    }
+
+    column_formatters_detail = {
+        **_text_detail_formatter("message_text"),
     }
 
     can_create = False
@@ -1067,6 +1133,10 @@ class AiRoleAdmin(ModelView, model=AiRole):
         "updated_at": "Updated",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("system_prompt", "description"),
+    }
+
     form_widget_args = {
         "system_prompt": {"rows": 20},
         "description": {"rows": 3},
@@ -1116,6 +1186,10 @@ class AiRoleRuleAdmin(ModelView, model=AiRoleRule):
         AiRoleRule.role_id: _fk_formatter("role", "role_id", "ai-role"),
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("content", "description"),
+    }
+
     form_widget_args = {
         "content": {"rows": 15},
         "description": {"rows": 2},
@@ -1160,6 +1234,10 @@ class AiRoleSkillAdmin(ModelView, model=AiRoleSkill):
 
     column_formatters = {
         AiRoleSkill.role_id: _fk_formatter("role", "role_id", "ai-role"),
+    }
+
+    column_formatters_detail = {
+        **_text_detail_formatter("content", "description"),
     }
 
     form_widget_args = {
@@ -1223,6 +1301,10 @@ class UserFeedbackAdmin(ModelView, model=UserFeedback):
             f'<a href="/admin/voice-message/details/{int(m.voice_message_id)}">'
             f"🎙️ #{int(m.voice_message_id)}</a>"
         ) if m.voice_message_id else "—",
+    }
+
+    column_formatters_detail = {
+        **_text_detail_formatter("message", "reviewer_notes"),
     }
 
     form_widget_args = {
@@ -1293,6 +1375,10 @@ class UserSuggestionAdmin(ModelView, model=UserSuggestion):
         ) if m.voice_message_id else "—",
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("message", "admin_notes"),
+    }
+
     form_widget_args = {
         "message": {"rows": 6, "readonly": True},
         "admin_notes": {"rows": 6},
@@ -1349,6 +1435,10 @@ class UserMemoryAdmin(ModelView, model=UserMemory):
         UserMemory.user_id: _fk_formatter("user", "user_id", "user"),
     }
 
+    column_formatters_detail = {
+        **_text_detail_formatter("memory_text"),
+    }
+
     form_widget_args = {
         "memory_text": {"rows": 20},
     }
@@ -1390,6 +1480,10 @@ class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
         ScheduledTask.last_duration_seconds: "Duration (s)",
         ScheduledTask.task_key: "Task Function",
     }
+    column_formatters_detail = {
+        **_text_detail_formatter("last_result"),
+    }
+
     form_overrides = {"task_key": SelectField}
     form_args = {
         "task_key": {
@@ -1509,6 +1603,7 @@ class VoiceMessageAdmin(ModelView, model=VoiceMessage):
             f'<a href="/admin/conversation-log/details/{int(m.conversation_log_id)}">'
             f"View conversation #{int(m.conversation_log_id)}</a>"
         ) if m.conversation_log_id else "—",
+        **_text_detail_formatter("transcription", "translation_es", "translation_en"),
     }
 
 
