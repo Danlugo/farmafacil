@@ -629,6 +629,17 @@
 
 ---
 
+### Phase 25 — Processing Indicator
+
+### 117. WhatsApp "processing" reaction indicator
+- **Priority:** P2 — UX Responsiveness
+- **Problem:** Users send a message and have no visual feedback that the bot received it and is working on a response. Similar to iMessage's typing dots, the bot should show it is processing. WhatsApp Business API doesn't support native typing indicators, but message reactions (⏳ emoji) provide the same UX — instant feedback that disappears when the response arrives.
+- **Status:** ✅ DONE (2026-05-26, v0.38.0)
+- **Solution:** Added `send_reaction()` and `remove_reaction()` functions in `whatsapp.py` using WhatsApp Cloud API reaction message type. In `webhook.py`, ⏳ reaction is sent synchronously (await, not fire-and-forget) for all processed message types (text, location, interactive, image, document, audio) before the handler background task is dispatched. Reaction is guaranteed to be removed via `clear_reaction=True` in `_safe_handle()`'s finally block — works on both success and failure. Edge cases handled: missing media_id paths, unhandled interactive subtypes, proxy mode no-op. 22 tests in `test_processing_indicator.py`.
+- **Files:** `bot/whatsapp.py` (+`send_reaction`, `remove_reaction`), `bot/webhook.py` (reaction dispatch + `_safe_handle` `clear_reaction` param + edge-case cleanup), `tests/test_processing_indicator.py` (new)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -657,4 +668,5 @@
 | 22 — Admin Chat Capacity | 114 (1 item) | P1 | ~30 min | ✅ DONE (v0.35.0) |
 | 23 — Admin UI Friendly Names | 115 (1 item) | P2 | ~2 hours | ✅ DONE (v0.36.0) |
 | 24 — English Drug Name Translation | 116 (1 item) | P2 | ~2 hours | ✅ DONE (v0.37.0) |
-| **Total** | **67 items** | | **~79 hours** | |
+| 25 — Processing Indicator | 117 (1 item) | P2 | ~1 hour | ✅ DONE (v0.38.0) |
+| **Total** | **68 items** | | **~80 hours** | |

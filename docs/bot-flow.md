@@ -8,15 +8,20 @@ Every incoming message follows this entry path:
 
 ```
 POST /webhook
+  → dedup (is_duplicate_message)
+  → ⏳ send_reaction (processing indicator)    ← v0.38.0
   → log_inbound()
-  → route by msg_type:
+  → route by msg_type (background task):
       text     → handle_incoming_message(sender, text)
       location → handle_location_message(sender, lat, lng)
       image    → handle_image_message(sender, media_id, mime_type)
       document → handle_image_message(sender, media_id, mime_type)
       audio    → handle_voice_message(sender, media_id)        ← v0.22.0
       interactive → handle_list_reply(sender, reply_id)
+  → remove_reaction (⏳ cleared in _safe_handle finally)
 ```
+
+**Processing indicator (v0.38.0):** For all processed message types (text, location, interactive, image, document, audio), a ⏳ emoji reaction is placed on the user's message immediately (synchronous `await`). The reaction is guaranteed to be removed after handler completion via `_safe_handle(clear_reaction=True)` — works on both success and failure. No-op in proxy mode (relay API).
 
 **Read receipt:** A read receipt (`status: "read"`) is sent as fire-and-forget via `asyncio.create_task()` immediately after user validation. This marks the message with blue check marks and triggers the typing indicator bubble. Uses WhatsApp Cloud API v22.0 messages endpoint. Non-blocking — failures are silently logged.
 

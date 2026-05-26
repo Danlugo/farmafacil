@@ -133,6 +133,63 @@ async def send_read_receipt(to: str, message_id: str) -> None:
         )
 
 
+async def send_reaction(to: str, message_id: str, emoji: str) -> None:
+    """React to a WhatsApp message with an emoji.
+
+    Uses the WhatsApp Cloud API reaction message type.  Non-blocking —
+    errors are silently logged and never propagated.
+
+    In proxy mode this is a no-op — reactions are meaningless when the
+    message didn't come from WhatsApp.
+
+    Args:
+        to: Recipient phone number (message sender).
+        message_id: The WhatsApp message ID to react to.
+        emoji: The emoji to use as a reaction (e.g. "⏳").
+    """
+    if not message_id:
+        return
+    if _response_collector.get() is not None:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "reaction",
+        "reaction": {
+            "message_id": message_id,
+            "emoji": emoji,
+        },
+    }
+    try:
+        client = _get_http_client()
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.debug("Reaction failed for %s (non-critical): %s", to, exc)
+
+
+async def remove_reaction(to: str, message_id: str) -> None:
+    """Remove a reaction from a WhatsApp message.
+
+    Sends an empty emoji string to clear the previously set reaction.
+    Non-blocking — errors are silently logged and never propagated.
+
+    In proxy mode this is a no-op.
+
+    Args:
+        to: Recipient phone number (message sender).
+        message_id: The WhatsApp message ID to remove the reaction from.
+    """
+    await send_reaction(to, message_id, "")
+
+
 async def send_text_message(to: str, text: str) -> dict | None:
     """Send a text message via WhatsApp Business API.
 
