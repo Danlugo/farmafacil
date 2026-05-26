@@ -22,6 +22,8 @@ from farmafacil.models.schemas import DrugResult
 from farmafacil.services.relevance import (
     FORM_WORDS,
     NON_PHARMA_CATEGORIES,
+    _FORM_GROUPS,
+    _extract_form_groups,
     classify_pharmaceutical,
     compute_relevance,
     is_relevant,
@@ -158,11 +160,25 @@ class TestComputeRelevance:
         )
         assert score < 0.3, f"Expected < 0.3, got {score}"
 
-    def test_paracetamol_pastillas_matches_paracetamol_tab(self):
-        """'paracetamol pastillas' should match a Paracetamol tablet."""
+    def test_paracetamol_pastillas_rejects_injectable(self):
+        """'paracetamol pastillas' should NOT match an injectable solution.
+
+        Pre-v0.44.0 this was a match (form words stripped). Post-v0.44.0
+        the form-conflict penalty (pastillas=oral_solid vs solucion
+        inyectable=liquid_oral+injectable) correctly rejects it.
+        """
         score = compute_relevance(
             "paracetamol pastillas",
             "Paracetamol 1g/100ml Jl Pharma Solucion Inyectable",
+            drug_class="ANALGESICOS/ANTIPIRETICOS OTC",
+        )
+        assert score == 0.0, f"Expected 0.0 (form conflict), got {score}"
+
+    def test_paracetamol_pastillas_matches_paracetamol_tablet(self):
+        """'paracetamol pastillas' should match an actual Paracetamol tablet."""
+        score = compute_relevance(
+            "paracetamol pastillas",
+            "Paracetamol 500mg Tabletas x 20",
             drug_class="ANALGESICOS/ANTIPIRETICOS OTC",
         )
         assert score >= 0.5, f"Expected >= 0.5, got {score}"
@@ -843,3 +859,285 @@ class TestSearchDrugRelevanceFiltering:
         assert response.total >= 1
         for r in response.results:
             assert is_relevant("ibuprofeno", r.drug_name, r.drug_class, r.description)
+
+
+# ── Unit Tests: _extract_form_groups ──────────────────────────────────────
+
+
+class TestExtractFormGroups:
+    """Unit tests for _extract_form_groups() helper."""
+
+    @pytest.mark.parametrize(
+        "tokens, expected_groups",
+        [
+            pytest.param({"tabletas"}, {"oral_solid"}, id="tabletas"),
+            pytest.param({"crema"}, {"topical"}, id="crema"),
+            pytest.param({"jarabe"}, {"liquid_oral"}, id="jarabe"),
+            pytest.param({"inyectable"}, {"injectable"}, id="inyectable"),
+            pytest.param({"spray"}, {"inhaled"}, id="spray"),
+            pytest.param({"supositorio"}, {"rectal"}, id="supositorio"),
+            pytest.param({"polvo"}, {"powder"}, id="polvo"),
+            pytest.param({"losartan", "50mg"}, set(), id="no_form_words"),
+            pytest.param(set(), set(), id="empty_tokens"),
+            pytest.param(
+                {"tabletas", "crema"},
+                {"oral_solid", "topical"},
+                id="multi_form_words",
+            ),
+            pytest.param(
+                {"capsulas", "tabletas"},
+                {"oral_solid"},
+                id="same_group_dedup",
+            ),
+        ],
+    )
+    def test_extract_form_groups(
+        self, tokens: set[str], expected_groups: set[str]
+    ):
+        assert _extract_form_groups(tokens) == expected_groups
+
+
+class TestFormGroupsCoverage:
+    """FORM_WORDS and _FORM_GROUPS keys must be identical sets."""
+
+    def test_all_form_words_have_group(self):
+        missing = FORM_WORDS - set(_FORM_GROUPS.keys())
+        assert not missing, f"FORM_WORDS without a group: {missing}"
+
+    def test_all_group_keys_are_form_words(self):
+        orphans = set(_FORM_GROUPS.keys()) - FORM_WORDS
+        assert not orphans, f"_FORM_GROUPS keys not in FORM_WORDS: {orphans}"
+
+
+# ── Unit Tests: Form-conflict penalty (Item 123, v0.44.0) ────────────────
+
+
+class TestFormConflictPenalty:
+    """Item 123 (v0.44.0): When the user specifies a dosage form and the
+    product has a *different* form group, the score must be 0.0.
+
+    Repro from Lizet 2026-05-26: query "Estrógenos conjugados 0,625 mgr
+    tabletas recubiertas" returned "Estrógenos Conjugados Crema Vaginal"
+    because form words were stripped from scoring, making both variants
+    score identically for the same active ingredient.
+    """
+
+    # ── The original bug ──
+
+    def test_estrogenos_tabletas_rejects_crema_vaginal(self):
+        """Lizet's exact bug: searching for 'tabletas recubiertas' must NOT
+        match 'Crema Vaginal'."""
+        score = compute_relevance(
+            "Estrógenos conjugados 0,625 mgr tabletas recubiertas",
+            "Estrógenos Conjugados Crema Vaginal 0.625 Mg Premarin Wyeth Crema x 14 g",
+            drug_class="HORMONOTERAPIA RX",
+        )
+        assert score == 0.0, f"Expected 0.0 (form conflict: oral_solid vs topical), got {score}"
+
+    def test_estrogenos_tabletas_accepts_tabletas(self):
+        """Same search must still match the correct tabletas product."""
+        score = compute_relevance(
+            "Estrógenos conjugados 0,625 mgr tabletas recubiertas",
+            "Estrógenos Conjugados 0.625 Mg Premarin Wyeth Tabletas Recubiertas x 28",
+            drug_class="HORMONOTERAPIA RX",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (matching form), got {score}"
+
+    # ── Cross-form conflict cases ──
+
+    @pytest.mark.parametrize(
+        "query, product_name, query_form, product_form",
+        [
+            pytest.param(
+                "diclofenac gel",
+                "Diclofenac Sodico 50mg Tabletas x 10",
+                "topical",
+                "oral_solid",
+                id="gel_vs_tabletas",
+            ),
+            pytest.param(
+                "ibuprofeno jarabe",
+                "Ibuprofeno 400mg Tabletas Recubiertas x 10",
+                "liquid_oral",
+                "oral_solid",
+                id="jarabe_vs_tabletas",
+            ),
+            pytest.param(
+                "acetaminofen capsulas",
+                "Acetaminofen Jarabe 120mg/5ml Frasco x 120ml",
+                "oral_solid",
+                "liquid_oral",
+                id="capsulas_vs_jarabe",
+            ),
+            pytest.param(
+                "ketoconazol crema",
+                "Ketoconazol 200mg Tabletas x 10",
+                "topical",
+                "oral_solid",
+                id="crema_vs_tabletas",
+            ),
+            pytest.param(
+                "hidrocortisona pomada",
+                "Hidrocortisona 10mg Tabletas x 30",
+                "topical",
+                "oral_solid",
+                id="pomada_vs_tabletas",
+            ),
+            pytest.param(
+                "omeprazol capsulas",
+                "Omeprazol Suspension Oral 2mg/ml",
+                "oral_solid",
+                "liquid_oral",
+                id="capsulas_vs_suspension",
+            ),
+        ],
+    )
+    def test_cross_form_conflict_rejects(
+        self, query: str, product_name: str, query_form: str, product_form: str
+    ):
+        """Products with a conflicting dosage form must be disqualified."""
+        score = compute_relevance(query, product_name, drug_class="ANALGESICOS")
+        assert score == 0.0, (
+            f"Expected 0.0 (form conflict: {query_form} vs {product_form}), "
+            f"got {score}"
+        )
+
+    # ── Same-form matches (no penalty) ──
+
+    @pytest.mark.parametrize(
+        "query, product_name",
+        [
+            pytest.param(
+                "diclofenac gel",
+                "Diclofenac Gel 1% 60G",
+                id="gel_matches_gel",
+            ),
+            pytest.param(
+                "ibuprofeno tabletas",
+                "Ibuprofeno 400mg Tabletas Recubiertas x 10",
+                id="tabletas_matches_tabletas",
+            ),
+            pytest.param(
+                "acetaminofen jarabe",
+                "Acetaminofen Jarabe 120mg/5ml x 120ml",
+                id="jarabe_matches_jarabe",
+            ),
+            pytest.param(
+                "ketoconazol crema",
+                "Ketoconazol Crema 2% 30g",
+                id="crema_matches_crema",
+            ),
+            pytest.param(
+                "diclofenac pomada",
+                "Diclofenac Gel 1% 60G",
+                id="pomada_matches_gel_same_group",
+            ),
+            pytest.param(
+                "paracetamol tabs",
+                "Paracetamol 500mg Comprimidos x 20",
+                id="tabs_matches_comprimidos_same_group",
+            ),
+        ],
+    )
+    def test_same_form_group_passes(self, query: str, product_name: str):
+        """Products with matching form group must NOT be penalized."""
+        score = compute_relevance(query, product_name, drug_class="ANALGESICOS")
+        assert score >= 0.5, f"Expected >= 0.5 (same form group), got {score}"
+
+    # ── No form in query (user doesn't care) ──
+
+    @pytest.mark.parametrize(
+        "query, product_name",
+        [
+            pytest.param(
+                "losartan",
+                "Losartan 50mg Tabletas x 30",
+                id="no_form_query_tabletas",
+            ),
+            pytest.param(
+                "losartan",
+                "Losartan Solucion Oral 2.5mg/ml",
+                id="no_form_query_solucion",
+            ),
+            pytest.param(
+                "estrogenos conjugados",
+                "Estrógenos Conjugados Crema Vaginal 0.625 Mg",
+                id="no_form_query_crema",
+            ),
+        ],
+    )
+    def test_no_form_in_query_no_penalty(self, query: str, product_name: str):
+        """When the user doesn't specify a form, all forms should pass."""
+        score = compute_relevance(query, product_name, drug_class="ANALGESICOS")
+        assert score >= 0.5, f"Expected >= 0.5 (no form in query), got {score}"
+
+    # ── No form in product name (ambiguous product) ──
+
+    def test_multi_group_product_partial_match_passes(self):
+        """Product with two form groups: if one overlaps query, no penalty.
+
+        'paracetamol jarabe' (liquid_oral) vs 'Paracetamol Solucion
+        Inyectable' (liquid_oral + injectable). The intersection
+        {liquid_oral} is non-empty, so no penalty should apply.
+        """
+        score = compute_relevance(
+            "paracetamol jarabe",
+            "Paracetamol 1g/100ml Jl Pharma Solucion Inyectable",
+            drug_class="ANALGESICOS/ANTIPIRETICOS OTC",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (partial form match via liquid_oral), got {score}"
+
+    def test_no_form_in_product_no_penalty(self):
+        """Products without a form word in the name should not be penalized."""
+        score = compute_relevance(
+            "ibuprofeno tabletas",
+            "Ibuprofeno 400mg Ibupra x 10",
+            drug_class="ANALGESICOS",
+        )
+        assert score >= 0.5, f"Expected >= 0.5 (no form in product name), got {score}"
+
+    # ── Regression: existing behavior preserved ──
+
+    def test_crema_queloides_still_rejects_dental_cream(self):
+        """Q9 floor gate + form conflict must not interfere: 'crema queloides'
+        still rejects dental cream (Q9 floor gate catches it first)."""
+        score = compute_relevance(
+            "crema queloides",
+            "Crema Dental Colgate Triple Accion 75Ml",
+            drug_class="CD ADULTO",
+        )
+        assert score == 0.0, f"Expected 0.0, got {score}"
+
+    def test_acetaminofen_no_form_still_matches_tablet(self):
+        """Queries without form words should still work as before."""
+        score = compute_relevance(
+            "acetaminofen",
+            "Acetaminofen 500mg Tabletas x 30",
+            drug_class="ANALGESICOS/ANTIPIRETICOS OTC",
+        )
+        assert score >= 0.5, f"Expected >= 0.5, got {score}"
+
+    def test_aspirina_500_regression(self):
+        """Q8 regression: 'Aspirina 500' must still match Aspirina 500mg."""
+        score = compute_relevance(
+            "Aspirina 500",
+            "Aspirina 500 mg Bayer Caja x 20 Tabletas",
+            drug_class="ANTITROMBOTICOS OTC",
+        )
+        assert score >= 0.5, f"Expected >= 0.5, got {score}"
+
+    def test_is_relevant_with_form_conflict(self):
+        """is_relevant() must propagate the form-conflict penalty."""
+        assert not is_relevant(
+            "diclofenac gel",
+            "Diclofenac 50mg Tabletas x 10",
+            drug_class="ANALGESICOS",
+        )
+
+    def test_is_relevant_same_form_passes(self):
+        """is_relevant() must pass when forms match."""
+        assert is_relevant(
+            "diclofenac gel",
+            "Diclofenac Gel 1% 60g",
+            drug_class="ANALGESICOS",
+        )

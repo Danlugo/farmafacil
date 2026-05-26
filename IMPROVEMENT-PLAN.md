@@ -685,6 +685,14 @@
 - **Solution:** Added bold Spanish labels to each field in `_build_product_caption()`: Descuento, Marca, Precio (💰), Precio unit. (💊), Requiere receta, Cercana, Ver en (🔗). Product name kept unlabeled as it's the title. 14 new tests in `TestCaptionFieldLabels`.
 - **Files:** `bot/handler.py` (`_build_product_caption`), `tests/test_zero_price_display.py`
 
+### Item 123: Form-conflict penalty in relevance scoring
+- **Priority:** P1
+- **Effort:** Medium (~1 hour)
+- **Problem:** When a user specifies a dosage form in their query (e.g., "estrógenos conjugados tabletas recubiertas"), results with a conflicting form (e.g., "crema vaginal") score identically because form words are stripped from relevance scoring. "Estrógenos Conjugados Crema Vaginal" should not appear alongside "Estrógenos Conjugados Tabletas Recubiertas" when the user explicitly requested tablets.
+- **Status:** ✅ DONE (2026-05-26)
+- **Solution:** Added `_FORM_GROUPS` dict mapping each of the 30 form words to a canonical group (oral_solid, topical, liquid_oral, injectable, inhaled, rectal, powder). New `_extract_form_groups()` helper extracts group sets from tokens. Signal 4 in `compute_relevance()`: if query specifies a form AND product has a different form group → score = 0.0. No penalty when query or product has no form. Same-group equivalences (pomada↔gel↔crema = topical, tabletas↔caps↔comp = oral_solid) work via set intersection. Updated one pre-existing test that asserted a now-incorrect match (pastillas vs injectable). 38 new tests.
+- **Files:** `src/farmafacil/services/relevance.py`, `tests/test_relevance.py`
+
 ---
 
 ## Summary
@@ -720,4 +728,5 @@
 | 27 — Search Result URL Display | 119 (1 item) | P3 | ~30 min | ✅ DONE (v0.41.0) |
 | 28 — Location & Store Detail | 120-121 (2 items) | P1-P2 | ~1 hour | ✅ DONE (v0.42.0) |
 | 29 — Caption Field Labels | 122 (1 item) | P3 | ~30 min | ✅ DONE (v0.43.0) |
-| **Total** | **73 items** | | **~83 hours** | |
+| 30 — Form-Conflict Penalty | 123 (1 item) | P1 | ~1 hour | ✅ DONE (v0.44.0) |
+| **Total** | **74 items** | | **~84 hours** | |

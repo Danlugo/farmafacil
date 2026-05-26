@@ -109,6 +109,53 @@ FORM_WORDS: set[str] = {
     "gts",
 }
 
+# ---------------------------------------------------------------------------
+# Form groups — map each dosage form word to a canonical group name.
+# When the user specifies a form in their query (e.g., "tabletas recubiertas")
+# and the product name contains a *different* form group (e.g., "crema
+# vaginal"), the product is heavily penalized (score → 0.0).
+# Item 123, v0.44.0.
+# ---------------------------------------------------------------------------
+_FORM_GROUPS: dict[str, str] = {
+    # Oral solid forms
+    "tabletas": "oral_solid",
+    "tabs": "oral_solid",
+    "tab": "oral_solid",
+    "comprimidos": "oral_solid",
+    "comp": "oral_solid",
+    "pastillas": "oral_solid",
+    "capsulas": "oral_solid",
+    "cap": "oral_solid",
+    "sobres": "oral_solid",
+    "granulado": "oral_solid",
+    # Topical forms
+    "crema": "topical",
+    "pomada": "topical",
+    "unguento": "topical",
+    "gel": "topical",
+    "locion": "topical",
+    "emulsion": "topical",
+    "parche": "topical",
+    # Liquid oral forms
+    "jarabe": "liquid_oral",
+    "jbe": "liquid_oral",
+    "gotas": "liquid_oral",
+    "gts": "liquid_oral",
+    "solucion": "liquid_oral",
+    "sol": "liquid_oral",
+    "elixir": "liquid_oral",
+    "suspension": "liquid_oral",
+    # Injectable forms
+    "inyectable": "injectable",
+    "ampolla": "injectable",
+    # Inhaled forms
+    "spray": "inhaled",
+    # Rectal forms
+    "supositorio": "rectal",
+    # Powder (reconstitution) forms
+    "polvo": "powder",
+}
+
 # Short tokens that carry no ingredient signal and should be ignored in
 # overlap scoring.
 _NOISE_TOKENS: set[str] = {
@@ -143,6 +190,20 @@ def _tokenize(text: str) -> set[str]:
     return tokens - _NOISE_TOKENS
 
 
+def _extract_form_groups(tokens: set[str]) -> set[str]:
+    """Extract canonical form groups from a set of tokens.
+
+    Returns the set of group names (e.g., {"oral_solid"}) found among
+    the tokens.  Returns an empty set if no form words are present.
+    """
+    groups: set[str] = set()
+    for token in tokens:
+        group = _FORM_GROUPS.get(token)
+        if group:
+            groups.add(group)
+    return groups
+
+
 def compute_relevance(
     query: str,
     drug_name: str,
@@ -152,7 +213,7 @@ def compute_relevance(
 ) -> float:
     """Score how relevant a product is to a search query.
 
-    Returns a float in [0.0, 1.0].  The score is built from three signals,
+    Returns a float in [0.0, 1.0].  The score is built from four signals,
     gated by a hard floor on token overlap (Q6 fix, v0.20.1):
 
     0. **Token-overlap floor (Q6, v0.20.1)**: at least one normalized query
@@ -173,6 +234,13 @@ def compute_relevance(
        (after stripping form words like "pastillas") appear in the product
        name — stronger signal that the product actually contains the
        searched ingredient.
+
+    4. **Form-conflict penalty (Item 123, v0.44.0)**: if the user specifies
+       a dosage form in their query (e.g., "tabletas") and the product name
+       contains a *different* form group (e.g., "crema"), the score is set
+       to 0.0.  Form words are grouped by equivalence (tabletas/tabs/comp →
+       oral_solid, crema/pomada/gel → topical, etc.).  No penalty when the
+       query or product has no form words.
 
     Args:
         query: User's search query (e.g., "paracetamol pastillas").
@@ -257,6 +325,27 @@ def compute_relevance(
         (ingredient_tokens & name_tokens) or (ingredient_tokens & brand_tokens)
     ):
         score += 0.2
+
+    # Signal 4: Form-conflict penalty (Item 123, v0.44.0)
+    # When the user explicitly specifies a dosage form (e.g., "tabletas
+    # recubiertas") and the product name contains a *different* form group
+    # (e.g., "crema vaginal"), the product is disqualified (score → 0.0).
+    # This prevents "Estrógenos Conjugados Crema Vaginal" from appearing
+    # when the user searched for "tabletas recubiertas".
+    #
+    # Rules:
+    # - No form in query → no penalty (user doesn't care about form)
+    # - No form in product name → no penalty (ambiguous product)
+    # - Same form group → no penalty (match)
+    # - Different form groups with no intersection → score = 0.0
+    query_forms = _extract_form_groups(query_tokens)
+    if query_forms:
+        # Intentionally name-only: brand fields rarely carry dosage-form
+        # data, and checking brand could create false conflicts when the
+        # brand name happens to contain a form word.
+        product_forms = _extract_form_groups(name_tokens)
+        if product_forms and not (query_forms & product_forms):
+            return 0.0
 
     return min(score, 1.0)
 
