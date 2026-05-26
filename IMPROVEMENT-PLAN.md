@@ -582,6 +582,17 @@
 
 ---
 
+### Phase 21 — Admin UI Polish
+
+### 113. Admin dropdown fields for constrained-value settings
+- **Priority:** P2 — Admin UX
+- **Problem:** Admin dashboard text inputs for fields with known valid values (intent action, pharmacy chain, city code, task key, response mode, etc.) allowed free-text entry, risking typos and invalid data. Example: typing "farmatodo" instead of "Farmatodo" for pharmacy_chain would silently create bad data.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Replaced text inputs with SelectField dropdowns for 4 ModelViews: IntentKeywordAdmin (action — 13 choices), PharmacyLocationAdmin (pharmacy_chain — 4 chains + city_code — 20 cities), ProductAdmin (pharmacy_chain — 4 chains), ScheduledTaskAdmin (task_key — dynamic from TASK_REGISTRY). For AppSettingAdmin (key-value table where valid values depend on the key), added server-side `on_model_change` validation that rejects invalid values for 6 constrained keys (response_mode, chat_debug, category_menu_enabled, post_feedback_suggestion, post_feedback_bug_report, default_model). Free-text settings (cache_ttl_minutes, etc.) remain unrestricted.
+- **Files:** `src/farmafacil/api/admin.py`, `tests/test_admin_user_form.py`
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -606,4 +617,5 @@
 | 18 — AI Tool Coverage + Validation | 106-108 (3 items) | P1-P2 | ~3 hours | ✅ DONE (v0.31.0) |
 | 19 — AI Interaction Completeness | 109-111 (3 items) | P2 | ~2 hours | ✅ DONE (v0.32.0) |
 | 20 — Skill Tool-Use Alignment | 112 (1 item) | P1 | ~1 hour | ✅ DONE (v0.33.0) |
-| **Total** | **63 items** | | **~73 hours** | |
+| 21 — Admin UI Polish | 113 (1 item) | P2 | ~1 hour | ✅ DONE (v0.34.0) |
+| **Total** | **64 items** | | **~74 hours** | |

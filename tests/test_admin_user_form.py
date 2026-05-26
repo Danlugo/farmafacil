@@ -13,6 +13,7 @@ These tests assert against the declarative class attributes — no live
 HTTP/HTML rendering — so they're fast and stable.
 """
 
+import pytest
 from wtforms import SelectField
 
 from farmafacil.api.admin import (
@@ -418,3 +419,129 @@ class TestFormColumns:
             if field in {"created_at", "updated_at"}:
                 continue
             assert field in names, f"{field} missing from form_columns"
+
+
+# --- Non-User model dropdowns (v0.33.0) -----------------------------------
+# These tests verify that models with constrained values use SelectField
+# dropdowns, and that the choice sets match their canonical sources.
+
+
+class TestIntentKeywordDropdown:
+    """IntentKeywordAdmin.action should be a SelectField."""
+
+    def test_action_is_select_field(self):
+        from farmafacil.api.admin import IntentKeywordAdmin
+        assert IntentKeywordAdmin.form_overrides.get("action") is SelectField
+
+    def test_action_choices_include_drug_search(self):
+        from farmafacil.api.admin import INTENT_ACTION_CHOICES
+        values = {v for v, _ in INTENT_ACTION_CHOICES}
+        assert "drug_search" in values
+        assert "greeting" in values
+        assert "emergency" in values
+        assert "location_change" in values
+
+
+class TestPharmacyLocationDropdowns:
+    """PharmacyLocationAdmin should have chain and city_code dropdowns."""
+
+    def test_pharmacy_chain_is_select_field(self):
+        from farmafacil.api.admin import PharmacyLocationAdmin
+        assert PharmacyLocationAdmin.form_overrides.get("pharmacy_chain") is SelectField
+
+    def test_city_code_is_select_field(self):
+        from farmafacil.api.admin import PharmacyLocationAdmin
+        assert PharmacyLocationAdmin.form_overrides.get("city_code") is SelectField
+
+    def test_chain_choices_include_known_chains(self):
+        from farmafacil.api.admin import PHARMACY_CHAIN_CHOICES
+        values = {v for v, _ in PHARMACY_CHAIN_CHOICES}
+        assert "Farmatodo" in values
+        assert "Farmacias SAAS" in values
+        assert "Locatel" in values
+
+
+class TestProductAdminDropdown:
+    """ProductAdmin.pharmacy_chain should be a SelectField."""
+
+    def test_pharmacy_chain_is_select_field(self):
+        from farmafacil.api.admin import ProductAdmin
+        assert ProductAdmin.form_overrides.get("pharmacy_chain") is SelectField
+
+
+class TestScheduledTaskDropdown:
+    """ScheduledTaskAdmin.task_key should be a SelectField."""
+
+    def test_task_key_is_select_field(self):
+        from farmafacil.api.admin import ScheduledTaskAdmin
+        assert ScheduledTaskAdmin.form_overrides.get("task_key") is SelectField
+
+    def test_task_key_choices_match_registry(self):
+        from farmafacil.api.admin import TASK_KEY_CHOICES
+        from farmafacil.services.scheduler import TASK_REGISTRY
+        choice_keys = {v for v, _ in TASK_KEY_CHOICES}
+        assert choice_keys == set(TASK_REGISTRY.keys())
+
+
+class TestAppSettingValidation:
+    """AppSettingAdmin validates constrained values on save."""
+
+    def test_setting_value_choices_covers_constrained_keys(self):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+        assert "response_mode" in SETTING_VALUE_CHOICES
+        assert "chat_debug" in SETTING_VALUE_CHOICES
+        assert "default_model" in SETTING_VALUE_CHOICES
+        assert "category_menu_enabled" in SETTING_VALUE_CHOICES
+        assert "post_feedback_suggestion" in SETTING_VALUE_CHOICES
+        assert "post_feedback_bug_report" in SETTING_VALUE_CHOICES
+
+    def test_free_text_settings_not_constrained(self):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+        assert "cache_ttl_minutes" not in SETTING_VALUE_CHOICES
+        assert "max_search_results" not in SETTING_VALUE_CHOICES
+        assert "relevance_threshold" not in SETTING_VALUE_CHOICES
+
+    def test_response_mode_valid_values(self):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+        assert set(SETTING_VALUE_CHOICES["response_mode"]) == {"hybrid", "ai_only"}
+
+    def test_default_model_valid_values(self):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+        from farmafacil.services.settings import VALID_MODEL_ALIASES
+        assert set(SETTING_VALUE_CHOICES["default_model"]) == VALID_MODEL_ALIASES
+
+    @pytest.mark.asyncio
+    async def test_on_model_change_rejects_invalid_value(self):
+        """on_model_change raises ValueError for invalid constrained values."""
+        from farmafacil.api.admin import AppSettingAdmin
+        from farmafacil.models.database import AppSetting
+
+        admin = AppSettingAdmin.__new__(AppSettingAdmin)
+        model = AppSetting(key="response_mode", value="hybrid")
+        data = {"key": "response_mode", "value": "invalid_mode"}
+        with pytest.raises(ValueError, match="Invalid value 'invalid_mode'"):
+            await admin.on_model_change(data, model, False, None)
+
+    @pytest.mark.asyncio
+    async def test_on_model_change_allows_valid_value(self):
+        """on_model_change passes for valid constrained values."""
+        from farmafacil.api.admin import AppSettingAdmin
+        from farmafacil.models.database import AppSetting
+
+        admin = AppSettingAdmin.__new__(AppSettingAdmin)
+        model = AppSetting(key="response_mode", value="hybrid")
+        data = {"key": "response_mode", "value": "ai_only"}
+        # Should not raise
+        await admin.on_model_change(data, model, False, None)
+
+    @pytest.mark.asyncio
+    async def test_on_model_change_allows_free_text_settings(self):
+        """on_model_change skips validation for free-text settings."""
+        from farmafacil.api.admin import AppSettingAdmin
+        from farmafacil.models.database import AppSetting
+
+        admin = AppSettingAdmin.__new__(AppSettingAdmin)
+        model = AppSetting(key="cache_ttl_minutes", value="10080")
+        data = {"key": "cache_ttl_minutes", "value": "anything_goes"}
+        # Should not raise — free-text setting
+        await admin.on_model_change(data, model, False, None)

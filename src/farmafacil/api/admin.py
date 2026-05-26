@@ -35,7 +35,13 @@ from farmafacil.models.database import (
     UserSuggestion,
     VoiceMessage,
 )
-from farmafacil.services.settings import _VALID_DEBUG, _VALID_MODES, _VALID_TOGGLE
+from farmafacil.services.settings import (
+    VALID_MODEL_ALIASES,
+    _VALID_DEBUG,
+    _VALID_MODES,
+    _VALID_TOGGLE,
+)
+from farmafacil.services.scheduler import TASK_REGISTRY
 from farmafacil.services.store_backfill import FARMATODO_CITIES
 
 
@@ -126,6 +132,58 @@ USER_READONLY_FIELDS: tuple[str, ...] = (
     "created_at",
     "updated_at",
 )
+
+# --- IntentKeywordAdmin form constants ---------------------------------------
+# Valid intent actions — CLASSIFY_INSTRUCTIONS (ai_responder.py line 61)
+# defines: greeting, drug_search, location_change, clarify_needed,
+# nearest_store, view_similar, emergency, question, unknown.
+# Additional keyword-only actions not in CLASSIFY_INSTRUCTIONS:
+# farewell, help, name_change, preference_change.
+INTENT_ACTION_CHOICES: list[tuple[str, str]] = [
+    ("drug_search", "drug_search"),
+    ("greeting", "greeting"),
+    ("farewell", "farewell"),
+    ("help", "help"),
+    ("location_change", "location_change"),
+    ("name_change", "name_change"),
+    ("nearest_store", "nearest_store"),
+    ("preference_change", "preference_change"),
+    ("view_similar", "view_similar"),
+    ("emergency", "emergency"),
+    ("question", "question"),
+    ("clarify_needed", "clarify_needed"),
+    ("unknown", "unknown"),
+]
+
+# --- PharmacyLocationAdmin / ProductAdmin form constants ---------------------
+# Known pharmacy chains used across the system.
+PHARMACY_CHAIN_CHOICES: list[tuple[str, str]] = [
+    ("Farmatodo", "Farmatodo"),
+    ("Farmacias SAAS", "Farmacias SAAS"),
+    ("Locatel", "Locatel"),
+    ("Independiente", "Independiente"),
+]
+
+# --- ScheduledTaskAdmin form constants ---------------------------------------
+# Valid task_key values from the scheduler task registry.
+# NOTE: This import is one-way (admin ← scheduler). scheduler.py must NOT
+# import from admin.py, or this becomes a circular import.
+TASK_KEY_CHOICES: list[tuple[str, str]] = [
+    (key, key) for key in sorted(TASK_REGISTRY.keys())
+]
+
+# --- AppSettingAdmin value constraints ---------------------------------------
+# Maps setting keys to their valid values (for server-side validation and
+# description text). Settings not in this dict accept any free-text value.
+SETTING_VALUE_CHOICES: dict[str, list[str]] = {
+    "response_mode": sorted(_VALID_MODES),
+    "chat_debug": sorted(_VALID_DEBUG),
+    "category_menu_enabled": sorted(_VALID_TOGGLE),
+    "post_feedback_suggestion": sorted(_VALID_TOGGLE),
+    "post_feedback_bug_report": sorted(_VALID_TOGGLE),
+    "default_model": sorted(VALID_MODEL_ALIASES),
+}
+
 
 # Tooltip / help-text mapping for free-text fields. The text is fed to the
 # wtforms Field constructor as ``description`` (via form_args, NOT
@@ -463,6 +521,15 @@ class IntentKeywordAdmin(ModelView, model=IntentKeyword):
         "updated_at": "Updated",
     }
 
+    form_overrides = {"action": SelectField}
+    form_args = {
+        "action": {
+            "choices": INTENT_ACTION_CHOICES,
+            "coerce": str,
+            "description": "The bot action triggered when this keyword is matched.",
+        },
+    }
+
     form_include_pk = False
     page_size = 25
     page_size_options = [10, 25, 50, 100]
@@ -519,6 +586,22 @@ class PharmacyLocationAdmin(ModelView, model=PharmacyLocation):
         "updated_at": "Updated",
     }
 
+    form_overrides = {
+        "pharmacy_chain": SelectField,
+        "city_code": SelectField,
+    }
+    form_args = {
+        "pharmacy_chain": {
+            "choices": PHARMACY_CHAIN_CHOICES,
+            "coerce": str,
+        },
+        "city_code": {
+            "choices": [("", "— none —"), *USER_CITY_CODE_CHOICES],
+            "coerce": _coerce_optional_str,
+            "validate_choice": False,
+        },
+    }
+
     form_include_pk = False
     page_size = 25
     page_size_options = [10, 25, 50, 100]
@@ -565,6 +648,14 @@ class ProductAdmin(ModelView, model=Product):
         "product_url": "Product URL",
         "created_at": "Created",
         "updated_at": "Updated",
+    }
+
+    form_overrides = {"pharmacy_chain": SelectField}
+    form_args = {
+        "pharmacy_chain": {
+            "choices": PHARMACY_CHAIN_CHOICES,
+            "coerce": str,
+        },
     }
 
     can_create = False
@@ -664,7 +755,13 @@ class SearchQueryAdmin(ModelView, model=SearchQuery):
 
 
 class AppSettingAdmin(ModelView, model=AppSetting):
-    """Admin view for application settings."""
+    """Admin view for application settings.
+
+    Settings with constrained values (e.g. enabled/disabled, true/false,
+    model aliases) are validated on save via ``on_model_change``.  The
+    ``description`` column already shows valid values from seed data, and
+    the ``column_formatters`` highlights the constraint for the admin.
+    """
 
     name = "App Setting"
     name_plural = "App Settings"
@@ -688,9 +785,33 @@ class AppSettingAdmin(ModelView, model=AppSetting):
         "updated_at": "Last Updated",
     }
 
+    form_args = {
+        "value": {
+            "description": (
+                "For constrained settings the valid values are shown in "
+                "the Description column. Invalid values will be rejected."
+            ),
+        },
+    }
+
     form_include_pk = False
     page_size = 25
     page_size_options = [10, 25, 50, 100]
+
+    async def on_model_change(
+        self, data: dict, model: AppSetting, is_created: bool, request: Request
+    ) -> None:
+        """Validate constrained setting values before saving."""
+        # data["key"] is present on edit; fall back to model.key on create
+        key = data.get("key") or (model.key if model else None)
+        value = data.get("value", "")
+        if key and key in SETTING_VALUE_CHOICES:
+            valid = SETTING_VALUE_CHOICES[key]
+            if value not in valid:
+                raise ValueError(
+                    f"Invalid value '{value}' for setting '{key}'. "
+                    f"Valid values: {', '.join(valid)}"
+                )
 
 
 class ConversationLogAdmin(ModelView, model=ConversationLog):
@@ -1199,6 +1320,14 @@ class ScheduledTaskAdmin(ModelView, model=ScheduledTask):
         ScheduledTask.interval_minutes: "Interval (min)",
         ScheduledTask.last_duration_seconds: "Duration (s)",
         ScheduledTask.task_key: "Task Function",
+    }
+    form_overrides = {"task_key": SelectField}
+    form_args = {
+        "task_key": {
+            "choices": TASK_KEY_CHOICES,
+            "coerce": str,
+            "description": "Registered task function from scheduler.TASK_REGISTRY.",
+        },
     }
     form_include_pk = False
     form_columns = [
