@@ -57,15 +57,15 @@ User (WhatsApp)        Group (WhatsApp)
 4. Extracts sender + text, logs to conversation_logs
 5. handler.py: get_or_create_user() + validate_user_profile()
 6. If onboarding not complete → rigid step-by-step wizard
-7. If onboarding complete:
+7. If onboarding complete → resolve response_mode (hybrid or ai_only):
+   **AI-only mode** (tool_use, v0.30.0):
+   a. classify_with_tools() sends user message + 8 tool schemas to Anthropic
+   b. Model returns tool_use block (search_drug, change_location, etc.)
+   c. _dispatch_tool_use() routes to existing handler helpers
+   **Hybrid mode** (default):
    a. Check DB keyword cache (instant, free)
    b. If ambiguous → AI role-based classification (classify_with_ai)
-8. Route by intent.action:
-   - greeting   → send welcome-back message
-   - help        → send HELP_MESSAGE
-   - drug_search → search_drug() → format results → send text + image
-   - question    → try store lookup, else AI responder (role-based)
-   - unknown     → AI responder (role-based)
+   c. Route by intent.action (greeting, help, drug_search, question, etc.)
 ```
 
 ## AI Role System

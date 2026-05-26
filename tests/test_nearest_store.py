@@ -203,13 +203,13 @@ class TestNearestStoreHandler:
 
     @pytest.mark.asyncio
     async def test_ai_only_mode_routes_nearest_store(self):
-        """In AI-only mode, nearest_store action calls _handle_nearest_store."""
-        from farmafacil.services.ai_responder import AiResponse
+        """In AI-only mode, find_nearest_stores tool calls _handle_nearest_store."""
+        from farmafacil.services.ai_responder import ToolUseResult
 
-        mock_ai = AiResponse(
-            text="",
-            role_used="pharmacy_advisor",
-            action="nearest_store",
+        mock_tool = ToolUseResult(
+            tool_name="find_nearest_stores",
+            tool_input={},
+            response_text="",
             input_tokens=100,
             output_tokens=50,
         )
@@ -248,7 +248,7 @@ class TestNearestStoreHandler:
             patch("farmafacil.bot.handler.validate_user_profile", new=AsyncMock(return_value=MockUser())),
             patch("farmafacil.bot.handler.send_read_receipt", new=AsyncMock()),
             patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
-            patch("farmafacil.bot.handler.classify_with_ai", new=AsyncMock(return_value=mock_ai)),
+            patch("farmafacil.bot.handler.classify_with_tools", new=AsyncMock(return_value=mock_tool)),
             patch("farmafacil.bot.handler.increment_token_usage", new=AsyncMock()),
             patch("farmafacil.bot.handler.get_all_nearby_stores", new=AsyncMock(return_value=mock_stores)),
             patch("farmafacil.bot.handler.set_onboarding_step", new=AsyncMock()),

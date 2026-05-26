@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import User
-from farmafacil.services.ai_responder import AiResponse, _parse_structured_response
+from farmafacil.services.ai_responder import AiResponse, ToolUseResult, _parse_structured_response
 from farmafacil.services.intent import Intent
 from farmafacil.services.users import set_awaiting_clarification, set_onboarding_step
 
@@ -336,13 +336,18 @@ class TestHandlerClarifyWiring:
         assert "awaiting_clarification_context" in source
 
     def test_handler_has_clarify_needed_branch(self):
-        """Both AI-only and hybrid paths should check clarify_needed."""
+        """Hybrid path should check clarify_needed; AI-only uses ask_clarification tool."""
         import inspect
-        from farmafacil.bot.handler import handle_incoming_message
+        from farmafacil.bot.handler import handle_incoming_message, _dispatch_tool_use
 
         source = inspect.getsource(handle_incoming_message)
-        # Must appear at least twice: once for ai_only, once for hybrid
-        assert source.count("clarify_needed") >= 2
+        # Hybrid mode still references clarify_needed
+        assert "clarify_needed" in source
+
+        # AI-only mode uses ask_clarification via _dispatch_tool_use
+        dispatch_source = inspect.getsource(_dispatch_tool_use)
+        assert "ask_clarification" in dispatch_source
+        assert "set_awaiting_clarification" in dispatch_source
 
     def test_handler_has_cancel_escape_hatch(self):
         import inspect
@@ -400,12 +405,14 @@ async def test_vague_query_asks_clarify_and_stashes_context(clarify_user):
     """Vague query → bot sends clarify question, stashes context, no scraper call."""
     from farmafacil.bot import handler
 
-    mock_ai = AiResponse(
-        text="",
-        role_used="pharmacy_advisor",
-        action="clarify_needed",
-        clarify_question="¿Pastillas o bebibles? ¿Adulto o niño?",
-        clarify_context="medicinas para la memoria",
+    # AI-only mode now uses tool_use — mock classify_with_tools
+    mock_tool = ToolUseResult(
+        tool_name="ask_clarification",
+        tool_input={
+            "question": "¿Pastillas o bebibles? ¿Adulto o niño?",
+            "context": "medicinas para la memoria",
+        },
+        response_text="",
         input_tokens=50,
         output_tokens=30,
     )
@@ -416,7 +423,7 @@ async def test_vague_query_asks_clarify_and_stashes_context(clarify_user):
         sent_messages.append(text)
         return True
 
-    with patch.object(handler, "classify_with_ai", AsyncMock(return_value=mock_ai)), \
+    with patch.object(handler, "classify_with_tools", AsyncMock(return_value=mock_tool)), \
          patch.object(handler, "send_text_message", new=AsyncMock(side_effect=fake_send_text)), \
          patch.object(handler, "search_drug", AsyncMock()) as mock_search, \
          patch.object(handler, "get_setting", AsyncMock(return_value="ai_only")):
@@ -619,11 +626,11 @@ async def test_specific_drug_skips_clarification(clarify_user):
     from farmafacil.bot import handler
     from farmafacil.models.schemas import SearchResponse
 
-    mock_ai = AiResponse(
-        text="",
-        role_used="pharmacy_advisor",
-        action="drug_search",
-        drug_query="Omeprazol",
+    # AI-only mode now uses tool_use — mock classify_with_tools
+    mock_tool = ToolUseResult(
+        tool_name="search_drug",
+        tool_input={"query": "Omeprazol"},
+        response_text="",
         input_tokens=30,
         output_tokens=10,
     )
@@ -637,7 +644,7 @@ async def test_specific_drug_skips_clarification(clarify_user):
             searched_pharmacies=["Farmatodo"],
         )
 
-    with patch.object(handler, "classify_with_ai", AsyncMock(return_value=mock_ai)), \
+    with patch.object(handler, "classify_with_tools", AsyncMock(return_value=mock_tool)), \
          patch.object(handler, "send_text_message", new=AsyncMock(side_effect=fake_send_text)), \
          patch.object(handler, "search_drug", new=AsyncMock(side_effect=fake_search)), \
          patch.object(handler, "get_setting", AsyncMock(return_value="ai_only")), \

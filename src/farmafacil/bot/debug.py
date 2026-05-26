@@ -19,7 +19,9 @@ async def _build_debug(sender: str, user_id: int, ai_result=None) -> str:
     Args:
         sender: WhatsApp phone number.
         user_id: User database ID.
-        ai_result: AiResponse with role_used and token counts (optional).
+        ai_result: AiResponse or ToolUseResult with ``role_used``,
+            ``input_tokens``, ``output_tokens``, and ``model`` attributes.
+            Accessed via ``getattr`` so either type works interchangeably.
 
     Returns:
         Formatted debug footer string.

@@ -296,26 +296,26 @@ class TestInlineLocationChangeHybrid:
 
 
 class TestInlineLocationChangeAIOnly:
-    """Tests for location_change via AI-only response mode.
+    """Tests for location_change via AI-only response mode (tool_use).
 
-    AI-only mode is triggered by get_setting("response_mode") returning
-    "ai_only".  resolve_response_mode is a regular (non-async) function.
+    AI-only mode now uses classify_with_tools which returns ToolUseResult
+    with tool_name="change_location".  resolve_response_mode is a regular
+    (non-async) function.
     """
 
     @pytest.mark.asyncio
     async def test_ai_only_high_confidence_saves(self):
-        """In AI-only mode, location_change with detected_location and
+        """In AI-only mode, change_location tool with location and
         high-confidence geocode should save permanently."""
         phone = "5499910400010"
         await _seed_user(phone, zone_name="El Cafetal")
 
-        from farmafacil.services.ai_responder import AiResponse
+        from farmafacil.services.ai_responder import ToolUseResult
 
-        ai_response = AiResponse(
-            text="",
-            role_used="pharmacy_advisor",
-            action="location_change",
-            detected_location="Baruta",
+        tool_result = ToolUseResult(
+            tool_name="change_location",
+            tool_input={"location": "Baruta"},
+            response_text="",
             input_tokens=50,
             output_tokens=20,
             model="claude-haiku-test",
@@ -331,8 +331,8 @@ class TestInlineLocationChangeAIOnly:
             "farmafacil.bot.handler.resolve_chat_debug",
             return_value=False,
         ), patch(
-            "farmafacil.bot.handler.classify_with_ai",
-            new=AsyncMock(return_value=ai_response),
+            "farmafacil.bot.handler.classify_with_tools",
+            new=AsyncMock(return_value=tool_result),
         ), patch(
             "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=_HIGH_CONF),
@@ -365,13 +365,12 @@ class TestInlineLocationChangeAIOnly:
         phone = "5499910400011"
         await _seed_user(phone, zone_name="El Cafetal")
 
-        from farmafacil.services.ai_responder import AiResponse
+        from farmafacil.services.ai_responder import ToolUseResult
 
-        ai_response = AiResponse(
-            text="",
-            role_used="pharmacy_advisor",
-            action="location_change",
-            detected_location="Los Naranjos",
+        tool_result = ToolUseResult(
+            tool_name="change_location",
+            tool_input={"location": "Los Naranjos"},
+            response_text="",
             input_tokens=50,
             output_tokens=20,
             model="claude-haiku-test",
@@ -387,8 +386,8 @@ class TestInlineLocationChangeAIOnly:
             "farmafacil.bot.handler.resolve_chat_debug",
             return_value=False,
         ), patch(
-            "farmafacil.bot.handler.classify_with_ai",
-            new=AsyncMock(return_value=ai_response),
+            "farmafacil.bot.handler.classify_with_tools",
+            new=AsyncMock(return_value=tool_result),
         ), patch(
             "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=_LOW_CONF),
@@ -418,18 +417,17 @@ class TestInlineLocationChangeAIOnly:
 
     @pytest.mark.asyncio
     async def test_ai_only_no_location_falls_back(self):
-        """In AI-only mode, location_change without detected_location
+        """In AI-only mode, change_location without location
         should prompt for location."""
         phone = "5499910400012"
         await _seed_user(phone, zone_name="El Cafetal")
 
-        from farmafacil.services.ai_responder import AiResponse
+        from farmafacil.services.ai_responder import ToolUseResult
 
-        ai_response = AiResponse(
-            text="",
-            role_used="pharmacy_advisor",
-            action="location_change",
-            detected_location=None,
+        tool_result = ToolUseResult(
+            tool_name="change_location",
+            tool_input={},
+            response_text="",
             input_tokens=50,
             output_tokens=20,
             model="claude-haiku-test",
@@ -445,8 +443,8 @@ class TestInlineLocationChangeAIOnly:
             "farmafacil.bot.handler.resolve_chat_debug",
             return_value=False,
         ), patch(
-            "farmafacil.bot.handler.classify_with_ai",
-            new=AsyncMock(return_value=ai_response),
+            "farmafacil.bot.handler.classify_with_tools",
+            new=AsyncMock(return_value=tool_result),
         ), patch(
             "farmafacil.bot.handler.send_text_message",
             new=AsyncMock(),
@@ -471,13 +469,12 @@ class TestInlineLocationChangeAIOnly:
         phone = "5499910400013"
         await _seed_user(phone, zone_name="El Cafetal")
 
-        from farmafacil.services.ai_responder import AiResponse
+        from farmafacil.services.ai_responder import ToolUseResult
 
-        ai_response = AiResponse(
-            text="",
-            role_used="pharmacy_advisor",
-            action="location_change",
-            detected_location="Nowhereistan",
+        tool_result = ToolUseResult(
+            tool_name="change_location",
+            tool_input={"location": "Nowhereistan"},
+            response_text="",
             input_tokens=50,
             output_tokens=20,
             model="claude-haiku-test",
@@ -493,8 +490,8 @@ class TestInlineLocationChangeAIOnly:
             "farmafacil.bot.handler.resolve_chat_debug",
             return_value=False,
         ), patch(
-            "farmafacil.bot.handler.classify_with_ai",
-            new=AsyncMock(return_value=ai_response),
+            "farmafacil.bot.handler.classify_with_tools",
+            new=AsyncMock(return_value=tool_result),
         ), patch(
             "farmafacil.bot.handler._resolve_location",
             new=AsyncMock(return_value=None),

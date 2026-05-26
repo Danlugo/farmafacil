@@ -512,6 +512,17 @@
 
 ---
 
+## Phase 17 — AI-Only Tool-Use Architecture
+
+### Item 105: Replace AI-only classify+route with Anthropic tool_use
+- **Priority:** P1 — Architecture Improvement
+- **Problem:** AI-only mode uses a fragile text-based classification pattern: the AI emits `ACTION: drug_search` as structured text, a parser extracts it, then a long if/elif chain in handler.py routes the action. This is error-prone — the AI's text response can be misclassified by the parser, the keyword dictionary approach is too rigid, and the routing chain duplicates logic. The user explicitly requested: "AI Should handle the intentions (never a router function) — give AI all the tools instead of putting a handler or router in front of it."
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Replaced classify→route with Anthropic's native `tool_use` API. 8 tool schemas (search_drug, change_location, find_nearest_stores, view_similar, ask_clarification, report_emergency, show_help, general_reply) sent via `classify_with_tools()`. New `_dispatch_tool_use()` maps tool calls to existing handler helpers. ToolUseResult dataclass parallels AiResponse for debug footer compatibility. Module-level `_KNOWN_TOOLS` frozenset with warning log for unknown tools. Hybrid mode unchanged.
+- **Files:** `src/farmafacil/services/ai_responder.py` (TOOL_DEFINITIONS, TOOL_USE_INSTRUCTIONS, ToolUseResult, classify_with_tools), `src/farmafacil/bot/handler.py` (_KNOWN_TOOLS, _dispatch_tool_use, ai_only block replaced), `src/farmafacil/bot/debug.py` (docstring), `tests/test_tool_use.py` (new, 29 tests), `tests/test_clarification.py`, `tests/test_inline_location_change.py`, `tests/test_nearest_store.py` (updated mocks)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -532,4 +543,5 @@
 | 14 — Geocode Prefix Fix | 102 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.2) |
 | 15 — Location Alternatives | 103 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.3) |
 | 16 — Inline Location Change | 104 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.4) |
-| **Total** | **55 items** | | **~64 hours** | |
+| 17 — AI-Only Tool-Use | 105 (1 item) | P1 | ~3 hours | ✅ DONE (v0.30.0) |
+| **Total** | **56 items** | | **~67 hours** | |

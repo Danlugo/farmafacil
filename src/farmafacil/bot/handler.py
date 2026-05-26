@@ -24,7 +24,10 @@ from farmafacil.bot.whatsapp import (
 )
 from farmafacil.models.schemas import DrugResult
 from farmafacil.services.ai_responder import (
+    AiResponse,
+    ToolUseResult,
     classify_with_ai,
+    classify_with_tools,
     generate_response,
     refine_clarified_query,
     reword_for_feedback,
@@ -212,6 +215,163 @@ async def _handle_location_change(
         # No location in the message — two-step prompt
         await set_onboarding_step(sender, "awaiting_location")
         await send_text_message(sender, MSG_ASK_NEW_LOCATION)
+
+
+# Tool names recognized by _dispatch_tool_use (Item 105, v0.30.0).
+# Unknown tools log a warning and fall through to general_reply.
+_KNOWN_TOOLS = frozenset({
+    "search_drug", "change_location", "find_nearest_stores",
+    "view_similar", "ask_clarification", "report_emergency",
+    "show_help", "general_reply",
+})
+
+
+async def _dispatch_tool_use(
+    sender: str,
+    user,
+    display_name: str,
+    tool_result: ToolUseResult,
+    *,
+    text: str,
+    debug_on: bool = False,
+    voice_message_id: int | None = None,
+) -> None:
+    """Dispatch an AI tool_use result to the appropriate handler (Item 105).
+
+    Called when AI-only mode receives a tool call from the Anthropic API.
+    Each tool maps directly to an existing handler helper — no if/elif
+    chain for intent classification; the AI already decided what to do.
+
+    Args:
+        sender: WhatsApp phone number.
+        user: User record with location and preferences.
+        display_name: User's display name.
+        tool_result: The ToolUseResult from classify_with_tools().
+        text: Original user message text.
+        debug_on: Whether to append debug footer.
+        voice_message_id: Optional ID of originating voice message.
+    """
+    tool = tool_result.tool_name
+    args = tool_result.tool_input
+
+    # ── search_drug ──────────────────────────────────────────────────
+    if tool == "search_drug":
+        query = args.get("query", "").strip()
+        if not query:
+            # Malformed tool call — fall back to treating message as search
+            query = text.strip()
+        # Resolve temporary location if AI specified one
+        temp_loc: dict | None = None
+        tool_location = args.get("location", "")
+        if tool_location and tool_location.lower() != (user.zone_name or "").lower():
+            temp_loc = await geocode_zone(tool_location)
+        # Ensure user has a location (saved or temp)
+        if not user.latitude and not temp_loc:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=display_name),
+            )
+            return
+        # Send preamble if AI included one (symptom ack, interaction warning)
+        preamble = args.get("preamble", "")
+        if preamble:
+            await send_text_message(sender, preamble)
+        await _handle_drug_search(
+            sender, user, query, display_name,
+            debug_on=debug_on, ai_result=tool_result,
+            temp_location=temp_loc,
+            best_price=bool(args.get("best_price")),
+            voice_message_id=voice_message_id,
+        )
+        return
+
+    # ── change_location ──────────────────────────────────────────────
+    if tool == "change_location":
+        location = args.get("location", "").strip() or None
+        await _handle_location_change(sender, location)
+        return
+
+    # ── find_nearest_stores ──────────────────────────────────────────
+    if tool == "find_nearest_stores":
+        temp_loc = None
+        tool_location = args.get("location", "")
+        if tool_location and tool_location.lower() != (user.zone_name or "").lower():
+            temp_loc = await geocode_zone(tool_location)
+        if not user.latitude and not temp_loc:
+            await set_onboarding_step(sender, "awaiting_location")
+            await send_text_message(
+                sender, MSG_NEED_LOCATION.format(name=display_name),
+            )
+            return
+        preamble = args.get("preamble", "")
+        if preamble:
+            await send_text_message(sender, preamble)
+        await _handle_nearest_store(
+            sender, user, display_name,
+            debug_on=debug_on, ai_result=tool_result,
+            temp_location=temp_loc,
+        )
+        return
+
+    # ── view_similar ─────────────────────────────────────────────────
+    if tool == "view_similar":
+        await _handle_view_similar(sender, user)
+        return
+
+    # ── ask_clarification ────────────────────────────────────────────
+    if tool == "ask_clarification":
+        question = args.get("question", "")
+        context = args.get("context", "") or text
+        if not question:
+            # Malformed — generate a generic response instead
+            reply = "¿Podrías darme más detalles sobre lo que buscas?"
+        else:
+            reply = question
+        await set_awaiting_clarification(sender, context)
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tool_result)
+        await send_text_message(sender, reply)
+        await _update_memory_safe(user.id, display_name, text, reply)
+        return
+
+    # ── report_emergency ─────────────────────────────────────────────
+    if tool == "report_emergency":
+        reply = args.get("message", "") or (
+            "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
+            "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
+            "2. Línea de emergencias nacional: *171*\n\n"
+            "NO busques medicamentos para emergencias — ve al médico de inmediato."
+        )
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tool_result)
+        await send_text_message(sender, reply)
+        return
+
+    # ── show_help ────────────────────────────────────────────────────
+    if tool == "show_help":
+        await send_text_message(sender, HELP_MESSAGE)
+        return
+
+    # ── general_reply (default / unknown tool fallthrough) ──────────
+    if tool not in _KNOWN_TOOLS:
+        logger.warning(
+            "_dispatch_tool_use: unrecognised tool=%r for sender=%s "
+            "— falling to general_reply",
+            tool, sender,
+        )
+    reply = args.get("message", "") or tool_result.response_text
+    if not reply:
+        # No text from tool or response — generate a full AI response
+        full_result = await generate_response(text, user.id, display_name)
+        await increment_token_usage(
+            user.id, full_result.input_tokens, full_result.output_tokens,
+            model=full_result.model or LLM_MODEL,
+        )
+        reply = full_result.text
+    if debug_on:
+        reply += await _build_debug(sender, user.id, tool_result)
+    await send_text_message(sender, reply)
+    await _update_memory_safe(user.id, display_name, text, reply)
 
 
 def _stash_temp_location(sender: str, location: dict) -> None:
@@ -1803,112 +1963,26 @@ async def handle_incoming_message(
             )
         return
 
-    # AI-only mode — bypass keyword routing, send everything to AI
+    # AI-only mode — tool_use architecture (Item 105, v0.30.0)
+    # The AI receives tool definitions and decides which to call.
+    # No keyword matching, no text parsing, no if/elif routing chain.
     if mode == "ai_only":
-        logger.info("AI-only mode for %s — routing to AI classifier", sender)
-        ai_result = await classify_with_ai(text, user.id, display_name)
-        await increment_token_usage(
-            user.id, ai_result.input_tokens, ai_result.output_tokens,
-            model=ai_result.model or LLM_MODEL,
+        tool_result = await classify_with_tools(
+            text, user.id, display_name, phone_number=sender,
         )
-        logger.info("AI classify (action=%s) for '%s'", ai_result.action, text[:50])
-
-        # If AI detects a medical emergency, send response immediately — no search
-        if ai_result.action == "emergency":
-            reply = ai_result.text or (
-                "\U0001f6a8 Esto suena como una emergencia médica. Por favor:\n"
-                "1. Llama al *911* o ve a la emergencia más cercana AHORA\n"
-                "2. Línea de emergencias nacional: *171*\n\n"
-                "NO busques medicamentos para emergencias — ve al médico de inmediato."
-            )
-            if debug_on:
-                reply += await _build_debug(sender, user.id, ai_result)
-            await send_text_message(sender, reply)
-            return
-
-        # If AI detects a view_similar request, re-run last search
-        if ai_result.action == "view_similar":
-            await _handle_view_similar(sender, user)
-            return
-
-        # Inline location change (Item 104, v0.29.4) — AI-only mode
-        if ai_result.action == "location_change":
-            await _handle_location_change(sender, ai_result.detected_location)
-            return
-
-        # Resolve temporary location if AI detected one different from profile
-        _ai_temp_loc: dict | None = None
-        if ai_result.detected_location and ai_result.detected_location.lower() != (user.zone_name or "").lower():
-            _ai_temp_loc = await geocode_zone(ai_result.detected_location)
-
-        # If AI detects a nearest_store query, show nearby pharmacies
-        if ai_result.action == "nearest_store":
-            if not user.latitude and not _ai_temp_loc:
-                await set_onboarding_step(sender, "awaiting_location")
-                await send_text_message(
-                    sender, MSG_NEED_LOCATION.format(name=display_name)
-                )
-                return
-            if ai_result.text:
-                await send_text_message(sender, ai_result.text)
-            await _handle_nearest_store(
-                sender, user, display_name, debug_on=debug_on,
-                ai_result=ai_result, temp_location=_ai_temp_loc,
-            )
-            return
-
-        # If AI detects a drug search, perform it
-        if ai_result.action == "drug_search" and ai_result.drug_query:
-            if not user.latitude and not _ai_temp_loc:
-                await set_onboarding_step(sender, "awaiting_location")
-                await send_text_message(
-                    sender, MSG_NEED_LOCATION.format(name=display_name)
-                )
-                return
-            # If AI included a conversational response (e.g., symptom acknowledgment),
-            # send it before the search results
-            if ai_result.text:
-                await send_text_message(sender, ai_result.text)
-            await _handle_drug_search(
-                sender, user, ai_result.drug_query, display_name,
-                debug_on=debug_on, ai_result=ai_result,
-                temp_location=_ai_temp_loc,
-                best_price=ai_result.modifier == "best_price",
-                voice_message_id=voice_message_id,
-            )
-            return
-
-        # If AI wants to clarify a vague category query, ask the question
-        # and stash the original context so the next reply is merged back in.
-        if ai_result.action == "clarify_needed" and ai_result.clarify_question:
-            context = ai_result.clarify_context or text
-            await set_awaiting_clarification(sender, context)
-            reply = ai_result.clarify_question
-            if debug_on:
-                reply += await _build_debug(sender, user.id, ai_result)
-            await send_text_message(sender, reply)
-            await _update_memory_safe(
-                user.id, display_name, text, ai_result.clarify_question,
-            )
-            return
-
-        # For all other actions, generate a full AI response
-        if ai_result.text:
-            reply = ai_result.text
-            tokens_ai = ai_result
-        else:
-            full_result = await generate_response(text, user.id, display_name)
-            await increment_token_usage(
-                user.id, full_result.input_tokens, full_result.output_tokens,
-                model=full_result.model or LLM_MODEL,
-            )
-            reply = full_result.text
-            tokens_ai = full_result
-
-        if debug_on:
-            reply += await _build_debug(sender, user.id, tokens_ai)
-        await send_text_message(sender, reply)
-        await _update_memory_safe(user.id, display_name, text, reply)
+        await increment_token_usage(
+            user.id, tool_result.input_tokens, tool_result.output_tokens,
+            model=tool_result.model or LLM_MODEL,
+        )
+        logger.info(
+            "AI-only tool_use (tool=%s) for %s: '%s'",
+            tool_result.tool_name, sender, text[:50],
+        )
+        await _dispatch_tool_use(
+            sender, user, display_name, tool_result,
+            text=text, debug_on=debug_on,
+            voice_message_id=voice_message_id,
+        )
         return
 
     # ── Hybrid mode — check keywords first, AI fallback ───────────────
@@ -2135,7 +2209,7 @@ async def _handle_drug_search(
     query: str,
     display_name: str,
     debug_on: bool = False,
-    ai_result=None,
+    ai_result: AiResponse | ToolUseResult | None = None,
     temp_location: dict | None = None,
     best_price: bool = False,
     voice_message_id: int | None = None,
@@ -2152,7 +2226,8 @@ async def _handle_drug_search(
         query: Drug name or search term.
         display_name: User's display name.
         debug_on: Whether to append debug footer.
-        ai_result: AiResponse from classification (for token stats).
+        ai_result: Classification result for debug footer (AiResponse from
+            hybrid mode, ToolUseResult from AI-only tool_use mode, or None).
         temp_location: One-time location override (from "busca X cerca de Y").
             Dict with lat, lng, zone_name, city keys.  When provided, the
             search uses these coordinates instead of the user's saved profile.
@@ -2265,7 +2340,7 @@ async def _handle_nearest_store(
     user,
     display_name: str,
     debug_on: bool = False,
-    ai_result=None,
+    ai_result: AiResponse | ToolUseResult | None = None,
     temp_location: dict | None = None,
 ) -> None:
     """Find and send nearest pharmacy stores to the user.
@@ -2278,7 +2353,8 @@ async def _handle_nearest_store(
         user: User record with location data.
         display_name: User's display name.
         debug_on: Whether to append debug footer.
-        ai_result: AiResponse from classification (for token stats).
+        ai_result: Classification result for debug footer (AiResponse from
+            hybrid mode, ToolUseResult from AI-only tool_use mode, or None).
         temp_location: One-time location override.
     """
     search_lat = temp_location["lat"] if temp_location else user.latitude
