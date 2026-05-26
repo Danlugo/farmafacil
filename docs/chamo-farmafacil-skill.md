@@ -129,11 +129,13 @@ The API returns a JSON object with an array of messages to post back to the grou
 
 5. **Flatten interactive lists** — if a response has `type: "list"`, post just the `body` field as a plain text message.
 
-6. **Forward text and voice messages** — forward text messages to `/api/v1/chat` and voice notes to `/api/v1/chat/voice`. Ignore location shares, images (without text caption), stickers, and other non-text/non-audio messages.
+6. **Forward text, voice, and images** — forward text messages to `/api/v1/chat`, voice notes to `/api/v1/chat/voice`, and photos to `/api/v1/chat/image`. Ignore location shares, stickers, and other unsupported message types.
 
-7. **Error handling** — if the API is unreachable, times out, or returns non-200, post to the group: `⚠️ FarmaFacil no está disponible en este momento. Intenta de nuevo en unos minutos.` Text timeout: 30s. Voice timeout: 60s (transcription).
+7. **Image relay** — when a group member sends a photo (prescription, medicine box, etc.), download the image via Baileys, then POST as `multipart/form-data` to `/api/v1/chat/image` with `sender_id`, `sender_name`, `caption` (if any), and `image` (the raw file bytes). The API analyzes the image with Claude Vision, identifies medicines, and returns search results as a `ChatResponse`. Image timeout: 60s (Vision API).
 
-8. **Rate limits** — text endpoint: 120 requests/minute. Voice endpoint: 30 requests/minute (Whisper API cost).
+8. **Error handling** — if the API is unreachable, times out, or returns non-200, post to the group: `⚠️ FarmaFacil no está disponible en este momento. Intenta de nuevo en unos minutos.` Text timeout: 30s. Voice timeout: 60s. Image timeout: 60s.
+
+9. **Rate limits** — text endpoint: 120 requests/minute. Voice endpoint: 30 requests/minute. Image endpoint: 30 requests/minute.
 
 ## Example Flow
 

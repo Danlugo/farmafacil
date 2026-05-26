@@ -19,6 +19,7 @@ All non-webhook, non-health endpoints are rate-limited per client IP via [slowap
 |----------|-------|
 | `POST /api/v1/chat` | 120 / minute |
 | `POST /api/v1/chat/voice` | 30 / minute |
+| `POST /api/v1/chat/image` | 30 / minute |
 | `GET/POST /api/v1/search` | 30 / minute |
 | `GET /api/v1/conversations` | 60 / minute |
 | `GET /api/v1/users` | 60 / minute |
@@ -249,6 +250,45 @@ response item is always the transcription acknowledgment
 
 ---
 
+### POST /api/v1/chat/image
+
+Process an **image** through the FarmaFacil Vision pipeline — prescription
+reader and medicine identifier, with automatic drug searches.
+
+Designed for relay bots forwarding photos from WhatsApp groups. The image
+is encoded for Claude Vision, analyzed, and any extracted drug names are
+searched automatically.
+
+**Authentication:** None (public endpoint).
+
+**Rate limit:** 30 / minute per client IP.
+
+**Content-Type:** `multipart/form-data`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| sender_id | string (form) | Yes | Phone number (5–30 chars) |
+| sender_name | string (form) | No | Display name (max 100 chars) |
+| caption | string (form) | No | Caption text (max 500 chars) |
+| image | file | Yes | Image file (JPEG, PNG, WebP, GIF, HEIC — max 10 MB) |
+
+**Response 200:** Same `ChatResponse` format as `/api/v1/chat`. Typical
+sequence: analysis message → search listing message → drug results.
+
+**Response 413:** Image exceeds the 10 MB limit.
+
+**Response 415:** Unsupported image MIME type.
+
+**Notes:**
+- Prescription photos: Vision reads all medicines, translates medical
+  terminology, then searches each drug (up to 3).
+- Medicine photos: Vision identifies the drug name and auto-searches.
+- English drug names are translated to Spanish before searching.
+- Documents (PDF/DOCX) are NOT supported — use the text relay endpoint
+  with the extracted text instead.
+
+---
+
 ## Users
 
 ### GET /api/v1/users
@@ -283,7 +323,8 @@ List registered WhatsApp users.
 
 | Value | Meaning |
 |-------|---------|
-| `welcome` | New user, not yet greeted |
+| `welcome` | New user, not yet greeted (no profile name available) |
+| `welcome_named` | New user with pre-filled name from WhatsApp profile |
 | `awaiting_name` | Waiting for user's name |
 | `awaiting_location` | Waiting for user's zone |
 | `awaiting_preference` | Waiting for display preference |

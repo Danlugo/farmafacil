@@ -385,6 +385,217 @@ async def chat_voice(
     return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
 
 
+# Maximum image upload size for the relay endpoint (10 MB).  Matches the
+# Anthropic Vision API hard limit.  WhatsApp compresses photos before
+# sending, so group-relay images forwarded by Chamo are typically well
+# under this limit.
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/api/v1/chat/image", response_model=ChatResponse)
+@limiter.limit("30/minute")
+async def chat_image(
+    request: Request,
+    sender_id: str = Form(..., min_length=5, max_length=30),
+    sender_name: str = Form("", max_length=100),
+    caption: str = Form("", max_length=500),
+    image: UploadFile = File(...),
+) -> ChatResponse:
+    """Process an image through the FarmaFacil Vision pipeline.
+
+    Accepts a raw image file upload from relay bots (e.g. Chamo in a
+    WhatsApp group) that can download media via Baileys but cannot supply
+    a WhatsApp Cloud API ``media_id``.  The image is encoded for Claude
+    Vision, analyzed (prescription reader / medicine identifier), and any
+    extracted drug names are searched automatically.
+
+    The endpoint runs in proxy mode: all outbound ``send_*`` calls are
+    intercepted and returned as a ``ChatResponse`` instead of being sent
+    via WhatsApp.
+
+    Intentionally unauthenticated — callers are rate-limited (30/min)
+    and Chamo connects via localhost on the same server.  In production,
+    Docker Compose binds the app port to ``127.0.0.1`` only.
+
+    Args:
+        sender_id: Phone number identifying the user (e.g. ``'584127006823'``).
+        sender_name: Display name of the sender — used to pre-fill the
+            user's name during onboarding.
+        caption: Optional caption the user sent with the image.
+        image: The image file bytes (JPEG, PNG, WebP, GIF, HEIC, etc.).
+
+    Returns:
+        ChatResponse with an ordered list of response items.
+
+    Raises:
+        HTTPException 413: Image exceeds the 10 MB limit.
+        HTTPException 415: Unsupported image type.
+    """
+    from farmafacil.services.media import ALL_IMAGE_TYPES, encode_image_for_vision
+    from farmafacil.services.image_analysis import analyze_image
+    from farmafacil.services.drug_translation import translate_drug_query
+    from farmafacil.services.users import (
+        get_or_create_user, increment_token_usage, validate_user_profile,
+    )
+    from farmafacil.bot.whatsapp import send_text_message
+
+    # --- 1. Read and validate the upload ------------------------------------
+    image_data = await image.read()
+    if len(image_data) > _MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"La imagen excede el límite de {_MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    mime_type = image.content_type
+    if not mime_type or mime_type not in ALL_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Tipo de imagen no soportado: {mime_type}",
+        )
+
+    # --- 2. Get or create the user ------------------------------------------
+    try:
+        user = await get_or_create_user(sender_id, wa_profile_name=sender_name)
+        user = await validate_user_profile(user)
+    except Exception:
+        logger.error(
+            "chat_image: user lookup failed for sender=%s", sender_id, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Error al procesar el usuario.")
+
+    # --- 3. Encode image for Vision -----------------------------------------
+    image_block = encode_image_for_vision(image_data, mime_type)
+    if image_block is None:
+        return ChatResponse(
+            responses=[ChatResponseItem(
+                type="text",
+                body="La imagen es demasiado grande o no es compatible. "
+                     "Intenta con una foto más pequeña o envia el nombre por texto.",
+            )]
+        )
+
+    # --- 4. Log inbound for conversation context ----------------------------
+    log_text = f"[imagen] {caption}" if caption else "[imagen]"
+    try:
+        await log_inbound(sender_id, log_text)
+    except Exception:
+        logger.warning(
+            "chat_image: failed to log inbound for %s", sender_id, exc_info=True,
+        )
+
+    # --- 5. Analyze image with Claude Vision --------------------------------
+    collected: list[dict] = []
+    try:
+        start_collecting()
+
+        await send_text_message(sender_id, "\U0001f50d Analizando la imagen...")
+
+        analysis = await analyze_image(image_block, caption)
+        if analysis is None or analysis.image_type == "unknown":
+            await send_text_message(
+                sender_id,
+                "No pude identificar una receta ni un medicamento en la imagen. "
+                "Intenta con una foto más clara o envia el nombre por texto.",
+            )
+        else:
+            # Token accounting
+            await increment_token_usage(
+                user.id,
+                analysis.tokens_in,
+                analysis.tokens_out,
+                model=analysis.model_used,
+            )
+
+            # Translate English drug names to Spanish
+            if analysis.drug_names:
+                translated: list[str] = []
+                for name in analysis.drug_names:
+                    tr = await translate_drug_query(name)
+                    if tr is not None:
+                        logger.info("Image drug name translated: %s → %s", name, tr.name)
+                        translated.append(tr.name)
+                    else:
+                        translated.append(name)
+                analysis.drug_names = translated
+
+            if analysis.image_type == "prescription":
+                # Send full analysis text
+                if analysis.analysis_text:
+                    await send_text_message(sender_id, analysis.analysis_text)
+
+                # Log image context for AI conversation memory
+                try:
+                    context = f"[foto de receta] {', '.join(analysis.drug_names)}" if analysis.drug_names else "[foto de receta]"
+                    await log_outbound(sender_id, context)
+                except Exception:
+                    pass
+
+                # Search each drug
+                if analysis.drug_names:
+                    search_msg = (
+                        "\n\U0001f50e *Buscando disponibilidad:*\n"
+                        + "\n".join(
+                            f"  {i+1}. {name}"
+                            for i, name in enumerate(analysis.drug_names)
+                        )
+                    )
+                    await send_text_message(sender_id, search_msg)
+                    for drug_name in analysis.drug_names:
+                        await handle_incoming_message(
+                            sender_id, drug_name,
+                            wa_profile_name=sender_name,
+                        )
+                else:
+                    await send_text_message(
+                        sender_id,
+                        "No pude extraer nombres de medicamentos claros de la receta. "
+                        "Envia el nombre del producto por texto y te lo busco.",
+                    )
+
+            else:
+                # Medicine photo: identify and auto-search
+                if analysis.analysis_text:
+                    await send_text_message(sender_id, analysis.analysis_text)
+
+                if analysis.drug_names:
+                    drug_name = analysis.drug_names[0]
+
+                    # Log image context for AI conversation memory
+                    try:
+                        await log_outbound(sender_id, f"[foto de medicamento] {drug_name}")
+                    except Exception:
+                        pass
+
+                    await send_text_message(
+                        sender_id,
+                        f"\U0001f50e Buscando *{drug_name}*...",
+                    )
+                    await handle_incoming_message(
+                        sender_id, drug_name,
+                        wa_profile_name=sender_name,
+                    )
+                else:
+                    await send_text_message(
+                        sender_id,
+                        "No pude identificar el medicamento en la imagen. "
+                        "Intenta con una foto más clara o envia el nombre por texto.",
+                    )
+
+    except Exception:
+        logger.error(
+            "chat_image: handler failed for sender=%s",
+            sender_id, exc_info=True,
+        )
+    finally:
+        collected = stop_collecting()
+
+    # --- 6. Log outbound for conversation context (best-effort) -------------
+    await _log_relay_responses(sender_id, collected)
+
+    return ChatResponse(responses=[ChatResponseItem(**item) for item in collected])
+
+
 @router.get("/api/v1/conversations")
 @limiter.limit("60/minute")
 async def get_conversations(

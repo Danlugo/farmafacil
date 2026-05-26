@@ -726,6 +726,19 @@
 
 ---
 
+## Phase 34 — Image Relay Endpoint (v0.47.0)
+
+### Item 127: Image relay endpoint for Chamo group proxy
+- **Priority:** P2
+- **Effort:** Medium (~2 hours)
+- **Problem:** The Chamo WhatsApp group relay bot can forward text (`/api/v1/chat`) and voice (`/api/v1/chat/voice`) messages from the "Farmafacil Test" group to FarmaFacil, but cannot forward photos. When a group member sends a photo of a prescription or medicine packaging, the image analysis feature (v0.45.0) is unreachable via the relay.
+- **Status:** ✅ DONE (2026-05-26, v0.47.0)
+- **Fix:** New `POST /api/v1/chat/image` endpoint accepting `multipart/form-data` with `sender_id`, `sender_name`, `caption`, and `image` (raw bytes). Rate-limited 30/min. Validates MIME type against `ALL_IMAGE_TYPES`, rejects missing content-type (415), enforces 10 MB size limit (413). Encodes image for Claude Vision via `encode_image_for_vision()`, analyzes with `analyze_image()`, translates English drug names, and dispatches searches in proxy mode. Token accounting via `increment_token_usage`. Conversation context logged for AI follow-ups. Code review fixes: `wa_profile_name` propagated on `handle_incoming_message` calls, `log_outbound` for image context memory, reject missing MIME type instead of defaulting, imports consolidated.
+- **Files:** `src/farmafacil/api/routes.py`, `tests/test_chat_image_endpoint.py` (new, 15 tests), `docs/api-reference.md`, `docs/chamo-farmafacil-skill.md`
+- **Found by:** User request (image service needed for proxy group channel)
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -763,4 +776,5 @@
 | 31 — Image Analysis | 124 (1 item) | P1 | ~4 hours | ✅ DONE (v0.45.0) |
 | 32 — Image Bugfix + HEIC | 125 (1 item) | P0 | ~2 hours | ✅ DONE (v0.45.1) |
 | 33 — WA Profile Name Pre-Fill | 126 (1 item) | P2 | ~2 hours | ✅ DONE (v0.46.0) |
-| **Total** | **77 items** | | **~92 hours** | |
+| 34 — Image Relay Endpoint | 127 (1 item) | P2 | ~2 hours | ✅ DONE (v0.47.0) |
+| **Total** | **78 items** | | **~94 hours** | |
