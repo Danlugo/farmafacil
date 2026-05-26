@@ -502,6 +502,14 @@
 - **Files:** `src/farmafacil/bot/handler.py`, `src/farmafacil/services/location.py`, `tests/test_location_confirm_and_dedup.py`, `tests/test_handler.py`
 - **Tests:** 23 tests in test_location_confirm_and_dedup.py (7 stash unit + 6 dedup + 10 handler integration), 1 fix in test_handler.py
 
+### Item 104: Inline location change — extract location from message
+- **Priority:** P2 — UX Enhancement
+- **Problem:** Currently, changing your saved location requires a two-step flow: type "cambiar zona" → bot prompts → type location. Users expect to change location in a single message like "cambiar de localización a Baruta", "vivo en Caracas", or "estoy en Los Naranjos". The system should extract the location from the message, geocode it, and save permanently (or show numbered alternatives if ambiguous).
+- **Status:** ✅ DONE (v0.29.4, 2026-05-26)
+- **Solution:** (1) Added `location_change` to AI classifier ACTION list in CLASSIFY_INSTRUCTIONS with detailed disambiguation rules — the AI now distinguishes "vivo en Chacao" (permanent location change) from "busca losartan en Chacao" (temporary search location). (2) Extracted `_handle_location_change()` helper in handler.py that geocodes inline: high confidence saves permanently with MSG_LOCATION_UPDATED, low confidence shows numbered alternatives (v0.29.3 UX), not found sends error, no location falls back to two-step prompt. Called from both AI-only and hybrid modes. (3) Fixed BLOCKER in `awaiting_location_confirm`: onboarded users picking from alternatives now get "ubicación actualizada" instead of the onboarding MSG_READY. Added MSG_LOCATION_UPDATED constant.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/bot/handler.py`, `src/farmafacil/bot/messages.py`, `tests/test_inline_location_change.py` (new, 15 tests)
+- **Tests:** 15 tests — 5 hybrid mode (high/low confidence, not found, no location, same zone), 4 AI-only mode (high/low confidence, no location, not found), 3 classifier prompt checks, 2 alternatives pick-a-number (onboarded vs onboarding), 1 helper existence
+
 ---
 
 ## Summary
@@ -523,4 +531,5 @@
 | 13 — Zero-Price Display | 101 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.1) |
 | 14 — Geocode Prefix Fix | 102 (1 item) | P1 | ~1 hour | ✅ DONE (v0.29.2) |
 | 15 — Location Alternatives | 103 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.3) |
-| **Total** | **54 items** | | **~63 hours** | |
+| 16 — Inline Location Change | 104 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.4) |
+| **Total** | **55 items** | | **~64 hours** | |

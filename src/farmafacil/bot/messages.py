@@ -62,6 +62,7 @@ MSG_RETURNING = (
 )
 
 MSG_ASK_NEW_LOCATION = "Dime tu nueva zona o barrio.\nEjemplo: _La Boyera_, _Chacao_, _Maracaibo_"
+MSG_LOCATION_UPDATED = "📍 ¡Listo! Tu ubicación fue actualizada a *{zone_name}*."
 MSG_ASK_NEW_PREFERENCE = (
     "¿Cómo prefieres ver los resultados?\n\n"
     "*1.* \U0001f4f8 *Imagen grande*\n*2.* \U0001f5bc *Galería*\n\nResponde *1* o *2*"

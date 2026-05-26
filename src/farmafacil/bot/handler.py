@@ -177,6 +177,43 @@ async def _offer_location_alternatives(
     await send_text_message(sender, "\n".join(lines))
 
 
+async def _handle_location_change(
+    sender: str,
+    detected_location: str | None,
+) -> None:
+    """Handle an inline location change (Item 104, v0.29.4).
+
+    Called when the AI classifier (or keyword cache) returns
+    ``action="location_change"``.  If *detected_location* is provided,
+    geocode it immediately and either save (high confidence) or show
+    numbered alternatives (low confidence).  Without a location, fall
+    back to the two-step prompt.
+    """
+    if detected_location:
+        result = await _resolve_location(detected_location)
+        if result is None:
+            await send_text_message(sender, MSG_LOCATION_NOT_FOUND)
+            return
+        name_ok = _name_matches_query(detected_location, result.display_name)
+        confidence_ok = result.confidence >= DEFAULT_MIN_CONFIDENCE
+        if not (name_ok and confidence_ok):
+            await _offer_location_alternatives(sender, detected_location, result)
+            return
+        # High confidence — save permanently
+        await update_user_location(
+            sender, result.lat, result.lng,
+            result.zone_name, result.city_code,
+        )
+        await send_text_message(
+            sender,
+            MSG_LOCATION_UPDATED.format(zone_name=result.zone_name),
+        )
+    else:
+        # No location in the message — two-step prompt
+        await set_onboarding_step(sender, "awaiting_location")
+        await send_text_message(sender, MSG_ASK_NEW_LOCATION)
+
+
 def _stash_temp_location(sender: str, location: dict) -> None:
     """Stash a temporary location for the sender's next search."""
     _pending_temp_location[sender] = (location, _time.monotonic())
@@ -1439,6 +1476,11 @@ async def handle_incoming_message(
         answer = text.strip().lower().rstrip(".!¡?¿")
         candidates = _pop_location_confirm(sender)
 
+        # Detect whether this is first-time onboarding (no previous coords)
+        # or a post-onboarding zone change (user already had a location).
+        # Used to send the appropriate confirmation message.
+        _is_zone_change = user.latitude is not None
+
         if candidates is None:
             # Stash expired — ask for location again
             await set_onboarding_step(sender, "awaiting_location")
@@ -1465,9 +1507,15 @@ async def handle_incoming_message(
                 sender, picked["lat"], picked["lng"],
                 picked["zone_name"], picked["city_code"],
             )
-            await send_text_message(
-                sender, MSG_READY.format(name=user.name or "amigo"),
-            )
+            if _is_zone_change:
+                await send_text_message(
+                    sender,
+                    MSG_LOCATION_UPDATED.format(zone_name=picked["zone_name"]),
+                )
+            else:
+                await send_text_message(
+                    sender, MSG_READY.format(name=user.name or "amigo"),
+                )
             return
 
         if choice == other_num:
@@ -1508,9 +1556,15 @@ async def handle_incoming_message(
             sender, result.lat, result.lng,
             result.zone_name, result.city_code,
         )
-        await send_text_message(
-            sender, MSG_READY.format(name=user.name or "amigo"),
-        )
+        if _is_zone_change:
+            await send_text_message(
+                sender,
+                MSG_LOCATION_UPDATED.format(zone_name=result.zone_name),
+            )
+        else:
+            await send_text_message(
+                sender, MSG_READY.format(name=user.name or "amigo"),
+            )
         return
 
     if step == "awaiting_preference":
@@ -1777,6 +1831,11 @@ async def handle_incoming_message(
             await _handle_view_similar(sender, user)
             return
 
+        # Inline location change (Item 104, v0.29.4) — AI-only mode
+        if ai_result.action == "location_change":
+            await _handle_location_change(sender, ai_result.detected_location)
+            return
+
         # Resolve temporary location if AI detected one different from profile
         _ai_temp_loc: dict | None = None
         if ai_result.detected_location and ai_result.detected_location.lower() != (user.zone_name or "").lower():
@@ -1989,6 +2048,10 @@ async def handle_incoming_message(
             sender, user, display_name,
             debug_on=debug_on, temp_location=_temp_location,
         )
+
+    elif intent.action == "location_change":
+        # Inline location change (Item 104, v0.29.4).
+        await _handle_location_change(sender, intent.detected_location)
 
     elif intent.action == "emergency":
         reply = intent.response_text or (
