@@ -2604,12 +2604,16 @@ async def _send_detail_images(sender: str, results: list[DrugResult]) -> None:
 
 
 def _build_product_caption(result: DrugResult) -> str:
-    """Build a Farmatodo-style product card caption for WhatsApp."""
+    """Build a labeled product card caption for WhatsApp image messages.
+
+    Each field is prefixed with a bold Spanish label so users can quickly
+    identify what each line means (Item 122, v0.43.0).
+    """
     lines = []
     if result.discount_pct:
-        lines.append(f"\U0001f7e2 *{result.discount_pct} DCTO*")
+        lines.append(f"\U0001f7e2 *Descuento:* {result.discount_pct}")
     if result.brand:
-        lines.append(f"_{result.brand}_")
+        lines.append(f"*Marca:* _{result.brand}_")
     lines.append(f"*{result.drug_name}*")
     if result.price_bs is not None:
         if result.price_bs == 0:
@@ -2618,21 +2622,24 @@ def _build_product_caption(result: DrugResult) -> str:
             # intentional — image captions use multi-line card layout.
             lines.append("_Precio no disponible_")
             if result.url:
-                lines.append(f"Ver en: {result.url}")
+                lines.append(f"\U0001f517 *Ver en:* {result.url}")
         else:
-            price_line = f"*Bs. {result.price_bs:,.2f}*"
+            price_line = f"\U0001f4b0 *Precio:* Bs. {result.price_bs:,.2f}"
             if result.full_price_bs and result.full_price_bs != result.price_bs:
                 price_line += f"  ~Bs. {result.full_price_bs:,.2f}~"
             lines.append(price_line)
     if result.unit_label:
-        lines.append(result.unit_label)
+        lines.append(f"\U0001f48a *Precio unit.:* {result.unit_label}")
     if result.requires_prescription:
-        lines.append("\U0001f4cb Requiere receta")
+        lines.append("\U0001f4cb *Requiere receta*")
     if result.stores_in_stock > 0:
         lines.append(f"\u2705 Disponible en {result.stores_in_stock} tiendas")
     if result.nearby_stores:
         closest = result.nearby_stores[0]
-        lines.append(f"\U0001f4cd {closest.store_name} — {closest.distance_km:.1f} km")
+        lines.append(
+            f"\U0001f4cd *Cercana:* {closest.store_name}"
+            f" — {closest.distance_km:.1f} km"
+        )
     return "\n".join(lines)
 
 

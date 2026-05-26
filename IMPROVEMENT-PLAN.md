@@ -677,6 +677,14 @@
 - **Solution:** Enriched `format_store_info()` in `store_backfill.py` to display all available fields: zone name, opening hours (🌙 24h or 🕐 hours with truncation for verbose OSM strings), phone (📞), website (🌐), plus existing address and maps link. Added chain-name deduplication (same pattern as `format_nearby_stores`). 13 new tests.
 - **Files:** `services/store_backfill.py` (`format_store_info`), `tests/test_location_prefix_and_store_info.py` (new)
 
+### Item 122: Add Spanish field labels to product image captions
+- **Priority:** P3
+- **Effort:** Low (~30 min)
+- **Problem:** Image caption lines for drug search results display raw values without labels (e.g., brand shows as just `_Evermed_`, price as just `Bs. 6,666.68`). Users cannot easily identify what each field represents.
+- **Status:** ✅ DONE (2026-05-26, v0.43.0)
+- **Solution:** Added bold Spanish labels to each field in `_build_product_caption()`: Descuento, Marca, Precio (💰), Precio unit. (💊), Requiere receta, Cercana, Ver en (🔗). Product name kept unlabeled as it's the title. 14 new tests in `TestCaptionFieldLabels`.
+- **Files:** `bot/handler.py` (`_build_product_caption`), `tests/test_zero_price_display.py`
+
 ---
 
 ## Summary
@@ -711,4 +719,5 @@
 | 26 — Admin Multiline Text | 118 (1 item) | P2 | ~1 hour | ✅ DONE (v0.39.0) |
 | 27 — Search Result URL Display | 119 (1 item) | P3 | ~30 min | ✅ DONE (v0.41.0) |
 | 28 — Location & Store Detail | 120-121 (2 items) | P1-P2 | ~1 hour | ✅ DONE (v0.42.0) |
-| **Total** | **72 items** | | **~82.5 hours** | |
+| 29 — Caption Field Labels | 122 (1 item) | P3 | ~30 min | ✅ DONE (v0.43.0) |
+| **Total** | **73 items** | | **~83 hours** | |

@@ -293,7 +293,7 @@ class TestBuildProductCaptionZeroPrice:
         )
         caption = _build_product_caption(result)
         assert "_Precio no disponible_" in caption
-        assert "Ver en:" in caption
+        assert "*Ver en:*" in caption
         assert "https://www.farmaciasaas.com/product/17919/p" in caption
         assert "Bs. 0.00" not in caption
 
@@ -305,7 +305,7 @@ class TestBuildProductCaptionZeroPrice:
         caption = _build_product_caption(result)
         assert "_Precio no disponible_" in caption
         # No URL line when url is None
-        assert "Ver en:" not in caption
+        assert "*Ver en:*" not in caption
 
     def test_zero_price_caption_has_product_name(self):
         """Even with zero price, the product name is still displayed."""
@@ -343,7 +343,8 @@ class TestBuildProductCaptionZeroPrice:
         caption = _build_product_caption(result)
         assert "Bs. 36.00" in caption
         assert "~Bs. 45.00~" in caption
-        assert "20% DCTO" in caption
+        assert "Descuento:" in caption
+        assert "20%" in caption
 
     def test_none_price_caption_no_price_line(self):
         """Caption with price_bs=None shows no price information at all."""
@@ -353,3 +354,95 @@ class TestBuildProductCaptionZeroPrice:
         caption = _build_product_caption(result)
         assert "Bs." not in caption
         assert "Precio no disponible" not in caption
+
+
+# ===========================================================================
+# handler._build_product_caption — Spanish field labels (Item 122)
+# ===========================================================================
+
+class TestCaptionFieldLabels:
+    """_build_product_caption adds bold Spanish labels to each field."""
+
+    @staticmethod
+    def _full_result() -> DrugResult:
+        """Build a DrugResult with ALL optional fields populated."""
+        return _make_result(
+            price_bs=Decimal("6666.68"),
+            full_price_bs=Decimal("8333.35"),
+            discount_pct="20%",
+            brand="Evermed",
+            drug_name="Estrógenos Conjugados 0,625 mg Caja x 28",
+            unit_label="Tabletas a Bs 238.10",
+            requires_prescription=True,
+            stores_in_stock=15,
+            nearby_stores=[
+                NearbyStore(
+                    store_name="Farmatodo CHUAO",
+                    address="Av. principal de Chuao",
+                    distance_km=0.2,
+                ),
+            ],
+        )
+
+    @pytest.mark.parametrize("label,field_desc", [
+        ("*Descuento:*", "discount"),
+        ("*Marca:*", "brand"),
+        ("*Precio:*", "price"),
+        ("*Precio unit.:*", "unit_price"),
+        ("*Requiere receta*", "prescription"),
+        ("*Cercana:*", "nearest_store"),
+    ], ids=["discount", "brand", "price", "unit-price", "prescription", "nearest"])
+    def test_label_present_in_full_caption(self, label, field_desc):
+        """Each field in a full caption has a bold Spanish label."""
+        caption = _build_product_caption(self._full_result())
+        assert label in caption, f"Label '{label}' missing for {field_desc}"
+
+    def test_discount_label_format(self):
+        """Discount shows 'Descuento: 20%' not '20% DCTO'."""
+        caption = _build_product_caption(self._full_result())
+        assert "DCTO" not in caption
+        assert "Descuento:" in caption
+        assert "20%" in caption
+
+    def test_brand_label_with_italic(self):
+        """Brand shows '*Marca:* _Evermed_' — label bold, value italic."""
+        caption = _build_product_caption(self._full_result())
+        assert "*Marca:* _Evermed_" in caption
+
+    def test_price_label_with_emoji(self):
+        """Price line starts with money bag emoji + bold label."""
+        caption = _build_product_caption(self._full_result())
+        assert "\U0001f4b0 *Precio:* Bs. 6,666.68" in caption
+
+    def test_unit_price_label_with_emoji(self):
+        """Unit price line starts with pill emoji + bold label."""
+        caption = _build_product_caption(self._full_result())
+        assert "\U0001f48a *Precio unit.:* Tabletas a Bs 238.10" in caption
+
+    def test_nearest_store_label(self):
+        """Nearest store shows '*Cercana:* StoreName — X.X km'."""
+        caption = _build_product_caption(self._full_result())
+        assert "*Cercana:* Farmatodo CHUAO" in caption
+
+    def test_product_name_no_label(self):
+        """Product name is bold but has no 'Producto:' prefix — it IS the title."""
+        caption = _build_product_caption(self._full_result())
+        # Product name should NOT have a label prefix
+        assert "Producto:" not in caption
+        assert "*Estrógenos Conjugados" in caption
+
+    def test_stores_in_stock_no_extra_label(self):
+        """Stores-in-stock line is already self-labeling — no change needed."""
+        caption = _build_product_caption(self._full_result())
+        assert "Disponible en 15 tiendas" in caption
+
+    def test_minimal_result_no_spurious_labels(self):
+        """Result with only name + price shows only relevant labels."""
+        result = _make_result(price_bs=Decimal("50.00"))
+        caption = _build_product_caption(result)
+        assert "*Precio:*" in caption
+        # Labels for absent fields should not appear
+        assert "Descuento:" not in caption
+        assert "Marca:" not in caption
+        assert "Precio unit.:" not in caption
+        assert "Cercana:" not in caption
