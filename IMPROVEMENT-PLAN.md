@@ -593,6 +593,17 @@
 
 ---
 
+### Phase 22 — Admin Chat Capacity
+
+### 114. Remove admin AI call limit
+- **Priority:** P1 — Admin Functionality
+- **Problem:** `MAX_ADMIN_STEPS = 5` in `ai_responder.py` capped the admin AI to only 5 LLM roundtrips per turn. Complex admin tasks (reports, multi-tool analyses, bulk queries) consistently hit this cap and returned "Se alcanzó el límite de pasos del admin" before completing. Additionally, `max_tokens=1024` per response was too low for detailed admin reasoning.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Raised `MAX_ADMIN_STEPS` from 5 → 25 (enough for any real admin task while still preventing infinite loops). Raised `max_tokens` from 1024 → 4096 for admin AI responses. Step-budget-exhausted message now includes the actual limit number.
+- **Files:** `src/farmafacil/services/ai_responder.py`
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -618,4 +629,5 @@
 | 19 — AI Interaction Completeness | 109-111 (3 items) | P2 | ~2 hours | ✅ DONE (v0.32.0) |
 | 20 — Skill Tool-Use Alignment | 112 (1 item) | P1 | ~1 hour | ✅ DONE (v0.33.0) |
 | 21 — Admin UI Polish | 113 (1 item) | P2 | ~1 hour | ✅ DONE (v0.34.0) |
-| **Total** | **64 items** | | **~74 hours** | |
+| 22 — Admin Chat Capacity | 114 (1 item) | P1 | ~30 min | ✅ DONE (v0.35.0) |
+| **Total** | **65 items** | | **~75 hours** | |

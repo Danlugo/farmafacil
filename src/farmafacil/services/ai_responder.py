@@ -1339,8 +1339,11 @@ async def refine_clarified_query(
 # ── App Admin chat turn runner ────────────────────────────────────────
 
 # Maximum tool-call steps per admin turn. Each step is one LLM roundtrip.
-# A cap prevents a confused LLM from looping forever on a malformed tool.
-MAX_ADMIN_STEPS = 5
+# Set high enough for complex multi-tool admin tasks (reports, analyses,
+# bulk operations) while still preventing a confused LLM from looping
+# forever. Raised from 5 → 25 in v0.35.0 to eliminate premature timeouts
+# on real admin work.
+MAX_ADMIN_STEPS = 25
 
 
 def _parse_admin_action(reply: str) -> tuple[str, dict[str, str]]:
@@ -1479,7 +1482,7 @@ async def run_admin_turn(
         try:
             response = await client.messages.create(
                 model=LLM_MODEL_OPUS,
-                max_tokens=1024,
+                max_tokens=4096,
                 system=system_prompt,
                 messages=messages,
             )
@@ -1554,8 +1557,8 @@ async def run_admin_turn(
     # Step budget exhausted — return whatever we have with a cap notice.
     return AdminTurnResult(
         text=(
-            "Se alcanzó el límite de pasos del admin. Intenta dividir la "
-            "tarea en pasos más chicos."
+            f"Se alcanzó el límite de {MAX_ADMIN_STEPS} pasos del admin. "
+            "Intenta dividir la tarea en pasos más chicos."
         ),
         input_tokens=total_in,
         output_tokens=total_out,

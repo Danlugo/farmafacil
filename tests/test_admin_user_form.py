@@ -513,3 +513,125 @@ class TestAppSettingValidation:
         data = {"key": "cache_ttl_minutes", "value": "anything_goes"}
         # Should not raise — free-text setting
         await admin.on_model_change(data, model, False, None)
+
+
+# --- Cross-object consistency: AppSetting ↔ User dropdowns ↔ seed --------
+#
+# The system has three layers where constrained values appear:
+#   1. AppSetting admin (SETTING_VALUE_CHOICES) — what an admin can set globally
+#   2. User admin dropdowns — what an admin can set per-user as overrides
+#   3. Seed defaults (DEFAULTS dict) — what gets seeded into the DB
+# All three MUST use exactly the same valid-value sets, sourced from the
+# canonical constants in settings.py. These tests enforce that invariant.
+
+
+class TestAppSettingToUserDropdownConsistency:
+    """AppSetting constrained values must exactly match the non-blank values
+    in the corresponding User dropdown for each shared field.
+
+    If someone adds a new valid value (e.g. 'turbo' to _VALID_MODES), both
+    SETTING_VALUE_CHOICES and USER_*_CHOICES must pick it up automatically.
+    This test catches any drift between the two.
+    """
+
+    @pytest.mark.parametrize("setting_key,user_choices", [
+        ("response_mode", USER_RESPONSE_MODE_CHOICES),
+        ("chat_debug", USER_CHAT_DEBUG_CHOICES),
+        ("post_feedback_suggestion", USER_POST_FEEDBACK_CHOICES),
+        ("post_feedback_bug_report", USER_POST_FEEDBACK_CHOICES),
+    ], ids=["response_mode", "chat_debug", "post_feedback_suggestion", "post_feedback_bug_report"])
+    def test_app_setting_values_match_user_dropdown(self, setting_key, user_choices):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+
+        app_valid = set(SETTING_VALUE_CHOICES[setting_key])
+        user_non_blank = {v for v, _ in user_choices if v}
+        assert app_valid == user_non_blank, (
+            f"Mismatch for '{setting_key}': "
+            f"AppSetting accepts {app_valid}, User dropdown offers {user_non_blank}"
+        )
+
+
+class TestSeedDefaultsAreValid:
+    """Every seed default for a constrained setting must be a value that
+    the AppSetting admin validation would accept.
+
+    Catches: someone changes DEFAULTS["response_mode"] to ("turbo", ...)
+    but forgets to add "turbo" to _VALID_MODES.
+    """
+
+    @pytest.mark.parametrize("key", [
+        "response_mode",
+        "chat_debug",
+        "category_menu_enabled",
+        "post_feedback_suggestion",
+        "post_feedback_bug_report",
+        "default_model",
+    ])
+    def test_seed_default_is_valid(self, key):
+        from farmafacil.api.admin import SETTING_VALUE_CHOICES
+        from farmafacil.services.settings import DEFAULTS
+
+        default_value = DEFAULTS[key][0]
+        valid_values = SETTING_VALUE_CHOICES[key]
+        assert default_value in valid_values, (
+            f"Seed default '{default_value}' for '{key}' is not in "
+            f"SETTING_VALUE_CHOICES: {valid_values}"
+        )
+
+
+class TestResolutionFunctionsAcceptCanonicalValues:
+    """Resolution functions must correctly resolve every canonical valid value
+    without logging warnings or falling back to defaults.
+
+    These functions bridge AppSetting global values → User per-user overrides.
+    If they don't accept a value the admin UI allows, the setting silently
+    falls back, which is a bug.
+    """
+
+    @pytest.mark.parametrize("mode", sorted(_VALID_MODES))
+    def test_resolve_response_mode_accepts_all_valid_modes_as_user(self, mode):
+        from farmafacil.services.settings import resolve_response_mode
+        result = resolve_response_mode(mode, "hybrid")
+        assert result == mode
+
+    @pytest.mark.parametrize("mode", sorted(_VALID_MODES))
+    def test_resolve_response_mode_accepts_all_valid_modes_as_global(self, mode):
+        from farmafacil.services.settings import resolve_response_mode
+        result = resolve_response_mode(None, mode)
+        assert result == mode
+
+    @pytest.mark.parametrize("debug_val", sorted(_VALID_DEBUG))
+    def test_resolve_chat_debug_accepts_all_valid_values_as_user(self, debug_val):
+        from farmafacil.services.settings import resolve_chat_debug
+        result = resolve_chat_debug(debug_val, "disabled")
+        assert result == (debug_val == "enabled")
+
+    @pytest.mark.parametrize("debug_val", sorted(_VALID_DEBUG))
+    def test_resolve_chat_debug_accepts_all_valid_values_as_global(self, debug_val):
+        from farmafacil.services.settings import resolve_chat_debug
+        result = resolve_chat_debug(None, debug_val)
+        assert result == (debug_val == "enabled")
+
+    @pytest.mark.parametrize("toggle_val", sorted(_VALID_TOGGLE))
+    def test_resolve_post_feedback_accepts_all_valid_values_as_user(self, toggle_val):
+        from farmafacil.services.settings import resolve_post_feedback
+        result = resolve_post_feedback(toggle_val, "false")
+        assert result == (toggle_val == "true")
+
+    @pytest.mark.parametrize("toggle_val", sorted(_VALID_TOGGLE))
+    def test_resolve_post_feedback_accepts_all_valid_values_as_global(self, toggle_val):
+        from farmafacil.services.settings import resolve_post_feedback
+        result = resolve_post_feedback(None, toggle_val)
+        assert result == (toggle_val == "true")
+
+    def test_resolve_response_mode_null_user_falls_to_global(self):
+        from farmafacil.services.settings import resolve_response_mode
+        assert resolve_response_mode(None, "ai_only") == "ai_only"
+
+    def test_resolve_chat_debug_null_user_falls_to_global(self):
+        from farmafacil.services.settings import resolve_chat_debug
+        assert resolve_chat_debug(None, "enabled") is True
+
+    def test_resolve_post_feedback_null_user_falls_to_global(self):
+        from farmafacil.services.settings import resolve_post_feedback
+        assert resolve_post_feedback(None, "true") is True
