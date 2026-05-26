@@ -1,6 +1,6 @@
 # FarmaFacil — WhatsApp Bot Conversation Flow
 
-> Last Updated: 2026-05-19
+> Last Updated: 2026-05-26
 
 ## Overview
 
@@ -464,13 +464,13 @@ The bot supports two response modes, controlled globally via `app_settings.respo
 | Mode | Behavior |
 |------|----------|
 | `hybrid` (default) | Keywords + preset answers first, LLM for complex questions |
-| `ai_only` | Anthropic tool_use API — AI receives 8 tool schemas and decides which to call. No keyword matching, no text parsing, no if/elif routing. (v0.30.0, Item 105) |
+| `ai_only` | Anthropic tool_use API — AI receives 10 tool schemas and decides which to call. No keyword matching, no text parsing, no if/elif routing. (v0.30.0, Items 105-108) |
 
 Resolution: user override → global setting → fallback to `hybrid`.
 
-### AI-Only Tool-Use Architecture (v0.30.0)
+### AI-Only Tool-Use Architecture (v0.30.0, expanded v0.31.0)
 
-In `ai_only` mode, every message is handled by `classify_with_tools()` which sends 8 tool definitions to the Anthropic API:
+In `ai_only` mode, every message is handled by `classify_with_tools()` which sends 10 tool definitions to the Anthropic API:
 
 | Tool | Purpose | Handler |
 |------|---------|---------|
@@ -478,12 +478,18 @@ In `ai_only` mode, every message is handled by `classify_with_tools()` which sen
 | `change_location` | Update user's saved location | `_handle_location_change()` |
 | `find_nearest_stores` | Show nearby pharmacies | `_handle_nearest_store()` |
 | `view_similar` | Show similar products from last search | `_handle_view_similar()` |
+| `change_name` | Update user's display name | `update_user_name()` |
+| `lookup_store` | Find a specific pharmacy by name/chain | `lookup_store()` + `format_store_info()` |
 | `ask_clarification` | Ask user for more details on vague query | `set_awaiting_clarification()` |
 | `report_emergency` | Medical emergency — direct to 911/171 | Direct message |
 | `show_help` | Display help/command list | `HELP_MESSAGE` |
 | `general_reply` | Conversational response (fallback) | `generate_response()` if empty |
 
 `_dispatch_tool_use()` maps each tool call to the corresponding handler. Unknown tool names log a warning and fall through to `general_reply`.
+
+#### AI Result Validation (v0.31.0, Item 108)
+
+After the heuristic relevance filter, `_handle_drug_search()` calls `validate_search_results()` to let the AI review the product list. The AI sees product names, categories, and brands (no prices/URLs) and returns indices of relevant products via a `filter_results` tool. Safety nets: returns originals if AI removes ALL, on API error, or when ≤1 result.
 
 ---
 

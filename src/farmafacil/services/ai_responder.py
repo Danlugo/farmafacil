@@ -392,6 +392,61 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "change_name",
+        "description": (
+            "Cambiar el nombre guardado del usuario. Usa cuando el usuario diga "
+            "'me llamo Pedro', 'cambiar nombre', 'mi nombre es María', "
+            "'llámame Juan', 'soy Daniel'. NO usar si solo saluda con un nombre "
+            "('hola Daniel') — eso es general_reply."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "El nuevo nombre. Dejar vacío si el usuario solo dice "
+                        "'cambiar nombre' sin indicar cuál."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "lookup_store",
+        "description": (
+            "Buscar información de una farmacia específica por nombre. "
+            "Usa cuando el usuario pregunte por una tienda concreta: "
+            "'donde queda TEPUY', 'dirección de la farmacia San Ignacio', "
+            "'farmacia La Boyera', 'info de la tienda El Hatillo'. "
+            "NO usar para buscar las farmacias MÁS CERCANAS (eso es "
+            "find_nearest_stores). Usa lookup_store cuando el usuario "
+            "ya sabe EL NOMBRE de la tienda."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "store_name": {
+                    "type": "string",
+                    "description": (
+                        "Nombre de la tienda (ej: 'TEPUY', 'San Ignacio', "
+                        "'La Boyera'). Extraer solo el nombre sin prefijos "
+                        "como 'farmacia' o 'donde queda'."
+                    ),
+                },
+                "chain": {
+                    "type": "string",
+                    "description": (
+                        "Cadena de farmacia si el usuario la especificó "
+                        "(ej: 'Farmatodo', 'SAAS', 'Locatel'). Vacío si no."
+                    ),
+                },
+            },
+            "required": ["store_name"],
+        },
+    },
+    {
         "name": "general_reply",
         "description": (
             "Responder de forma conversacional. Usa para:\n"
@@ -828,6 +883,181 @@ async def classify_with_tools(
             tool_input={"query": message.strip()},
             response_text="",
         )
+
+
+# ── AI result validation (Item 108, v0.31.0) ──────────────────────────
+# After the pharmacy API returns results and relevance.py pre-filters,
+# the AI reviews the surviving products and removes any that are clearly
+# irrelevant to the user's intent.  This catches semantic mismatches
+# that keyword heuristics miss (e.g. "crema para queloides" returning
+# "Crema Desodorante Dove" because both contain "crema").
+
+_VALIDATION_SYSTEM_PROMPT = """\
+Eres un validador de resultados de búsqueda de farmacia. Tu trabajo es \
+revisar los productos devueltos por la API de la farmacia y ELIMINAR los \
+que NO son relevantes para lo que el usuario buscó.
+
+REGLAS:
+- Devuelve SOLO los índices de los productos que SÍ son relevantes.
+- Un producto es relevante si un farmaceuta lo mostraría como respuesta \
+a la búsqueda del usuario.
+- Elimina productos de categorías equivocadas (ej: pañales cuando buscó \
+crema facial, desodorantes cuando buscó crema para queloides).
+- Si el producto contiene el principio activo o ingrediente buscado, \
+es relevante aunque el nombre comercial sea diferente.
+- Productos de marca diferente pero MISMO principio activo SON relevantes.
+- Si NO estás seguro, INCLÚYELO — es mejor incluir un producto dudoso \
+que eliminar uno que sí era relevante.
+- Si TODOS los productos son relevantes, devuelve todos los índices.
+- Si NINGUNO es relevante, devuelve una lista vacía.
+"""
+
+_VALIDATION_TOOL: list[dict] = [
+    {
+        "name": "filter_results",
+        "description": (
+            "Devuelve los índices (empezando en 0) de los productos que "
+            "SÍ son relevantes para la búsqueda del usuario."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keep_indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "Lista de índices (0-based) de los productos a conservar."
+                    ),
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "Explicación breve de por qué eliminaste algún producto "
+                        "(para logging). Vacío si no eliminaste nada."
+                    ),
+                },
+            },
+            "required": ["keep_indices"],
+        },
+    },
+]
+
+
+async def validate_search_results(
+    query: str,
+    results: list,
+    *,
+    model: str | None = None,
+) -> tuple[list, int, int, str]:
+    """Ask the AI to validate pharmacy search results for relevance.
+
+    Sends the product list and the user's original query to the LLM.
+    The model returns which products to keep (by index).  On any error,
+    returns the full list unfiltered — we never block the user due to a
+    validation failure.
+
+    Args:
+        query: The user's original search query.
+        results: List of DrugResult objects from search_drug().
+        model: Override the LLM model (defaults to the user-configured
+            model via ``resolve_user_model``).
+
+    Returns:
+        Tuple of (filtered_results, input_tokens, output_tokens, model_used).
+        ``filtered_results`` is a subset of ``results`` (same order),
+        or the full ``results`` list if validation was skipped/failed.
+        ``model_used`` is the resolved model name for token accounting.
+    """
+    if not results or not ANTHROPIC_API_KEY:
+        return results, 0, 0, ""
+
+    # Build a compact product summary for the LLM (no prices/URLs —
+    # just enough to judge relevance).
+    product_lines: list[str] = []
+    for i, r in enumerate(results):
+        parts = [f"[{i}] {r.drug_name}"]
+        if r.drug_class:
+            parts.append(f"(categoría: {r.drug_class})")
+        if r.brand:
+            parts.append(f"[marca: {r.brand}]")
+        product_lines.append(" ".join(parts))
+
+    products_text = "\n".join(product_lines)
+    user_message = (
+        f"Búsqueda del usuario: \"{query}\"\n\n"
+        f"Productos devueltos por la farmacia:\n{products_text}"
+    )
+
+    try:
+        resolved_model = model or await resolve_user_model()
+        client = _get_client()
+        response = await client.messages.create(
+            model=resolved_model,
+            max_tokens=300,
+            system=_VALIDATION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+            tools=_VALIDATION_TOOL,
+            tool_choice={"type": "any"},
+        )
+
+        in_tok = response.usage.input_tokens
+        out_tok = response.usage.output_tokens
+
+        # Extract the filter_results tool call
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "filter_results":
+                keep = block.input.get("keep_indices", [])
+                note = block.input.get("note", "")
+
+                # Validate indices — must be valid integers within range.
+                # dict.fromkeys deduplicates while preserving order.
+                valid_indices = list(dict.fromkeys(
+                    idx for idx in keep
+                    if isinstance(idx, int) and 0 <= idx < len(results)
+                ))
+
+                if len(valid_indices) == len(results):
+                    # AI kept everything — no filtering needed
+                    logger.info(
+                        "AI validation for '%s': kept all %d results",
+                        query, len(results),
+                    )
+                    return results, in_tok, out_tok, resolved_model
+
+                filtered = [results[i] for i in valid_indices]
+                removed = len(results) - len(filtered)
+                logger.info(
+                    "AI validation for '%s': kept %d/%d, removed %d. %s",
+                    query, len(filtered), len(results), removed,
+                    note[:200] if note else "",
+                )
+
+                # Safety net: if AI removed EVERYTHING, return originals
+                # (the user should see something rather than nothing).
+                if not filtered:
+                    logger.warning(
+                        "AI validation removed ALL results for '%s' — "
+                        "returning originals as safety net",
+                        query,
+                    )
+                    return results, in_tok, out_tok, resolved_model
+
+                return filtered, in_tok, out_tok, resolved_model
+
+        # No tool_use block found — pass through
+        logger.warning(
+            "AI validation: no filter_results tool call for '%s'", query,
+        )
+        return results, in_tok, out_tok, resolved_model
+
+    except (APIError, APIConnectionError) as exc:
+        logger.error("AI validation — API error for '%s': %s", query, exc)
+        return results, 0, 0, ""
+    except Exception:
+        logger.error(
+            "AI validation — unexpected error for '%s'", query, exc_info=True,
+        )
+        return results, 0, 0
 
 
 async def _call_llm(

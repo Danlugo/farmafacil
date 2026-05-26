@@ -3,7 +3,7 @@
 import logging
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from farmafacil.db.session import async_session
 from farmafacil.models.database import PharmacyLocation
@@ -402,7 +402,11 @@ async def lookup_store(name: str, chain: str | None = None) -> PharmacyLocation 
             PharmacyLocation.is_active.is_(True),
         )
         if chain:
-            query = query.where(PharmacyLocation.pharmacy_chain == chain)
+            # Case-insensitive chain match — AI may produce "farmatodo"
+            # while DB stores "Farmatodo".
+            query = query.where(
+                func.lower(PharmacyLocation.pharmacy_chain) == chain.lower()
+            )
         result = await session.execute(query)
         return result.scalar_one_or_none()
 

@@ -92,7 +92,7 @@ class TestToolDefinitions:
 
     def test_tool_definitions_is_list(self):
         assert isinstance(TOOL_DEFINITIONS, list)
-        assert len(TOOL_DEFINITIONS) == 8
+        assert len(TOOL_DEFINITIONS) == 10  # 8 original + change_name + lookup_store
 
     def test_each_tool_has_required_fields(self):
         for tool in TOOL_DEFINITIONS:
@@ -116,7 +116,7 @@ class TestToolDefinitions:
         expected = {
             "search_drug", "change_location", "find_nearest_stores",
             "view_similar", "ask_clarification", "report_emergency",
-            "show_help", "general_reply",
+            "show_help", "general_reply", "change_name", "lookup_store",
         }
         assert names == expected
 
@@ -766,3 +766,434 @@ class TestHandlerToolUseIntegration:
         # Check that 911 message was sent
         sent_messages = [call.args[1] for call in mock_send.await_args_list]
         assert any("911" in msg for msg in sent_messages)
+
+
+# ===========================================================================
+# 5. New tool definitions tests (Items 106-107, v0.31.0)
+# ===========================================================================
+
+
+class TestNewToolDefinitions:
+    """Test that change_name and lookup_store tools have valid schemas."""
+
+    def test_change_name_tool_exists(self):
+        names = {t["name"] for t in TOOL_DEFINITIONS}
+        assert "change_name" in names
+
+    def test_change_name_has_name_property(self):
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "change_name")
+        assert "name" in tool["input_schema"]["properties"]
+
+    def test_lookup_store_tool_exists(self):
+        names = {t["name"] for t in TOOL_DEFINITIONS}
+        assert "lookup_store" in names
+
+    def test_lookup_store_has_store_name_required(self):
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "lookup_store")
+        assert "store_name" in tool["input_schema"]["properties"]
+        assert "store_name" in tool["input_schema"].get("required", [])
+
+    def test_lookup_store_has_chain_property(self):
+        tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "lookup_store")
+        assert "chain" in tool["input_schema"]["properties"]
+
+
+# ===========================================================================
+# 6. _dispatch_tool_use() for new tools (Items 106-107, v0.31.0)
+# ===========================================================================
+
+
+class TestDispatchNewTools:
+    """Test dispatch routing for change_name and lookup_store tools."""
+
+    @pytest.mark.asyncio
+    async def test_change_name_with_name(self):
+        """change_name with a name calls update_user_name and confirms."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        tool_result = ToolUseResult(
+            tool_name="change_name",
+            tool_input={"name": "Pedro"},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.update_user_name", new=AsyncMock()) as mock_update,
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="me llamo Pedro", debug_on=False,
+            )
+
+        mock_update.assert_awaited_once_with("5559930001", "Pedro")
+        sent = mock_send.await_args.args[1]
+        assert "Pedro" in sent
+
+    @pytest.mark.asyncio
+    async def test_change_name_empty_prompts(self):
+        """change_name without a name prompts user."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        tool_result = ToolUseResult(
+            tool_name="change_name",
+            tool_input={},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.set_onboarding_step", new=AsyncMock()) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="cambiar nombre", debug_on=False,
+            )
+
+        mock_step.assert_awaited_once_with("5559930001", "awaiting_name")
+
+    @pytest.mark.asyncio
+    async def test_change_name_invalid(self):
+        """change_name with invalid name (digits) prompts user."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        tool_result = ToolUseResult(
+            tool_name="change_name",
+            tool_input={"name": "12345"},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.set_onboarding_step", new=AsyncMock()) as mock_step,
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="me llamo 12345", debug_on=False,
+            )
+
+        mock_step.assert_awaited_once_with("5559930001", "awaiting_name")
+        sent = mock_send.await_args.args[1]
+        assert "nombre" in sent.lower()
+
+    @pytest.mark.asyncio
+    async def test_lookup_store_found(self):
+        """lookup_store with a known store shows info."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        mock_store = MagicMock()
+        mock_store.pharmacy_chain = "Farmatodo"
+        mock_store.name = "TEPUY"
+        mock_store.address = "Av. Principal"
+        mock_store.city_code = "CCS"
+        mock_store.latitude = 10.43
+        mock_store.longitude = -66.86
+
+        tool_result = ToolUseResult(
+            tool_name="lookup_store",
+            tool_input={"store_name": "TEPUY"},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.lookup_store", new=AsyncMock(return_value=mock_store)),
+            patch("farmafacil.bot.handler.format_store_info", return_value="🏥 *Farmatodo TEPUY*\n📍 Av. Principal"),
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="donde queda TEPUY", debug_on=False,
+            )
+
+        sent = mock_send.await_args.args[1]
+        assert "TEPUY" in sent
+
+    @pytest.mark.asyncio
+    async def test_lookup_store_not_found(self):
+        """lookup_store with unknown store shows friendly message."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        tool_result = ToolUseResult(
+            tool_name="lookup_store",
+            tool_input={"store_name": "INVENTADA"},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.lookup_store", new=AsyncMock(return_value=None)),
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()) as mock_send,
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="donde queda INVENTADA", debug_on=False,
+            )
+
+        sent = mock_send.await_args.args[1]
+        assert "No encontré" in sent
+        assert "INVENTADA" in sent
+
+    @pytest.mark.asyncio
+    async def test_lookup_store_with_chain(self):
+        """lookup_store passes chain filter when provided."""
+        from farmafacil.bot.handler import _dispatch_tool_use
+
+        tool_result = ToolUseResult(
+            tool_name="lookup_store",
+            tool_input={"store_name": "La Boyera", "chain": "Farmatodo"},
+            response_text="",
+            input_tokens=100, output_tokens=30, model="haiku",
+        )
+
+        with (
+            patch("farmafacil.bot.handler.lookup_store", new=AsyncMock(return_value=None)) as mock_lookup,
+            patch("farmafacil.bot.handler.send_text_message", new=AsyncMock()),
+        ):
+            await _dispatch_tool_use(
+                "5559930001", MockUser(), "TestUser", tool_result,
+                text="farmacia farmatodo la boyera", debug_on=False,
+            )
+
+        mock_lookup.assert_awaited_once_with("La Boyera", chain="Farmatodo")
+
+
+# ===========================================================================
+# 7. AI search result validation tests (Item 108, v0.31.0)
+# ===========================================================================
+
+
+class TestValidateSearchResults:
+    """Test validate_search_results() AI filter."""
+
+    @pytest.mark.asyncio
+    async def test_returns_all_when_no_api_key(self):
+        """No API key — returns results unchanged."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [MagicMock(drug_name="Losartan 50mg", drug_class="ANTIHIPERTENSIVOS", brand="Genfar")]
+        with patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", ""):
+            filtered, in_tok, out_tok, model = await validate_search_results("losartan", results)
+
+        assert filtered is results
+        assert in_tok == 0
+        assert model == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_all_when_empty_results(self):
+        """Empty results list — returns as-is."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        filtered, in_tok, out_tok, model = await validate_search_results("losartan", [])
+        assert filtered == []
+        assert in_tok == 0
+        assert model == ""
+
+    @pytest.mark.asyncio
+    async def test_filters_irrelevant_products(self):
+        """AI removes products that don't match the query."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [
+            MagicMock(drug_name="Crema Queloides", drug_class="DERMATOLOGICOS", brand="Lab X"),
+            MagicMock(drug_name="Desodorante Dove Crema", drug_class="DESODORANTES", brand="Dove"),
+            MagicMock(drug_name="Crema Cicatricure", drug_class="DERMATOLOGICOS", brand="Genomma"),
+        ]
+
+        # Mock AI response: keep indices 0 and 2, remove 1
+        filter_block = MagicMock()
+        filter_block.type = "tool_use"
+        filter_block.name = "filter_results"
+        filter_block.input = {"keep_indices": [0, 2], "note": "Removed deodorant"}
+
+        usage = MagicMock()
+        usage.input_tokens = 200
+        usage.output_tokens = 40
+
+        mock_response = MagicMock()
+        mock_response.content = [filter_block]
+        mock_response.usage = usage
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+            filtered, in_tok, out_tok, model = await validate_search_results(
+                "crema para queloides", results,
+            )
+
+        assert len(filtered) == 2
+        assert filtered[0].drug_name == "Crema Queloides"
+        assert filtered[1].drug_name == "Crema Cicatricure"
+        assert in_tok == 200
+        assert out_tok == 40
+        assert model == "claude-haiku-3"
+
+    @pytest.mark.asyncio
+    async def test_keeps_all_when_ai_says_all_relevant(self):
+        """AI keeps everything — no filtering."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [
+            MagicMock(drug_name="Losartan 50mg", drug_class="ANTIHIPERTENSIVOS", brand="A"),
+            MagicMock(drug_name="Losartan 100mg", drug_class="ANTIHIPERTENSIVOS", brand="B"),
+        ]
+
+        filter_block = MagicMock()
+        filter_block.type = "tool_use"
+        filter_block.name = "filter_results"
+        filter_block.input = {"keep_indices": [0, 1], "note": ""}
+
+        usage = MagicMock()
+        usage.input_tokens = 150
+        usage.output_tokens = 20
+
+        mock_response = MagicMock()
+        mock_response.content = [filter_block]
+        mock_response.usage = usage
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+            filtered, in_tok, out_tok, model = await validate_search_results("losartan", results)
+
+        assert len(filtered) == 2
+        assert filtered is results  # same object — no filtering needed
+        assert model == "claude-haiku-3"
+
+    @pytest.mark.asyncio
+    async def test_safety_net_returns_originals_when_all_removed(self):
+        """If AI removes ALL results, return originals as safety net."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [
+            MagicMock(drug_name="Something", drug_class="X", brand="Y"),
+        ]
+
+        filter_block = MagicMock()
+        filter_block.type = "tool_use"
+        filter_block.name = "filter_results"
+        filter_block.input = {"keep_indices": [], "note": "Nothing relevant"}
+
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 20
+
+        mock_response = MagicMock()
+        mock_response.content = [filter_block]
+        mock_response.usage = usage
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+            filtered, in_tok, out_tok, model = await validate_search_results("x", results)
+
+        assert filtered is results  # safety net — return originals
+        assert model == "claude-haiku-3"
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_originals(self):
+        """On API error, return all results unfiltered."""
+        from farmafacil.services.ai_responder import validate_search_results
+        from anthropic import APIConnectionError
+
+        results = [
+            MagicMock(drug_name="Losartan", drug_class="X", brand="Y"),
+        ]
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(
+                side_effect=APIConnectionError(request=MagicMock()),
+            )
+            filtered, in_tok, out_tok, model = await validate_search_results("losartan", results)
+
+        assert filtered is results
+        assert in_tok == 0
+        assert model == ""
+
+    @pytest.mark.asyncio
+    async def test_invalid_indices_are_filtered(self):
+        """Indices out of range are silently ignored."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [
+            MagicMock(drug_name="A", drug_class="X", brand="Y"),
+            MagicMock(drug_name="B", drug_class="X", brand="Y"),
+        ]
+
+        filter_block = MagicMock()
+        filter_block.type = "tool_use"
+        filter_block.name = "filter_results"
+        filter_block.input = {"keep_indices": [0, 5, -1, 1], "note": ""}  # 5 and -1 are invalid
+
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 20
+
+        mock_response = MagicMock()
+        mock_response.content = [filter_block]
+        mock_response.usage = usage
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+            filtered, in_tok, out_tok, model = await validate_search_results("test", results)
+
+        # Only valid indices 0 and 1 kept — same as all results
+        assert len(filtered) == 2
+        assert model == "claude-haiku-3"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_indices_are_deduplicated(self):
+        """AI returns duplicate indices — they are deduplicated."""
+        from farmafacil.services.ai_responder import validate_search_results
+
+        results = [
+            MagicMock(drug_name="A", drug_class="X", brand="Y"),
+            MagicMock(drug_name="B", drug_class="X", brand="Y"),
+            MagicMock(drug_name="C", drug_class="X", brand="Y"),
+        ]
+
+        filter_block = MagicMock()
+        filter_block.type = "tool_use"
+        filter_block.name = "filter_results"
+        filter_block.input = {"keep_indices": [0, 0, 1], "note": ""}
+
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 20
+
+        mock_response = MagicMock()
+        mock_response.content = [filter_block]
+        mock_response.usage = usage
+
+        with (
+            patch("farmafacil.services.ai_responder.ANTHROPIC_API_KEY", "test-key"),
+            patch("farmafacil.services.ai_responder.resolve_user_model", new=AsyncMock(return_value="claude-haiku-3")),
+            patch("farmafacil.services.ai_responder._get_client") as mock_client,
+        ):
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+            filtered, in_tok, out_tok, model = await validate_search_results("test", results)
+
+        # [0, 0, 1] deduplicated to [0, 1] — 2 unique results, not 3
+        assert len(filtered) == 2
+        assert filtered[0].drug_name == "A"
+        assert filtered[1].drug_name == "B"

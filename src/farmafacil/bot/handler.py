@@ -32,6 +32,7 @@ from farmafacil.services.ai_responder import (
     refine_clarified_query,
     reword_for_feedback,
     run_admin_turn,
+    validate_search_results,
 )
 from farmafacil.services.admin_chat import build_tools_manifest
 from farmafacil.services.ai_roles import assemble_prompt, get_role
@@ -218,11 +219,12 @@ async def _handle_location_change(
 
 
 # Tool names recognized by _dispatch_tool_use (Item 105, v0.30.0).
+# Items 106-107 (v0.31.0) added change_name and lookup_store.
 # Unknown tools log a warning and fall through to general_reply.
 _KNOWN_TOOLS = frozenset({
     "search_drug", "change_location", "find_nearest_stores",
     "view_similar", "ask_clarification", "report_emergency",
-    "show_help", "general_reply",
+    "show_help", "general_reply", "change_name", "lookup_store",
 })
 
 
@@ -316,6 +318,59 @@ async def _dispatch_tool_use(
     # ── view_similar ─────────────────────────────────────────────────
     if tool == "view_similar":
         await _handle_view_similar(sender, user)
+        return
+
+    # ── change_name (Item 106, v0.31.0) ─────────────────────────────
+    if tool == "change_name":
+        new_name = args.get("name", "").strip()
+        if new_name and _is_valid_name(new_name):
+            await update_user_name(sender, new_name)
+            reply = f"✅ ¡Listo! Tu nombre ahora es *{new_name}*."
+        elif new_name:
+            # Invalid name (too short, digits, etc.)
+            reply = (
+                "Hmm, eso no parece un nombre. "
+                "¿Puedes decirme tu nombre de pila?"
+            )
+            await set_onboarding_step(sender, "awaiting_name")
+        else:
+            # No name provided — prompt for it
+            await set_onboarding_step(sender, "awaiting_name")
+            reply = MSG_ASK_NEW_NAME
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tool_result)
+        await send_text_message(sender, reply)
+        # Update AI memory so next turn reflects the new name
+        await _update_memory_safe(user.id, display_name, text, reply)
+        return
+
+    # ── lookup_store (Item 107, v0.31.0) ─────────────────────────────
+    if tool == "lookup_store":
+        store_name = args.get("store_name", "").strip()
+        chain = args.get("chain", "").strip() or None
+        if store_name:
+            store = await lookup_store(store_name, chain=chain)
+            if store:
+                reply = format_store_info(store)
+            else:
+                # Sanitize for WhatsApp markdown (strip * and _ to avoid
+                # corrupted bold/italic formatting from AI-generated names).
+                safe_name = store_name.replace("*", "").replace("_", "")
+                safe_chain = chain.replace("*", "").replace("_", "") if chain else ""
+                reply = (
+                    f"No encontré una farmacia llamada *{safe_name}*"
+                    f"{' de ' + safe_chain if safe_chain else ''}. "
+                    "Verifica el nombre o pregúntame por las *farmacias "
+                    "cercanas* a tu ubicación."
+                )
+        else:
+            reply = (
+                "¿Cuál farmacia buscas? Escríbeme el nombre "
+                "(ej: 'TEPUY', 'San Ignacio')."
+            )
+        if debug_on:
+            reply += await _build_debug(sender, user.id, tool_result)
+        await send_text_message(sender, reply)
         return
 
     # ── ask_clarification ────────────────────────────────────────────
@@ -2298,6 +2353,21 @@ async def _handle_drug_search(
                 "Best-price filter for '%s': %s at Bs. %s (%s)",
                 query, cheapest.drug_name, cheapest.price_bs, cheapest.pharmacy_name,
             )
+
+    # ── AI result validation (Item 108, v0.31.0) ────────────────────
+    # After heuristic relevance filter + best-price, ask the AI to review
+    # the surviving products and remove any that are clearly irrelevant.
+    # Skip validation when best_price already narrowed to 1 result or
+    # when there are ≤1 results (nothing to filter).
+    if response.results and len(response.results) > 1 and not best_price_filtered:
+        response.results, val_in, val_out, val_model = await validate_search_results(
+            query, response.results,
+        )
+        response.total = len(response.results)
+        # Track validation tokens using the actual model that was used
+        await increment_token_usage(
+            user.id, val_in, val_out, model=val_model or LLM_MODEL,
+        )
 
     # Log the search and save the log ID for feedback tracking
     results_count = len(response.results) if response.results else 0

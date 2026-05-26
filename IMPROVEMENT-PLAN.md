@@ -523,6 +523,31 @@
 
 ---
 
+## Phase 18 — AI Tool Coverage + Result Validation
+
+### Item 106: Add change_name tool to AI-only mode
+- **Priority:** P2 — Feature Gap
+- **Problem:** In AI-only mode, users saying "me llamo Pedro" or "cambiar nombre" fell through to general_reply because there was no tool for name changes. Hybrid mode handled it via keyword cache ("cambiar nombre" → awaiting_name).
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Added `change_name` tool to TOOL_DEFINITIONS with optional `name` property. Dispatch in `_dispatch_tool_use()` uses `_is_valid_name()` for validation, calls `update_user_name()` if valid, prompts with `awaiting_name` step if empty or invalid.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`
+
+### Item 107: Add lookup_store tool to AI-only mode
+- **Priority:** P2 — Feature Gap
+- **Problem:** In AI-only mode, "donde queda TEPUY" fell to general_reply. Hybrid mode had `_try_store_lookup()` in the question action branch. AI-only had no tool to query the pharmacy_locations DB.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** Added `lookup_store` tool with `store_name` (required) and `chain` (optional) properties. Dispatch calls existing `lookup_store()` + `format_store_info()`. Shows Google Maps link on match, friendly "no encontré" message on miss.
+- **Files:** `src/farmafacil/services/ai_responder.py`, `src/farmafacil/bot/handler.py`, `tests/test_tool_use.py`
+
+### Item 108: AI validates search results before sending to user
+- **Priority:** P1 — Search Quality
+- **Problem:** Pharmacy APIs (Farmatodo Algolia) return fuzzy-matched results that can be irrelevant. The heuristic `relevance.py` filter catches keyword-level mismatches but not semantic ones (e.g. "crema para queloides" returning "Crema Desodorante Dove" because both contain "crema"). Users receive wrong products.
+- **Status:** ✅ DONE (2026-05-26)
+- **Fix:** New `validate_search_results()` in ai_responder.py. After heuristic filter + best-price, sends product list to AI with a `filter_results` tool. AI returns indices of relevant products. Safety nets: (1) if AI removes ALL → return originals, (2) on API error → return originals, (3) skip when ≤1 result or best_price already filtered. Uses Haiku (~$0.0001/search). Token usage tracked separately.
+- **Files:** `src/farmafacil/services/ai_responder.py` (validate_search_results, _VALIDATION_SYSTEM_PROMPT, _VALIDATION_TOOL), `src/farmafacil/bot/handler.py` (integration in _handle_drug_search), `tests/test_tool_use.py`
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -544,4 +569,5 @@
 | 15 — Location Alternatives | 103 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.3) |
 | 16 — Inline Location Change | 104 (1 item) | P2 | ~1 hour | ✅ DONE (v0.29.4) |
 | 17 — AI-Only Tool-Use | 105 (1 item) | P1 | ~3 hours | ✅ DONE (v0.30.0) |
-| **Total** | **56 items** | | **~67 hours** | |
+| 18 — AI Tool Coverage + Validation | 106-108 (3 items) | P1-P2 | ~3 hours | ✅ DONE (v0.31.0) |
+| **Total** | **59 items** | | **~70 hours** | |
