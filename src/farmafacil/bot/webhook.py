@@ -23,7 +23,7 @@ from farmafacil.bot.handler import (
     handle_location_message,
     handle_voice_message,
 )
-from farmafacil.bot.whatsapp import remove_reaction, send_reaction, send_text_message
+from farmafacil.bot.whatsapp import send_text_message, send_typing_indicator
 from farmafacil.config import WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN
 from farmafacil.services.conversation_log import is_duplicate_message, log_inbound
 
@@ -55,17 +55,12 @@ def _fire_and_forget(coro) -> None:
 webhook_router = APIRouter()
 
 
-async def _safe_handle(
-    coro, sender: str, wa_id: str, *, clear_reaction: bool = False,
-) -> None:
+async def _safe_handle(coro, sender: str, wa_id: str) -> None:
     """Await *coro* inside a try/except so background tasks never crash silently.
 
     Must be called from within a running asyncio event loop (via
     ``_fire_and_forget``).  ``CancelledError`` is re-raised so Uvicorn
     shutdown can cancel in-flight tasks cleanly.
-
-    When *clear_reaction* is True, the ⏳ processing reaction placed on
-    ``wa_id`` is removed after the handler completes (success or failure).
     """
     try:
         await coro
@@ -79,15 +74,6 @@ async def _safe_handle(
             "Background handler failed for %s (wa_id=%s)",
             sender, wa_id, exc_info=True,
         )
-    finally:
-        if clear_reaction and wa_id:
-            try:
-                await remove_reaction(sender, wa_id)
-            except Exception:
-                logger.debug(
-                    "Reaction cleanup failed for %s (wa_id=%s)",
-                    sender, wa_id, exc_info=True,
-                )
 
 
 def _verify_signature(payload: bytes, signature_header: str) -> bool:
@@ -190,17 +176,16 @@ async def receive_webhook(request: Request) -> dict | Response:
                     logger.info("Skipping duplicate message %s from %s", wa_id, sender)
                     continue
 
-                # ── Processing indicator (Item 117, v0.38.0) ──────────────
-                # React with ⏳ immediately for message types that trigger
-                # handler processing.  The handler removes it when done.
-                # Silent types (reaction, system) and unsupported types skip.
-                # Awaited synchronously (not fire-and-forget) so the reaction
-                # is guaranteed to land BEFORE the handler task starts — this
-                # prevents a race where remove_reaction fires before the ⏳
-                # even appears.  The ~50 ms TLS call is well under Meta's 5 s
-                # retry window.
+                # ── Typing indicator (Item 117, v0.38.0) ────────────────
+                # Show the native WhatsApp "three dots" typing bubble for
+                # message types that trigger handler processing.  The dots
+                # auto-dismiss when the bot sends its response (or after
+                # 25 s — whichever comes first).  No manual cleanup needed.
+                # Awaited synchronously so the indicator lands BEFORE the
+                # handler task starts.  ~50 ms TLS call, well under Meta's
+                # 5 s retry window.
                 if msg_type in ("text", "location", "interactive", "image", "document", "audio"):
-                    await send_reaction(sender, wa_id, "⏳")
+                    await send_typing_indicator(sender)
 
                 if msg_type == "text":
                     text = message.get("text", {}).get("body", "")
@@ -218,7 +203,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                     _fire_and_forget(
                         _safe_handle(
                             handle_incoming_message(sender, text, wa_message_id=wa_id),
-                            sender, wa_id, clear_reaction=True,
+                            sender, wa_id,
                         )
                     )
 
@@ -255,7 +240,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                                     "No pude leer las coordenadas que compartiste. "
                                     "Por favor envia tu zona por texto.",
                                 ),
-                                sender, wa_id, clear_reaction=True,
+                                sender, wa_id,
                             )
                         )
                         continue
@@ -263,7 +248,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                     _fire_and_forget(
                         _safe_handle(
                             handle_location_message(sender, lat, lng, wa_message_id=wa_id),
-                            sender, wa_id, clear_reaction=True,
+                            sender, wa_id,
                         )
                     )
 
@@ -296,7 +281,7 @@ async def receive_webhook(request: Request) -> dict | Response:
                         _fire_and_forget(
                             _safe_handle(
                                 handle_list_reply(sender, reply_id, wa_message_id=wa_id),
-                                sender, wa_id, clear_reaction=True,
+                                sender, wa_id,
                             )
                         )
                     else:
@@ -304,8 +289,6 @@ async def receive_webhook(request: Request) -> dict | Response:
                             "Unhandled interactive type from %s: %s",
                             sender, itype,
                         )
-                        # Clear ⏳ — no handler will be dispatched
-                        await remove_reaction(sender, wa_id)
 
                 elif msg_type == "image":
                     image_data = message.get("image", {})
@@ -329,12 +312,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                                     sender, media_id, mime_type,
                                     caption=caption, wa_message_id=wa_id,
                                 ),
-                                sender, wa_id, clear_reaction=True,
+                                sender, wa_id,
                             )
                         )
                     else:
                         logger.warning("Image from %s has no media_id", sender)
-                        await remove_reaction(sender, wa_id)
 
                 elif msg_type == "document":
                     doc_data = message.get("document", {})
@@ -359,12 +341,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                                     sender, media_id, mime_type,
                                     caption=caption or filename, wa_message_id=wa_id,
                                 ),
-                                sender, wa_id, clear_reaction=True,
+                                sender, wa_id,
                             )
                         )
                     else:
                         logger.warning("Document from %s has no media_id", sender)
-                        await remove_reaction(sender, wa_id)
 
                 elif msg_type == "audio":
                     audio_data = message.get("audio", {})
@@ -384,12 +365,11 @@ async def receive_webhook(request: Request) -> dict | Response:
                         _fire_and_forget(
                             _safe_handle(
                                 handle_voice_message(sender, media_id, wa_message_id=wa_id),
-                                sender, wa_id, clear_reaction=True,
+                                sender, wa_id,
                             )
                         )
                     else:
                         logger.warning("Audio from %s has no media_id", sender)
-                        await remove_reaction(sender, wa_id)
 
                 elif msg_type in ("reaction", "system", "ephemeral", "order"):
                     # Silent: reactions, system messages, and ephemeral don't

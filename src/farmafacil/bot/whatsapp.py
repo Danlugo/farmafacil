@@ -133,6 +133,46 @@ async def send_read_receipt(to: str, message_id: str) -> None:
         )
 
 
+async def send_typing_indicator(to: str) -> None:
+    """Show the native "typing" dots bubble to the user.
+
+    Uses the WhatsApp Cloud API ``typing_indicator`` message type (added
+    Q1 2025).  The dots auto-dismiss when a real message is sent to the
+    same recipient, **or after 25 seconds** — whichever comes first.
+
+    Non-blocking — errors are silently logged and never propagated.
+
+    In proxy mode this is a no-op — typing indicators are meaningless
+    when the message didn't come from WhatsApp.
+
+    Args:
+        to: Recipient phone number.
+    """
+    if _response_collector.get() is not None:
+        return
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "typing_indicator",
+        "typing_indicator": {
+            "type": "text",
+        },
+    }
+    try:
+        client = _get_http_client()
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.debug("Typing indicator failed for %s (non-critical): %s", to, exc)
+
+
 async def send_reaction(to: str, message_id: str, emoji: str) -> None:
     """React to a WhatsApp message with an emoji.
 
