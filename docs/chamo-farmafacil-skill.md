@@ -7,10 +7,10 @@ Create a new skill that makes a WhatsApp group work like a direct chat with the 
 Chamo will be deployed as a Docker container on the same server as FarmaFacil.
 
 ```
-Host: 10.0.0.80
+Host: 10.0.0.79
 User: dgonzalez
 SSH key: ~/.ssh/id_ed25519
-SSH command: ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
+SSH command: ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.79
 ```
 
 FarmaFacil is already running on this server:

@@ -52,7 +52,7 @@ All variables live in `.env` (copy from `.env.example`).
 
 ## Production Server
 
-**Server:** `10.0.0.80` (Linux Mint, 32GB RAM, Docker 29.1). IP is DHCP-assigned and may change after reboots — verify with `hostname -I` on the machine if SSH fails.
+**Server:** `10.0.0.79` (Linux Mint, 32GB RAM, Docker 29.1). IP is DHCP-assigned and may change after reboots — verify with `hostname -I` on the machine if SSH fails.
 
 | Service | Port | Notes |
 |---------|------|-------|
@@ -69,7 +69,7 @@ All variables live in `.env` (copy from `.env.example`).
 ### SSH Access
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.79
 ```
 
 ---
@@ -81,7 +81,7 @@ The production stack uses Docker Compose with PostgreSQL.
 ### First Deployment
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.79
 cd ~/workspace/farmafacil
 cp .env.example .env
 # Edit .env — add real WhatsApp token, Anthropic key, admin credentials
@@ -93,7 +93,7 @@ curl http://localhost:8100/health
 ### Updating the App
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.80
+ssh -i ~/.ssh/id_ed25519 dgonzalez@10.0.0.79
 cd ~/workspace/farmafacil && git pull
 docker compose build --no-cache
 docker compose down && docker compose up -d
@@ -145,7 +145,7 @@ ngrok http 8100
 
 The current public URL is: `https://amparo-chromophoric-christia.ngrok-free.dev`
 
-ngrok admin UI: `http://10.0.0.80:4040`
+ngrok admin UI: `http://10.0.0.79:4040`
 
 ### Update Webhook URL in Meta
 

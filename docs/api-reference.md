@@ -3,7 +3,7 @@
 > Last Updated: 2026-05-19
 > Base URL (production): `https://amparo-chromophoric-christia.ngrok-free.dev`
 > Base URL (local dev): `http://localhost:8000`
-> Base URL (server direct): `http://10.0.0.80:8100`
+> Base URL (server direct): `http://10.0.0.79:8100`
 
 ## Authentication
 

@@ -51,6 +51,7 @@ from farmafacil.services.intent import (
     classify_intent,
     classify_intent_keywords,
 )
+from farmafacil.services.catalog_rephrase import rephrase_for_catalog
 from farmafacil.services.drug_translation import translate_drug_query
 from farmafacil.services.search import ACTIVE_SCRAPERS, search_drug
 from farmafacil.services.search_feedback import (
@@ -2465,6 +2466,31 @@ async def _handle_drug_search(
                 zone_name=search_zone,
             )
 
+    # ── Catalog rephrase fallback (Item 128, v0.48.0) ──────────────────
+    # If still zero results after English translation, the query may use a
+    # colloquial/brand name that doesn't match Farmatodo's catalog indexing
+    # (e.g., "kinesiotape" → "cinta kinesiológica").  Ask the AI to rephrase.
+    rephrased_from: str | None = None
+    if not response.results:
+        rp = await rephrase_for_catalog(query)
+        if rp and rp.name.lower() != query.lower():
+            logger.info(
+                "Zero-result rephrase: '%s' → '%s' for %s",
+                query, rp.name, sender,
+            )
+            await increment_token_usage(
+                user.id, rp.input_tokens, rp.output_tokens, model=LLM_MODEL,
+            )
+            rephrased_from = query
+            query = rp.name
+            response = await search_drug(
+                query=query,
+                city_code=search_city,
+                latitude=search_lat,
+                longitude=search_lng,
+                zone_name=search_zone,
+            )
+
     # ── Best-price filter: keep only the single cheapest in-stock result ──
     best_price_filtered = False
     if best_price and response.results:
@@ -2500,10 +2526,17 @@ async def _handle_drug_search(
     await update_last_search(sender, query, search_log_id)
 
     # Notify user when a translation was used (Item 116, v0.37.0)
-    if translated_from and response.results:
+    if translated_from and not rephrased_from and response.results:
         await send_text_message(
             sender,
             f"\U0001f310 Traduje *{translated_from}* → *{query}* para buscarlo en farmacias.",
+        )
+
+    # Notify user when a catalog rephrase was used (Item 128, v0.48.0)
+    if rephrased_from and response.results:
+        await send_text_message(
+            sender,
+            f"\U0001f504 No encontré *{rephrased_from}*, busqué como *{query}*.",
         )
 
     # Send individual product images FIRST, then text summary below

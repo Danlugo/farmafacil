@@ -269,6 +269,7 @@ class TestHandlerTranslationRetry:
             translate_drug_query=AsyncMock(
                 return_value=self._make_mock_translation("amlodipino"),
             ),
+            rephrase_for_catalog=AsyncMock(return_value=None),
             send_text_message=mock_send,
             send_image_message=AsyncMock(),
             increment_token_usage=mock_increment,
@@ -330,6 +331,7 @@ class TestHandlerTranslationRetry:
             translate_drug_query=AsyncMock(
                 return_value=self._make_mock_translation("amlodipino"),
             ),
+            rephrase_for_catalog=AsyncMock(return_value=None),
             send_text_message=mock_send,
             send_image_message=AsyncMock(),
             increment_token_usage=AsyncMock(),

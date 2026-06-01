@@ -739,6 +739,19 @@
 
 ---
 
+## Phase 35 — Catalog Rephrase Fallback
+
+### Item 128: Zero-result catalog rephrase via Claude
+- **Priority:** P2
+- **Effort:** Medium (~2 hours)
+- **Problem:** When users search with colloquial or brand names that don't match Farmatodo's catalog indexing (e.g., "kinesiotape" → Farmatodo lists as "cinta kinesiológica", "tylenol" → "acetaminofén"), the search returns zero results. The existing English→Spanish translation fallback (v0.37.0) only handles language differences, not synonym/catalog naming mismatches within Spanish.
+- **Status:** ✅ DONE (2026-06-01, v0.48.0)
+- **Fix:** New `services/catalog_rephrase.py` — when zero results remain after the English translation fallback, asks Claude (temperature=0) to rephrase the query as a Venezuelan pharmacy catalog would index it. `RephraseResult` dataclass with token accounting. Multiline guard (`.splitlines()[0]`), lowercase NO check, length bounds. Handler integration: second zero-result check after translation block, shows "🔄 No encontré X, busqué como Y." to user. Code review fixes: rephrase receives already-translated query (not original), `rephrased_from` captures correct intermediate term, existing translation tests mock new rephrase path.
+- **Files:** `src/farmafacil/services/catalog_rephrase.py` (new), `src/farmafacil/bot/handler.py`, `tests/test_catalog_rephrase.py` (new, 21 tests), `tests/test_drug_translation.py`
+- **Found by:** User report — Lizet searched "Kisiotape" in FarmaFacilTest group, product exists on Farmatodo as "Cintas Kinesiológicas KT Tape" but zero results returned.
+
+---
+
 ## Summary
 
 | Phase | Items | Priority | Total Effort | Status |
@@ -777,4 +790,5 @@
 | 32 — Image Bugfix + HEIC | 125 (1 item) | P0 | ~2 hours | ✅ DONE (v0.45.1) |
 | 33 — WA Profile Name Pre-Fill | 126 (1 item) | P2 | ~2 hours | ✅ DONE (v0.46.0) |
 | 34 — Image Relay Endpoint | 127 (1 item) | P2 | ~2 hours | ✅ DONE (v0.47.0) |
-| **Total** | **78 items** | | **~94 hours** | |
+| 35 — Catalog Rephrase Fallback | 128 (1 item) | P2 | ~2 hours | ✅ DONE (v0.48.0) |
+| **Total** | **79 items** | | **~96 hours** | |
