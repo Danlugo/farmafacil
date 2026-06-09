@@ -12,6 +12,9 @@ from decimal import Decimal
 
 from farmafacil.models.schemas import DrugResult, NearbyStore, SearchResponse
 from farmafacil.scrapers.base import BaseScraper
+from farmafacil.scrapers.farmabien import FarmaBienScraper
+from farmafacil.scrapers.farmago import FarmaGOScraper
+from farmafacil.scrapers.farmarket import FarmarketScraper
 from farmafacil.scrapers.farmatodo import FarmatodoScraper
 from farmafacil.scrapers.locatel import LocatelScraper
 from farmafacil.scrapers.saas import SAASScraper
@@ -33,6 +36,9 @@ ACTIVE_SCRAPERS: list[BaseScraper] = [
     FarmatodoScraper(),
     SAASScraper(),
     LocatelScraper(),
+    FarmaGOScraper(),
+    FarmaBienScraper(),
+    FarmarketScraper(),
 ]
 
 # Patterns that indicate a specific product query (dosage, form, count, brand)

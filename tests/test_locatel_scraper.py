@@ -193,9 +193,9 @@ class TestLocatelRegistered:
         names = [s.pharmacy_name for s in ACTIVE_SCRAPERS]
         assert "Locatel" in names
 
-    def test_three_scrapers_active(self):
+    def test_six_scrapers_active(self):
         from farmafacil.services.search import ACTIVE_SCRAPERS
-        assert len(ACTIVE_SCRAPERS) == 3
+        assert len(ACTIVE_SCRAPERS) == 6
 
 
 @pytest.mark.integration

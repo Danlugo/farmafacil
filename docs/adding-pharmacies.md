@@ -1,6 +1,6 @@
 # FarmaFacil — Adding a New Pharmacy Scraper
 
-> Last Updated: 2026-03-30
+> Last Updated: 2026-06-09
 
 ## Overview
 
@@ -151,7 +151,18 @@ ACTIVE_SCRAPERS: list[BaseScraper] = [
 ]
 ```
 
-The search service iterates `ACTIVE_SCRAPERS` on every cache miss and merges all results.
+The search service iterates `ACTIVE_SCRAPERS` on every cache miss and merges all results. As of v0.49.0 there are 6 active scrapers: Farmatodo (Algolia), Farmacias SAAS (VTEX), Locatel (VTEX), FarmaGO (Odoo HTML), FarmaBien (Next.js RSC), and Farmarket (PHP stock checker).
+
+### Step 2b: Use shared utilities
+
+For Venezuelan price parsing and brand extraction, import from `scrapers/utils.py`:
+
+```python
+from farmafacil.scrapers.utils import parse_ve_price, extract_brand
+
+price = parse_ve_price("5.114,82")  # → Decimal("5114.82")
+brand = extract_brand("IBUPROFENO 400MG (ELMOR)")  # → "ELMOR"
+```
 
 ### Step 3: Add store locations (optional)
 

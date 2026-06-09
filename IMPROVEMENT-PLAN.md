@@ -750,6 +750,16 @@
 - **Files:** `src/farmafacil/services/catalog_rephrase.py` (new), `src/farmafacil/bot/handler.py`, `tests/test_catalog_rephrase.py` (new, 21 tests), `tests/test_drug_translation.py`
 - **Found by:** User report — Lizet searched "Kisiotape" in FarmaFacilTest group, product exists on Farmatodo as "Cintas Kinesiológicas KT Tape" but zero results returned.
 
+### Item 129: Add 3 new Venezuelan pharmacy scrapers (FarmaGO, FarmaBien, Farmarket)
+- **Status:** ✅ DONE (2026-06-09, v0.49.0)
+- **Priority:** P1
+- **Effort:** High (~6 hours)
+- **Problem:** FarmaFacil only searched 3 pharmacy sources (Farmatodo, Locatel, Farmacias SAAS). Users missed products available at other major Venezuelan chains. Investigation found 3 additional pharmacies with accessible search endpoints: FarmaGO (Odoo, prices), FarmaBien (Next.js, prices, 120+ stores), and Farmarket (PHP, per-store stock counts, no prices).
+- **Fix:** Created 3 new scraper modules extending `BaseScraper`: `farmago.py` (Odoo HTML with BeautifulSoup, `.oe_product_cart` cards, barcode prefix stripping, Venezuelan price parsing), `farmabien.py` (Next.js RSC regex extraction from `self.__next_f.push()` payloads, `[::2]` price dedup, CDN image extraction), `farmarket.py` (PHP form POST, per-store stock aggregation, no prices). Shared `scrapers/utils.py` for `parse_ve_price()` and `extract_brand()`. All 6 scrapers run concurrently via `asyncio.gather` in search service. Code review: extracted duplicate helpers, whitespace normalization for Farmarket aggregation keys.
+- **Files:** `src/farmafacil/scrapers/farmago.py` (new), `src/farmafacil/scrapers/farmabien.py` (new), `src/farmafacil/scrapers/farmarket.py` (new), `src/farmafacil/scrapers/utils.py` (new), `src/farmafacil/services/search.py`, `tests/test_new_scrapers.py` (new), `tests/test_locatel_scraper.py`
+- **Tests:** 44 new tests (parsing, price handling, brand extraction, error handling, registration)
+- **Found by:** User request — investigate pharmacy APIs from research table
+
 ---
 
 ## Summary
@@ -791,4 +801,5 @@
 | 33 — WA Profile Name Pre-Fill | 126 (1 item) | P2 | ~2 hours | ✅ DONE (v0.46.0) |
 | 34 — Image Relay Endpoint | 127 (1 item) | P2 | ~2 hours | ✅ DONE (v0.47.0) |
 | 35 — Catalog Rephrase Fallback | 128 (1 item) | P2 | ~2 hours | ✅ DONE (v0.48.0) |
-| **Total** | **79 items** | | **~96 hours** | |
+| 36 — New Pharmacy Scrapers | 129 (1 item) | P1 | ~6 hours | ✅ DONE (v0.49.0) |
+| **Total** | **80 items** | | **~102 hours** | |
