@@ -392,10 +392,12 @@ async def _backfill_farmabien_stores() -> int:
             lat = store_data.get("latitude")
             lng = store_data.get("longitude")
 
-            # Build phone from phone + mobile fields
+            # Build phone from phone + mobile fields (varchar(30) limit)
             phone = (store_data.get("phone") or "").strip()
             mobile = (store_data.get("mobile") or "").strip()
-            contact = phone or mobile or None
+            contact = (phone or mobile or None)
+            if contact:
+                contact = contact[:30]
 
             # Map Venezuelan state to city code
             state = store_data.get("state", "")
@@ -502,7 +504,8 @@ async def _backfill_farmarket_stores() -> int:
             if "direc" in preceding.lower():
                 address = text
             elif "tel" in preceding.lower():
-                phone = text
+                # Phone column is varchar(30) — take first number if multiple
+                phone = text.split("/")[0].strip()[:30] if text else None
 
         # Use deterministic coordinate-based ID since Farmarket has no IDs.
         # Coordinates uniquely identify Farmarket stores and are stable
