@@ -332,15 +332,34 @@ async def _backfill_farmabien_stores() -> int:
         return 0
 
     # Extract defaultStores JSON array from Next.js RSC payload.
-    # The stores appear as: "defaultStores":[{...},{...}]
+    # FarmaBien uses Next.js RSC which embeds JSON in two possible forms:
+    #   1. Escaped: \"defaultStores\":[{\"id\":41,...}]  (inside JS string)
+    #   2. Unescaped: "defaultStores":[{"id":41,...}]    (direct JSON)
+    # We try escaped first (the live format), then unescaped as fallback.
     # re.DOTALL needed because the JSON array may span multiple lines.
-    match = re.search(r'"defaultStores"\s*:\s*(\[.*?\])\s*[,}]', html, re.DOTALL)
-    if not match:
+    raw_json = None
+
+    # Try escaped form first (Next.js RSC: \" around keys/values)
+    match_esc = re.search(
+        r'\\"defaultStores\\":\s*(\[.*?\])\s*[,}\\]', html, re.DOTALL
+    )
+    if match_esc:
+        # Unescape the JSON: \" → " and \\\\ → backslash
+        raw_json = match_esc.group(1).replace('\\"', '"').replace("\\\\", "\\")
+    else:
+        # Try unescaped form (direct JSON embedding)
+        match_plain = re.search(
+            r'"defaultStores"\s*:\s*(\[.*?\])\s*[,}]', html, re.DOTALL
+        )
+        if match_plain:
+            raw_json = match_plain.group(1)
+
+    if raw_json is None:
         logger.warning("Could not find defaultStores in FarmaBien HTML")
         return 0
 
     try:
-        stores = json.loads(match.group(1))
+        stores = json.loads(raw_json)
     except json.JSONDecodeError as exc:
         logger.warning("Failed to parse FarmaBien store JSON: %s", exc)
         return 0
@@ -456,8 +475,8 @@ async def _backfill_farmarket_stores() -> int:
         if not parent:
             continue
 
-        # Extract store name — first bold/strong element in the parent
-        name_el = parent.find(["strong", "b", "h3", "h4"])
+        # Extract store name — first heading or bold element in the parent
+        name_el = parent.find(["h3", "h4", "h5", "h6", "strong", "b"])
         name = name_el.get_text(strip=True) if name_el else ""
 
         # Skip if no name or it looks like a generic header
@@ -470,22 +489,20 @@ async def _backfill_farmarket_stores() -> int:
             if not name:
                 name = name_el.get_text(strip=True) if name_el else "Unknown"
 
-        # Extract address — look for <p> or text following the name
-        address_parts = []
-        for p in parent.find_all("p"):
-            text = p.get_text(strip=True)
-            if text and text != name and "google" not in text.lower():
-                address_parts.append(text)
-        address = ", ".join(address_parts[:2]) if address_parts else None
-
-        # Extract phone — look for phone patterns
+        # Extract address and phone from <p><span> elements.
+        # Farmarket structure: <p>Direción: <span>ADDRESS</span></p>
+        #                      <p>Teléfono: <span>PHONE</span></p>
+        address = None
         phone = None
-        phone_re = re.compile(r"0\d{3}[\-\s]?\d{3}[\-\s]?\d{2}[\-\s]?\d{2}")
-        for text_el in parent.find_all(string=phone_re):
-            pm = phone_re.search(text_el)
-            if pm:
-                phone = pm.group(0)
-                break
+        for span in parent.find_all("span"):
+            text = span.get_text(strip=True)
+            if not text:
+                continue
+            preceding = span.parent.get_text(strip=True) if span.parent else ""
+            if "direc" in preceding.lower():
+                address = text
+            elif "tel" in preceding.lower():
+                phone = text
 
         # Use deterministic coordinate-based ID since Farmarket has no IDs.
         # Coordinates uniquely identify Farmarket stores and are stable

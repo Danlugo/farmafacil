@@ -84,25 +84,34 @@ FARMABIEN_HTML_MULTILINE = (
     '</body></html>'
 )
 
+# Escaped variant — realistic Next.js RSC payload (\" around all JSON keys/values)
+FARMABIEN_HTML_ESCAPED = (
+    '<html><body><script>self.__next_f.push([1,"'
+    + '\\"defaultStores\\":'
+    + FARMABIEN_STORE_JSON.replace('"', '\\"')
+    + ',"])</script></body></html>'
+)
+
 
 FARMARKET_HTML = """
 <html><body>
 <div class="store-item">
-  <strong>La Trinidad</strong>
-  <p>Av. Gonzalez Rincones, Quinta Cafea</p>
-  <p>0212-945-17-30</p>
-  <a href="https://www.google.com/maps/dir//Farmarket+La+Trinidad/@10.4340416,-66.8628845,16z/">Mapa</a>
+  <h5>La Trinidad</h5>
+  <p>Direción: <span>Av. Gonzalez Rincones, Quinta Cafea</span></p>
+  <p>Teléfono: <span>0212-945-17-30</span></p>
+  <a href="https://www.google.com/maps/dir//Farmarket+La+Trinidad/@10.4340416,-66.8628845,16z/">Ir a google Maps</a>
 </div>
 <div class="store-item">
-  <strong>El Cafetal</strong>
-  <p>Av Boulevard con Avenida Santa Ana</p>
-  <a href="https://www.google.com/maps/dir//Farmarket+El+Cafetal/@10.4613131,-66.8294831,16z/">Mapa</a>
+  <h5>El Cafetal</h5>
+  <p>Direción: <span>Av Boulevard con Avenida Santa Ana</span></p>
+  <p>Teléfono: <span></span></p>
+  <a href="https://www.google.com/maps/dir//Farmarket+El+Cafetal/@10.4613131,-66.8294831,16z/">Ir a google Maps</a>
 </div>
 <div class="store-item">
-  <strong>Prados del Este</strong>
-  <p>Av. Amazonas con Calle Estanque</p>
-  <p>0424-152-19-60</p>
-  <a href="https://www.google.com/maps/dir//Farmarket+Prados/@10.4449875,-66.8907519,16z/">Mapa</a>
+  <h5>Prados del Este</h5>
+  <p>Direción: <span>Av. Amazonas con Calle Estanque</span></p>
+  <p>Teléfono: <span>0424-152-19-60</span></p>
+  <a href="https://www.google.com/maps/dir//Farmarket+Prados/@10.4449875,-66.8907519,16z/">Ir a google Maps</a>
 </div>
 </body></html>
 """
@@ -379,6 +388,32 @@ class TestBackfillFarmabienStores:
         # 2 VE stores (CO filtered), even with multiline JSON
         assert result == 2
 
+    async def test_escaped_nextjs_rsc_format(self):
+        """Realistic Next.js RSC payload with escaped quotes must parse."""
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.text = FARMABIEN_HTML_ESCAPED
+        mock_response.raise_for_status = MagicMock()
+
+        mock_session = _make_mock_session()
+
+        with patch("farmafacil.services.store_backfill.httpx.AsyncClient") as mock_client_cls, \
+             patch("farmafacil.services.store_backfill.async_session") as mock_session_ctx:
+
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            mock_session_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _backfill_farmabien_stores()
+
+        # 2 VE stores from escaped JSON, CO filtered out
+        assert result == 2
+        assert mock_session.added[0].pharmacy_chain == "FarmaBien"
+
 
 # ---------------------------------------------------------------------------
 # Tests: _backfill_farmarket_stores
@@ -464,14 +499,14 @@ class TestBackfillFarmarketStores:
         html = """
         <html><body>
         <div class="store-item">
-          <strong>Store A</strong>
-          <p>Address A</p>
-          <a href="https://www.google.com/maps/dir//X/@10.434,-66.862,16z/">A</a>
+          <h5>Store A</h5>
+          <p>Direción: <span>Address A</span></p>
+          <a href="https://www.google.com/maps/dir//X/@10.434,-66.862,16z/">Ir a google Maps</a>
         </div>
         <div class="store-item">
-          <strong>Store A Duplicate</strong>
-          <p>Address A again</p>
-          <a href="https://www.google.com/maps/dir//X/@10.434,-66.862,16z/">A</a>
+          <h5>Store A Duplicate</h5>
+          <p>Direción: <span>Address A again</span></p>
+          <a href="https://www.google.com/maps/dir//X/@10.434,-66.862,16z/">Ir a google Maps</a>
         </div>
         </body></html>
         """
