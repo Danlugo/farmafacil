@@ -760,6 +760,16 @@
 - **Tests:** 44 new tests (parsing, price handling, brand extraction, error handling, registration)
 - **Found by:** User request — investigate pharmacy APIs from research table
 
+### Item 130: Backfill store locations for FarmaBien and Farmarket
+- **Status:** ✅ DONE (2026-06-09, v0.50.0)
+- **Priority:** P1
+- **Effort:** Medium (~2 hours)
+- **Problem:** New pharmacy scrapers (v0.49.0) lacked store location data in `pharmacy_locations`, so search results from FarmaBien and Farmarket showed no "📍 Cercana:" nearest-store info. Store locations are required for all pharmacy scrapers to provide location-based results.
+- **Fix:** Added `_backfill_farmabien_stores()` (scrapes Next.js `/tiendas` page → 114 VE stores with GPS/address/phone) and `_backfill_farmarket_stores()` (scrapes static HTML with Google Maps URLs → 13 Caracas stores) to `store_backfill.py`. FarmaGO is delivery-only (no physical stores) — documented as intentional exception. Added `_map_ve_state_to_city()` helper for Venezuelan state→city code mapping (11 states). Updated `docs/adding-pharmacies.md` to make store locations MANDATORY for all new scrapers. Code review fixes: `is not None` guard (falsy float), `re.DOTALL` for multiline JSON, deterministic `hashlib.md5` ext_id (not `hash()`), top-level imports.
+- **Files:** `src/farmafacil/services/store_backfill.py`, `tests/test_store_backfill_new.py` (new), `docs/adding-pharmacies.md`
+- **Tests:** 28 new tests (state mapping, happy path, HTTP errors, update vs insert, dedup, multiline JSON, deterministic IDs)
+- **Found by:** User — location requirement for all data display
+
 ---
 
 ## Summary
@@ -802,4 +812,5 @@
 | 34 — Image Relay Endpoint | 127 (1 item) | P2 | ~2 hours | ✅ DONE (v0.47.0) |
 | 35 — Catalog Rephrase Fallback | 128 (1 item) | P2 | ~2 hours | ✅ DONE (v0.48.0) |
 | 36 — New Pharmacy Scrapers | 129 (1 item) | P1 | ~6 hours | ✅ DONE (v0.49.0) |
-| **Total** | **80 items** | | **~102 hours** | |
+| 37 — Store Location Backfill | 130 (1 item) | P1 | ~2 hours | ✅ DONE (v0.50.0) |
+| **Total** | **81 items** | | **~104 hours** | |

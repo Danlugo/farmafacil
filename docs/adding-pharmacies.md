@@ -164,9 +164,19 @@ price = parse_ve_price("5.114,82")  # → Decimal("5114.82")
 brand = extract_brand("IBUPROFENO 400MG (ELMOR)")  # → "ELMOR"
 ```
 
-### Step 3: Add store locations (optional)
+### Step 3: Add store locations (MANDATORY)
 
-If the pharmacy has physical locations and exposes a store API, add a backfill function (see `src/farmafacil/services/store_backfill.py` for the Farmatodo pattern). Store locations are saved to `pharmacy_locations` and used to show the nearest store to each user.
+> **Requirement:** Every pharmacy scraper MUST have store locations populated in `pharmacy_locations`, unless the pharmacy is delivery-only with no physical stores. Without store locations, the "📍 Cercana:" nearest-store info will be missing from search results, degrading the user experience.
+
+Add a `_backfill_<chain>_stores()` function in `src/farmafacil/services/store_backfill.py` and register it in `backfill_stores()`. The function must:
+
+1. Fetch store data from the pharmacy's store locator API or page
+2. Upsert into `pharmacy_locations` by `(external_id, pharmacy_chain)`
+3. Map locations to Farmatodo-compatible city codes (see `_map_vtex_city()` or `_map_ve_state_to_city()`)
+4. Include GPS coordinates (`latitude`, `longitude`) for distance calculations
+5. Handle API failures gracefully (log warning, return 0)
+
+**Delivery-only chains** (no physical stores): Document the exception in `backfill_stores()` docstring. The scraper still works — results just won't show nearby store info. Example: FarmaGO is delivery-only.
 
 ### Step 4: Write tests
 

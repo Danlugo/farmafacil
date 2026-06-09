@@ -1,8 +1,12 @@
 """Backfill pharmacy store locations from their APIs into our database."""
 
+import hashlib
+import json
 import logging
+import re
 
 import httpx
+from bs4 import BeautifulSoup
 from sqlalchemy import func, select
 
 from farmafacil.db.session import async_session
@@ -13,6 +17,8 @@ logger = logging.getLogger(__name__)
 FARMATODO_STORES_API = "https://api-transactional.farmatodo.com/route/r/VE/v1/stores/nearby"
 SAAS_PICKUP_API = "https://www.farmaciasaas.com/api/checkout/pub/pickup-points"
 LOCATEL_PICKUP_API = "https://www.locatel.com.ve/api/checkout/pub/pickup-points"
+FARMABIEN_STORES_URL = "https://www.farmabien.com/tiendas"
+FARMARKET_STORES_URL = "https://sitio.farmarket.com.ve/UbicacionesFarmarket.html"
 
 # Farmatodo city codes with center coordinates for store discovery
 FARMATODO_CITIES: dict[str, tuple[float, float]] = {
@@ -36,8 +42,9 @@ VTEX_GEO_CENTERS: list[tuple[float, float]] = [
 async def backfill_stores() -> int:
     """Fetch all pharmacy store locations and upsert into pharmacy_locations.
 
-    Fetches from both Farmatodo (Algolia stores API) and Farmacias SAAS
-    (VTEX pickup points API).
+    Fetches from Farmatodo, Farmacias SAAS, Locatel, FarmaBien, and
+    Farmarket store APIs. FarmaGO is delivery-only and has no physical
+    stores, so it is intentionally excluded.
 
     Returns:
         Number of new stores inserted.
@@ -46,6 +53,8 @@ async def backfill_stores() -> int:
     total_inserted += await _backfill_farmatodo_stores()
     total_inserted += await _backfill_saas_stores()
     total_inserted += await _backfill_locatel_stores()
+    total_inserted += await _backfill_farmabien_stores()
+    total_inserted += await _backfill_farmarket_stores()
     return total_inserted
 
 
@@ -296,6 +305,299 @@ async def _backfill_locatel_stores() -> int:
 
     logger.info("Inserted %d new Locatel locations", inserted)
     return inserted
+
+
+async def _backfill_farmabien_stores() -> int:
+    """Fetch FarmaBien store locations from their Next.js tiendas page.
+
+    FarmaBien exposes store data via a Next.js RSC payload at /tiendas.
+    The ``defaultStores`` prop contains a JSON array of all ~114 Venezuelan
+    stores with full GPS coordinates, addresses, and contact info.
+
+    Returns:
+        Number of new stores inserted.
+    """
+    stores: list[dict] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                FARMABIEN_STORES_URL,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            resp.raise_for_status()
+            html = resp.text
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch FarmaBien stores page: %s", exc)
+        return 0
+
+    # Extract defaultStores JSON array from Next.js RSC payload.
+    # The stores appear as: "defaultStores":[{...},{...}]
+    # re.DOTALL needed because the JSON array may span multiple lines.
+    match = re.search(r'"defaultStores"\s*:\s*(\[.*?\])\s*[,}]', html, re.DOTALL)
+    if not match:
+        logger.warning("Could not find defaultStores in FarmaBien HTML")
+        return 0
+
+    try:
+        stores = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse FarmaBien store JSON: %s", exc)
+        return 0
+
+    # Filter to Venezuelan stores only (country == "VE")
+    ve_stores = [s for s in stores if s.get("country") == "VE"]
+    logger.info("Fetched %d FarmaBien stores from page (%d VE)", len(stores), len(ve_stores))
+
+    inserted = 0
+    async with async_session() as session:
+        for store_data in ve_stores:
+            store_id = store_data.get("id")
+            if not store_id:
+                continue
+            ext_id = str(store_id)
+
+            result = await session.execute(
+                select(PharmacyLocation).where(
+                    PharmacyLocation.external_id == ext_id,
+                    PharmacyLocation.pharmacy_chain == "FarmaBien",
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            name = (store_data.get("nickname") or "").strip()
+            if not name:
+                name = (store_data.get("store") or "Unknown").strip()
+
+            address = (store_data.get("address") or "").strip() or None
+            lat = store_data.get("latitude")
+            lng = store_data.get("longitude")
+
+            # Build phone from phone + mobile fields
+            phone = (store_data.get("phone") or "").strip()
+            mobile = (store_data.get("mobile") or "").strip()
+            contact = phone or mobile or None
+
+            # Map Venezuelan state to city code
+            state = store_data.get("state", "")
+            locality = store_data.get("locality", "")
+            city_code = _map_ve_state_to_city(state, locality)
+
+            if existing is None:
+                session.add(PharmacyLocation(
+                    external_id=ext_id,
+                    pharmacy_chain="FarmaBien",
+                    name=name,
+                    name_lower=name.lower(),
+                    city_code=city_code,
+                    address=address,
+                    latitude=lat,
+                    longitude=lng,
+                    phone=contact,
+                ))
+                inserted += 1
+            else:
+                if address is not None:
+                    existing.address = address
+                if lat is not None:
+                    existing.latitude = lat
+                if lng is not None:
+                    existing.longitude = lng
+                if contact is not None:
+                    existing.phone = contact
+
+        await session.commit()
+
+    logger.info("Inserted %d new FarmaBien locations", inserted)
+    return inserted
+
+
+async def _backfill_farmarket_stores() -> int:
+    """Fetch Farmarket store locations from their ubicaciones page.
+
+    Farmarket publishes store addresses and Google Maps links on a static
+    HTML page. GPS coordinates are extracted from ``@lat,lng`` patterns
+    in the Google Maps direction URLs. All stores are in Caracas.
+
+    Returns:
+        Number of new stores inserted.
+    """
+    stores: list[dict] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                FARMARKET_STORES_URL,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            resp.raise_for_status()
+            html = resp.text
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch Farmarket stores page: %s", exc)
+        return 0
+
+    soup = BeautifulSoup(html, "lxml")
+    # Farmarket stores are listed in anchor tags with Google Maps direction URLs
+    # containing @lat,lng coordinates. Each store block has the name in an
+    # adjacent heading or strong tag, and address in paragraph text.
+    gps_re = re.compile(r"@(-?\d+\.\d+),(-?\d+\.\d+)")
+
+    for link in soup.find_all("a", href=gps_re):
+        href = link.get("href", "")
+        m = gps_re.search(href)
+        if not m:
+            continue
+
+        lat = float(m.group(1))
+        lng = float(m.group(2))
+
+        # Walk up to find the parent block containing name and address
+        parent = link.find_parent(["div", "li", "td", "section"])
+        if not parent:
+            continue
+
+        # Extract store name — first bold/strong element in the parent
+        name_el = parent.find(["strong", "b", "h3", "h4"])
+        name = name_el.get_text(strip=True) if name_el else ""
+
+        # Skip if no name or it looks like a generic header
+        if not name or len(name) < 3:
+            continue
+
+        # Remove "Farmarket " prefix if present in the name
+        if name.lower().startswith("farmarket"):
+            name = name[len("farmarket"):].strip(" -–")
+            if not name:
+                name = name_el.get_text(strip=True) if name_el else "Unknown"
+
+        # Extract address — look for <p> or text following the name
+        address_parts = []
+        for p in parent.find_all("p"):
+            text = p.get_text(strip=True)
+            if text and text != name and "google" not in text.lower():
+                address_parts.append(text)
+        address = ", ".join(address_parts[:2]) if address_parts else None
+
+        # Extract phone — look for phone patterns
+        phone = None
+        phone_re = re.compile(r"0\d{3}[\-\s]?\d{3}[\-\s]?\d{2}[\-\s]?\d{2}")
+        for text_el in parent.find_all(string=phone_re):
+            pm = phone_re.search(text_el)
+            if pm:
+                phone = pm.group(0)
+                break
+
+        # Use deterministic coordinate-based ID since Farmarket has no IDs.
+        # Coordinates uniquely identify Farmarket stores and are stable
+        # across Python interpreter restarts (unlike hash()).
+        ext_id = f"fm-{hashlib.md5(f'{name}{lat}{lng}'.encode()).hexdigest()[:8]}"
+
+        stores.append({
+            "ext_id": ext_id,
+            "name": name,
+            "address": address,
+            "phone": phone,
+            "latitude": lat,
+            "longitude": lng,
+        })
+
+    # Deduplicate by coordinates (same store may appear in multiple links)
+    seen_coords: set[tuple[float, float]] = set()
+    deduped: list[dict] = []
+    for s in stores:
+        coord = (s["latitude"], s["longitude"])
+        if coord not in seen_coords:
+            seen_coords.add(coord)
+            deduped.append(s)
+    stores = deduped
+
+    logger.info("Fetched %d Farmarket stores from page", len(stores))
+
+    inserted = 0
+    async with async_session() as session:
+        for store_data in stores:
+            ext_id = store_data["ext_id"]
+
+            result = await session.execute(
+                select(PharmacyLocation).where(
+                    PharmacyLocation.external_id == ext_id,
+                    PharmacyLocation.pharmacy_chain == "Farmarket",
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            name = store_data["name"]
+            if existing is None:
+                session.add(PharmacyLocation(
+                    external_id=ext_id,
+                    pharmacy_chain="Farmarket",
+                    name=name,
+                    name_lower=name.lower(),
+                    city_code="CCS",  # All Farmarket stores are in Caracas
+                    address=store_data.get("address"),
+                    latitude=store_data["latitude"],
+                    longitude=store_data["longitude"],
+                    phone=store_data.get("phone"),
+                ))
+                inserted += 1
+            else:
+                addr = store_data.get("address")
+                phone = store_data.get("phone")
+                if addr is not None:
+                    existing.address = addr
+                existing.latitude = store_data["latitude"]
+                existing.longitude = store_data["longitude"]
+                if phone is not None:
+                    existing.phone = phone
+
+        await session.commit()
+
+    logger.info("Inserted %d new Farmarket locations", inserted)
+    return inserted
+
+
+def _map_ve_state_to_city(state: str, locality: str = "") -> str:
+    """Map Venezuelan state and locality names to Farmatodo-compatible city codes.
+
+    FarmaBien stores span 11 Venezuelan states. This maps them to the same
+    city code system used by all other scrapers for consistent distance
+    lookups.
+
+    Args:
+        state: Venezuelan state name (e.g., "Mérida", "Distrito Capital").
+        locality: Optional locality within the state.
+
+    Returns:
+        City code (e.g., "CCS", "MCBO"). Defaults to "CCS" for unknown.
+    """
+    state_lower = state.lower().strip()
+    locality_lower = locality.lower().strip()
+
+    # Direct state → city code mapping
+    state_map: dict[str, str] = {
+        "distrito capital": "CCS",
+        "miranda": "CCS",
+        "mérida": "MER",
+        "merida": "MER",
+        "táchira": "SAC",
+        "tachira": "SAC",
+        "zulia": "MCBO",
+        "lara": "BAR",
+        "barinas": "BAR",
+        "anzoátegui": "PDM",
+        "anzoategui": "PDM",
+        "trujillo": "MER",
+        "portuguesa": "BAR",
+        "yaracuy": "BAR",
+    }
+
+    # Check locality-level overrides first
+    if locality_lower in {"maracaibo", "ciudad ojeda", "santa bárbara de zulia",
+                          "santa bárbara del zulia", "la concepción",
+                          "cuatro esquinas", "san francisco"}:
+        return "MCBO"
+
+    return state_map.get(state_lower, "CCS")
 
 
 def _map_vtex_city(city_name: str) -> str:
