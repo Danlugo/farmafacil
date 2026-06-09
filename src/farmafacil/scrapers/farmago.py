@@ -36,6 +36,11 @@ class FarmaGOScraper(BaseScraper):
     def pharmacy_name(self) -> str:
         return "FarmaGO"
 
+    @property
+    def is_delivery_only(self) -> bool:
+        """FarmaGO is delivery-only — no physical stores."""
+        return True
+
     async def search(
         self, query: str, city: str | None = None, max_results: int = 10
     ) -> list[DrugResult]:
@@ -166,6 +171,7 @@ class FarmaGOScraper(BaseScraper):
             drug_class=None,  # Odoo does not expose category in search results
             stores_in_stock=0,
             stores_with_stock_ids=[],
+            is_delivery_only=True,
         )
 
     # Price parsing and brand extraction use shared helpers:

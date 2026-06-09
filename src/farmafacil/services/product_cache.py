@@ -23,6 +23,11 @@ from farmafacil.models.schemas import DrugResult
 from farmafacil.services.relevance import classify_pharmaceutical, is_relevant
 from farmafacil.services.settings import get_setting_float, get_setting_int
 
+# Pharmacy chains that are delivery-only (no physical stores).
+# Used to re-apply is_delivery_only flag when reconstructing DrugResult
+# from the product cache (the flag is not persisted in the Product table).
+DELIVERY_ONLY_CHAINS: frozenset[str] = frozenset({"FarmaGO"})
+
 # Dialect-specific INSERT ... ON CONFLICT support.  Both SQLite (≥3.24) and
 # PostgreSQL support this syntax; SQLAlchemy exposes it through per-dialect
 # ``insert()`` functions.  We select the right one at import time based on
@@ -614,4 +619,5 @@ def _product_to_drug_result(product: Product, price: ProductPrice | None) -> Dru
         description=product.description,
         stores_in_stock=stores_in_stock,
         stores_with_stock_ids=stock_ids,
+        is_delivery_only=product.pharmacy_chain in DELIVERY_ONLY_CHAINS,
     )

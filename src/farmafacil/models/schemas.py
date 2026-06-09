@@ -53,6 +53,9 @@ class DrugResult(BaseModel):
     nearby_stores: list[NearbyStore] = Field(
         default_factory=list, description="Nearby stores with this drug in stock"
     )
+    is_delivery_only: bool = Field(
+        False, description="Whether this result is from a delivery-only pharmacy"
+    )
 
 
 class SearchRequest(BaseModel):

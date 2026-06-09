@@ -231,21 +231,27 @@ def format_search_results(response: SearchResponse) -> str:
                 pharmacy_line += " | _Sin stock_"
             line += pharmacy_line
 
-            # Product page link on its own line when price is unavailable.
-            # WhatsApp auto-links the raw URL so the user can tap through.
-            if result.price_bs is not None and result.price_bs == 0 and result.url:
-                line += f"\n      \U0001f517 {result.url}"
+            # Delivery-only pharmacies: show delivery label + product URL
+            if result.is_delivery_only:
+                line += "\n      \U0001f6f5 Delivery"
+                if result.url:
+                    line += f"\n      \U0001f517 {result.url}"
+            else:
+                # Product page link on its own line when price is unavailable.
+                # WhatsApp auto-links the raw URL so the user can tap through.
+                if result.price_bs is not None and result.price_bs == 0 and result.url:
+                    line += f"\n      \U0001f517 {result.url}"
 
-            # Nearby stores
-            if result.nearby_stores:
-                for store in result.nearby_stores[:MAX_STORES_PER_PHARMACY]:
-                    store_line = (
-                        f"\n      \U0001f4cd {store.store_name}"
-                        f" — {store.distance_km:.1f} km"
-                    )
-                    if store.price_bs is not None and store.price_bs != 0:
-                        store_line += f" — Bs. {store.price_bs:,.2f}"
-                    line += store_line
+                # Nearby stores
+                if result.nearby_stores:
+                    for store in result.nearby_stores[:MAX_STORES_PER_PHARMACY]:
+                        store_line = (
+                            f"\n      \U0001f4cd {store.store_name}"
+                            f" — {store.distance_km:.1f} km"
+                        )
+                        if store.price_bs is not None and store.price_bs != 0:
+                            store_line += f" — Bs. {store.price_bs:,.2f}"
+                        line += store_line
 
         # WhatsApp 4096-char guard — stop adding products before truncation
         # (Item 66, v0.25.0)

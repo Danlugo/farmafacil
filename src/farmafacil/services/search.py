@@ -241,6 +241,10 @@ async def search_drug(
                         exc_info=result,
                     )
                 else:
+                    # Propagate delivery-only flag from scraper to results
+                    if scraper.is_delivery_only:
+                        for r in result:
+                            r.is_delivery_only = True
                     all_results.extend(result)
 
             # Save to product catalog (upsert — never deletes)
@@ -341,6 +345,9 @@ async def _enrich_with_nearby_stores(
     chain_stores_cache: dict[str, list[NearbyStore]] = {}
 
     for result in results:
+        if result.is_delivery_only:
+            # Delivery-only pharmacies have no physical stores — skip lookup
+            continue
         if result.stores_with_stock_ids:
             # Has per-store stock data — filter to stores with stock
             stores_near = filter_stores_with_stock(

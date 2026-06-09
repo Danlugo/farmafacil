@@ -2711,7 +2711,9 @@ def _build_product_caption(result: DrugResult) -> str:
             # Two-line format (vs inline in formatter._format_price) is
             # intentional — image captions use multi-line card layout.
             lines.append("_Precio no disponible_")
-            if result.url:
+            # Show URL here only for non-delivery results — delivery results
+            # render the URL in the delivery block below to avoid duplicates.
+            if result.url and not result.is_delivery_only:
                 lines.append(f"\U0001f517 *Ver en:* {result.url}")
         else:
             price_line = f"\U0001f4b0 *Precio:* Bs. {result.price_bs:,.2f}"
@@ -2724,7 +2726,11 @@ def _build_product_caption(result: DrugResult) -> str:
         lines.append("\U0001f4cb *Requiere receta*")
     if result.stores_in_stock > 0:
         lines.append(f"\u2705 Disponible en {result.stores_in_stock} tiendas")
-    if result.nearby_stores:
+    if result.is_delivery_only:
+        lines.append("\U0001f6f5 *Delivery*")
+        if result.url:
+            lines.append(f"\U0001f517 *Ver en:* {result.url}")
+    elif result.nearby_stores:
         closest = result.nearby_stores[0]
         lines.append(
             f"\U0001f4cd *Cercana:* {closest.store_name}"

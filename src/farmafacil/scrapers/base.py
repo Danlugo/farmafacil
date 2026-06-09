@@ -17,6 +17,15 @@ class BaseScraper(abc.ABC):
         """Human-readable pharmacy name."""
         ...
 
+    @property
+    def is_delivery_only(self) -> bool:
+        """Whether this pharmacy is delivery-only (no physical stores).
+
+        Delivery-only pharmacies show a 🛵 Delivery label and product URL
+        instead of 📍 nearest-store info in search results.
+        """
+        return False
+
     @abc.abstractmethod
     async def search(
         self, query: str, city: str | None = None, max_results: int = 10

@@ -770,6 +770,16 @@
 - **Tests:** 28 new tests (state mapping, happy path, HTTP errors, update vs insert, dedup, multiline JSON, deterministic IDs)
 - **Found by:** User — location requirement for all data display
 
+### Item 131: Delivery-only pharmacy display for FarmaGO
+- **Status:** ✅ DONE (2026-06-09)
+- **Priority:** P2
+- **Effort:** Low (~1 hour)
+- **Problem:** FarmaGO is a delivery-only pharmacy (no physical stores). When its results appear in search, users see the product name and price but no indication it's delivery-only, no product URL, and no way to order. The product URL exists in the scraper output but the formatter only shows URLs when `price_bs == 0` (missing price). FarmaGO has real prices, so the URL is silently dropped.
+- **Fix:** Added `is_delivery_only` property to BaseScraper (default False), overridden to True in FarmaGOScraper. Added `is_delivery_only` field to DrugResult schema. Search service skips store DB lookup for delivery-only results. Formatter shows 🛵 Delivery label + 🔗 product URL instead of 📍 nearest-store. Image caption same pattern. Cache round-trip preserved via `DELIVERY_ONLY_CHAINS` frozenset in product_cache.py.
+- **Files:** `scrapers/base.py`, `scrapers/farmago.py`, `models/schemas.py`, `services/search.py`, `services/product_cache.py`, `bot/formatter.py`, `bot/handler.py`, `tests/test_delivery_display.py` (new, 24 tests)
+- **Tests:** 24 new tests covering scraper flag, schema field, text formatter, image caption, store enrichment skip, cache round-trip, and zero-price edge case
+- **Found by:** User — correct workflow for delivery-only pharmacies
+
 ---
 
 ## Summary
@@ -813,4 +823,5 @@
 | 35 — Catalog Rephrase Fallback | 128 (1 item) | P2 | ~2 hours | ✅ DONE (v0.48.0) |
 | 36 — New Pharmacy Scrapers | 129 (1 item) | P1 | ~6 hours | ✅ DONE (v0.49.0) |
 | 37 — Store Location Backfill | 130 (1 item) | P1 | ~2 hours | ✅ DONE (v0.50.0) |
-| **Total** | **81 items** | | **~104 hours** | |
+| 38 — Delivery-Only Display | 131 (1 item) | P2 | ~1 hour | ✅ DONE (v0.51.0) |
+| **Total** | **82 items** | | **~105 hours** | |
